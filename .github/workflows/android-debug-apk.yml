@@ -32,6 +32,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            build-tools;36.0.0
+            platforms;android-36.1
 
       - name: Set up Gradle (9.3.1 for AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v4
@@ -126,8 +131,15 @@ jobs:
             exit 1
           fi
 
-          AAPT2=$(find "$SDK_DIR/build-tools" -name "aapt2" | sort -V | tail -n 1 || true)
-          if [ -n "$AAPT2" ]; then
+          BUILD_TOOLS_DIR=$(find "$SDK_DIR/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1 || true)
+          if [ -z "$BUILD_TOOLS_DIR" ] || [ ! -d "$BUILD_TOOLS_DIR" ]; then
+            echo "::error::No Android build-tools version is installed under $SDK_DIR/build-tools."
+            exit 1
+          fi
+          echo "Using Android build-tools at: $BUILD_TOOLS_DIR"
+
+          AAPT2="$BUILD_TOOLS_DIR/aapt2"
+          if [ -x "$AAPT2" ]; then
             PKG_INFO=$("$AAPT2" dump badging "$APK_PATH" | grep "^package:" || true)
             echo "$PKG_INFO"
             if [[ "$PKG_INFO" != *"name='com.aistudio.golocal.wbmxrq'"* ]]; then
@@ -136,9 +148,9 @@ jobs:
             fi
           fi
 
-          APKSIGNER=$(find "$SDK_DIR/build-tools" -name "apksigner" | sort -V | tail -n 1 || true)
-          if [ -z "$APKSIGNER" ]; then
-            echo "::error::apksigner not found in $SDK_DIR/build-tools; cannot extract APK certificate fingerprints."
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "::error::apksigner not found or not executable at $APKSIGNER; cannot extract APK certificate fingerprints."
             exit 1
           fi
 
