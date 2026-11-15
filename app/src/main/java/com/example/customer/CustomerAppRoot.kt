@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -15,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.BuildConfig
 import com.example.R
 import com.example.authStateFlow
 import com.example.data.model.AppRole
@@ -39,6 +41,18 @@ import com.google.firebase.firestore.FirebaseFirestore
 fun CustomerAppRoot(auth: FirebaseAuth = Firebase.auth) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var splashDone by remember { mutableStateOf(false) }
+    var guestSignInError by remember { mutableStateOf<String?>(null) }
+
+    // Debug APKs bypass the Google sign-in screen by creating a Firebase anonymous session.
+    // A real Firebase UID is required by the existing customer repository and Firestore rules.
+    // Release builds set GOLOCAL_SKIP_LOGIN=false and continue to use the original Google flow.
+    LaunchedEffect(auth) {
+        if (BuildConfig.GOLOCAL_SKIP_LOGIN && auth.currentUser == null) {
+            auth.signInAnonymously().addOnFailureListener { error ->
+                guestSignInError = error.localizedMessage ?: "Could not start guest session."
+            }
+        }
+    }
 
     if (!splashDone) {
         GolocalTheme {
@@ -53,7 +67,24 @@ fun CustomerAppRoot(auth: FirebaseAuth = Firebase.auth) {
     val user = currentUser
     if (user == null) {
         GolocalTheme {
-            RoleAuthScreen(mode = ExperienceMode.CUSTOMER, onAuthSuccess = {})
+            if (BuildConfig.GOLOCAL_SKIP_LOGIN && guestSignInError == null) {
+                GuestSessionLoadingScreen()
+            } else {
+                if (guestSignInError != null) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Text(
+                            text = "Guest access could not start: $guestSignInError",
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        Box(modifier = Modifier.weight(1f)) {
+                            RoleAuthScreen(mode = ExperienceMode.CUSTOMER, onAuthSuccess = {})
+                        }
+                    }
+                } else {
+                    RoleAuthScreen(mode = ExperienceMode.CUSTOMER, onAuthSuccess = {})
+                }
+            }
         }
     } else {
         key(user.uid) {
@@ -62,6 +93,27 @@ fun CustomerAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 displayName = user.displayName ?: "GoLocal Passenger",
                 email = user.email ?: "",
                 photoUrl = user.photoUrl?.toString() ?: ""
+            )
+        }
+    }
+}
+
+@Composable
+private fun GuestSessionLoadingScreen() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator()
+            Text("Starting GOLOCAL guest session鈥�")
+            Text(
+                text = "Temporary debug access. Google login is unchanged in release builds.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
