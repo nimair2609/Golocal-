@@ -1,0 +1,448 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Core authenticated user record with role, language, and consent metadata",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "driver", "admin"] },
+        "preferredLanguage": { "type": "string", "enum": ["en", "bn", "hi"] },
+        "lowNetworkMode": { "type": "boolean" },
+        "privacyConsentAccepted": { "type": "boolean" },
+        "accountStatus": { "type": "string", "enum": ["active", "restricted", "deletion_requested"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "fullName", "role", "preferredLanguage", "accountStatus", "createdAt", "updatedAt"]
+    },
+    "CustomerProfile": {
+      "title": "CustomerProfile",
+      "description": "Customer saved addresses, emergency contacts, and recent destinations",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "homeAddress": { "type": "string" },
+        "workAddress": { "type": "string" },
+        "nativeVillage": { "type": "string" },
+        "nativeDistrict": { "type": "string" },
+        "emergencyContactName": { "type": "string" },
+        "emergencyContactPhone": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "createdAt", "updatedAt"]
+    },
+    "DriverProfile": {
+      "title": "DriverProfile",
+      "description": "Private KYC, licence, RC, insurance, and settlement details for drivers",
+      "type": "object",
+      "properties": {
+        "driverId": { "type": "string" },
+        "legalName": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "district": { "type": "string" },
+        "block": { "type": "string" },
+        "vehicleCategory": { "type": "string", "enum": ["bike", "auto", "toto", "cab"] },
+        "vehicleModel": { "type": "string" },
+        "vehicleRegNumber": { "type": "string" },
+        "drivingLicenceNumber": { "type": "string" },
+        "rcNumber": { "type": "string" },
+        "insuranceNumber": { "type": "string" },
+        "permitInfo": { "type": "string" },
+        "settlementUpiOrBank": { "type": "string" },
+        "documentPhotoUri": { "type": "string" },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
+        "rejectionReason": { "type": "string" },
+        "isOnline": { "type": "boolean" },
+        "ratingAvg": { "type": "number" },
+        "completedRides": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driverId", "legalName", "phone", "district", "vehicleCategory", "vehicleRegNumber", "drivingLicenceNumber", "verificationStatus", "isOnline", "createdAt", "updatedAt"]
+    },
+    "DriverDirectoryEntry": {
+      "title": "DriverDirectoryEntry",
+      "description": "Publicly discoverable non-PII profile of verified local drivers",
+      "type": "object",
+      "properties": {
+        "driverId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "vehicleCategory": { "type": "string", "enum": ["bike", "auto", "toto", "cab"] },
+        "vehicleModel": { "type": "string" },
+        "maskedPlate": { "type": "string" },
+        "district": { "type": "string" },
+        "block": { "type": "string" },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
+        "isOnline": { "type": "boolean" },
+        "currentLat": { "type": "number" },
+        "currentLng": { "type": "number" },
+        "ratingAvg": { "type": "number" },
+        "completedRides": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driverId", "displayName", "vehicleCategory", "district", "verificationStatus", "isOnline", "updatedAt"]
+    },
+    "ServiceArea": {
+      "title": "ServiceArea",
+      "description": "West Bengal districts, blocks, villages, and operational vehicle rules",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "nameBn": { "type": "string" },
+        "district": { "type": "string" },
+        "block": { "type": "string" },
+        "zoneType": { "type": "string", "enum": ["railway_station", "bus_stand", "airport", "village", "hospital", "market", "town"] },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "parcelApproved": { "type": "boolean" },
+        "operationalHours": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "district", "zoneType", "isActive", "createdAt", "updatedAt"]
+    },
+    "FareConfig": {
+      "title": "FareConfig",
+      "description": "Versioned pricing engine rule per vehicle category",
+      "type": "object",
+      "properties": {
+        "vehicleCategory": { "type": "string", "enum": ["bike", "auto", "toto", "cab", "outstation", "scheduled", "parcel"] },
+        "version": { "type": "integer" },
+        "baseFareInr": { "type": "number" },
+        "perKmRateInr": { "type": "number" },
+        "minimumFareInr": { "type": "number" },
+        "waitingChargePerMinInr": { "type": "number" },
+        "cancellationFeeInr": { "type": "number" },
+        "gstPercent": { "type": "number" },
+        "commissionPercent": { "type": "number" },
+        "allowDriverFareProposal": { "type": "boolean" },
+        "minBidFactor": { "type": "number" },
+        "maxBidFactor": { "type": "number" },
+        "isEnabled": { "type": "boolean" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["vehicleCategory", "version", "baseFareInr", "perKmRateInr", "minimumFareInr", "gstPercent", "commissionPercent", "allowDriverFareProposal", "isEnabled", "createdAt", "updatedAt"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Ride or scheduled mobility booking with server-validated fare bounds and lifecycle state",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "bookingChannel": { "type": "string", "enum": ["app", "community_center"] },
+        "bookingType": { "type": "string", "enum": ["now", "scheduled", "station_pickup", "bus_stand_pickup", "airport_transfer", "village_to_town", "native_village", "family", "return_trip"] },
+        "vehicleCategory": { "type": "string", "enum": ["bike", "auto", "toto", "cab", "outstation", "scheduled", "parcel"] },
+        "pickupLabel": { "type": "string" },
+        "pickupDistrict": { "type": "string" },
+        "pickupLat": { "type": "number" },
+        "pickupLng": { "type": "number" },
+        "destinationLabel": { "type": "string" },
+        "destinationDistrict": { "type": "string" },
+        "destinationLat": { "type": "number" },
+        "destinationLng": { "type": "number" },
+        "distanceKm": { "type": "number" },
+        "estimatedDurationMin": { "type": "integer" },
+        "estimatedFareInr": { "type": "number" },
+        "minPermittedFareInr": { "type": "number" },
+        "maxPermittedFareInr": { "type": "number" },
+        "agreedFareInr": { "type": "number" },
+        "fareConfigVersion": { "type": "integer" },
+        "commissionPercent": { "type": "number" },
+        "gstPercent": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "upi"] },
+        "paymentStatus": { "type": "string", "enum": ["pending", "pending_verification", "settled_cash", "paid", "refunded"] },
+        "status": { "type": "string", "enum": ["searching", "assigned", "arriving", "arrived", "in_progress", "completed", "cancelled"] },
+        "assignedDriverId": { "type": "string" },
+        "assignedDriverName": { "type": "string" },
+        "assignedVehicleLabel": { "type": "string" },
+        "acceptedOfferId": { "type": "string" },
+        "tripPin": { "type": "string" },
+        "trainNumber": { "type": "string" },
+        "scheduledDateTimeLabel": { "type": "string" },
+        "familyMemberName": { "type": "string" },
+        "familyConsentConfirmed": { "type": "boolean" },
+        "isRoundTrip": { "type": "boolean" },
+        "cancellationReason": { "type": "string" },
+        "customerRating": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "customerName", "bookingType", "vehicleCategory", "pickupLabel", "destinationLabel", "distanceKm", "estimatedFareInr", "minPermittedFareInr", "maxPermittedFareInr", "paymentMethod", "paymentStatus", "status", "createdAt", "updatedAt"]
+    },
+    "RideOffer": {
+      "title": "RideOffer",
+      "description": "Controlled driver fare proposal within permitted legal limits",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "driverName": { "type": "string" },
+        "vehicleCategory": { "type": "string" },
+        "vehicleLabel": { "type": "string" },
+        "driverRating": { "type": "number" },
+        "driverCompletedRides": { "type": "integer" },
+        "isVerifiedDriver": { "type": "boolean" },
+        "etaMinutes": { "type": "integer" },
+        "proposedFareInr": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected", "expired"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "driverId", "driverName", "vehicleCategory", "proposedFareInr", "etaMinutes", "status", "createdAt", "updatedAt"]
+    },
+    "RideAssignment": {
+      "title": "RideAssignment",
+      "description": "Authoritative assignment lock preventing duplicate driver acceptance",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "offerId": { "type": "string" },
+        "lockedFareInr": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "driverId", "lockedFareInr", "status", "createdAt", "updatedAt"]
+    },
+    "TripLocation": {
+      "title": "TripLocation",
+      "description": "Live driver coordinates for an active ride",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "driverId", "lat", "lng", "updatedAt"]
+    },
+    "PaymentRecord": {
+      "title": "PaymentRecord",
+      "description": "Idempotent payment and receipt breakdown record",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "grossFareInr": { "type": "number" },
+        "gstInr": { "type": "number" },
+        "platformCommissionInr": { "type": "number" },
+        "netDriverEarningsInr": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "upi"] },
+        "gatewayReference": { "type": "string" },
+        "status": { "type": "string", "enum": ["settled_cash", "pending_verification", "paid", "refunded"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "driverId", "grossFareInr", "gstInr", "platformCommissionInr", "netDriverEarningsInr", "paymentMethod", "status", "createdAt", "updatedAt"]
+    },
+    "CommissionRecord": {
+      "title": "CommissionRecord",
+      "description": "Server-aligned commission ledger entry per completed ride",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "grossFareInr": { "type": "number" },
+        "commissionRatePct": { "type": "number" },
+        "commissionAmountInr": { "type": "number" },
+        "netDriverEarningsInr": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "driverId", "grossFareInr", "commissionRatePct", "commissionAmountInr", "netDriverEarningsInr", "createdAt"]
+    },
+    "DriverSettlement": {
+      "title": "DriverSettlement",
+      "description": "Driver withdrawal / settlement request and reconciliation status",
+      "type": "object",
+      "properties": {
+        "driverId": { "type": "string" },
+        "driverName": { "type": "string" },
+        "amountInr": { "type": "number" },
+        "upiOrBankRef": { "type": "string" },
+        "status": { "type": "string", "enum": ["requested", "processing", "paid", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driverId", "driverName", "amountInr", "upiOrBankRef", "status", "createdAt", "updatedAt"]
+    },
+    "RefundRecord": {
+      "title": "RefundRecord",
+      "description": "Customer refund request and admin reconciliation status",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "amountInr": { "type": "number" },
+        "reason": { "type": "string" },
+        "status": { "type": "string", "enum": ["requested", "approved", "processed", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "amountInr", "reason", "status", "createdAt", "updatedAt"]
+    },
+    "RatingRecord": {
+      "title": "RatingRecord",
+      "description": "Post-ride customer rating and feedback",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "stars": { "type": "integer" },
+        "review": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "driverId", "stars", "createdAt"]
+    },
+    "ComplaintRecord": {
+      "title": "ComplaintRecord",
+      "description": "Customer or driver ride complaint and support escalation",
+      "type": "object",
+      "properties": {
+        "reporterId": { "type": "string" },
+        "bookingId": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "investigating", "resolved"] },
+        "resolutionNote": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reporterId", "category", "description", "status", "createdAt", "updatedAt"]
+    },
+    "EmergencyEvent": {
+      "title": "EmergencyEvent",
+      "description": "SOS safety alert triggered during a ride",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "bookingId": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "acknowledged", "resolved"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "notes", "status", "createdAt", "updatedAt"]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "User-scoped booking, driver, and safety notifications",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "type": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "body", "type", "read", "createdAt"]
+    },
+    "SupportRequest": {
+      "title": "SupportRequest",
+      "description": "Account deletion, privacy consent, or community transport center request",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "requestType": { "type": "string", "enum": ["community_booking", "account_deletion", "privacy_inquiry", "general_support"] },
+        "details": { "type": "string" },
+        "status": { "type": "string", "enum": ["submitted", "in_review", "completed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "requestType", "details", "status", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable admin action audit trail",
+      "type": "object",
+      "properties": {
+        "actorId": { "type": "string" },
+        "actorEmail": { "type": "string" },
+        "action": { "type": "string" },
+        "targetCollection": { "type": "string" },
+        "targetId": { "type": "string" },
+        "summary": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorId", "action", "targetCollection", "targetId", "summary", "createdAt"]
+    },
+    "AdminRoleDoc": {
+      "title": "AdminRoleDoc",
+      "description": "Authoritative admin allowlist entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email", "createdAt"]
+    },
+    "PlatformSettings": {
+      "title": "PlatformSettings",
+      "description": "Global platform configuration and in-app APK update manifest managed by Administrators",
+      "type": "object",
+      "properties": {
+        "helplineNumber": { "type": "string" },
+        "parcelDeliveryEnabled": { "type": "boolean" },
+        "maintenanceNotice": { "type": "string" },
+        "cancellationPolicySummary": { "type": "string" },
+        "defaultCommissionPct": { "type": "number" },
+        "updatesEnabled": { "type": "boolean" },
+        "latestVersionName": { "type": "string" },
+        "latestVersionCode": { "type": "integer" },
+        "minSupportedVersionCode": { "type": "integer" },
+        "apkDownloadUrl": { "type": "string" },
+        "sha256Checksum": { "type": "string" },
+        "releaseNotes": { "type": "string" },
+        "isMandatoryUpdate": { "type": "boolean" },
+        "updateManifestUrl": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": { "$ref": "#/entities/UserAccount" }, "description": "User accounts" },
+    "/customer_profiles/{userId}": { "schema": { "$ref": "#/entities/CustomerProfile" }, "description": "Customer saved places and SOS contacts" },
+    "/driver_profiles/{driverId}": { "schema": { "$ref": "#/entities/DriverProfile" }, "description": "Private driver KYC and payout details" },
+    "/driver_directory/{driverId}": { "schema": { "$ref": "#/entities/DriverDirectoryEntry" }, "description": "Public verified driver discovery cards" },
+    "/service_areas/{areaId}": { "schema": { "$ref": "#/entities/ServiceArea" }, "description": "West Bengal service areas and pickup hubs" },
+    "/fare_configs/{configId}": { "schema": { "$ref": "#/entities/FareConfig" }, "description": "Versioned pricing configurations" },
+    "/bookings/{bookingId}": { "schema": { "$ref": "#/entities/Booking" }, "description": "Ride bookings" },
+    "/ride_offers/{offerId}": { "schema": { "$ref": "#/entities/RideOffer" }, "description": "Driver fare proposals" },
+    "/ride_assignments/{assignmentId}": { "schema": { "$ref": "#/entities/RideAssignment" }, "description": "Locked ride assignments" },
+    "/trip_locations/{bookingId}": { "schema": { "$ref": "#/entities/TripLocation" }, "description": "Live ride driver coordinates" },
+    "/payments/{paymentId}": { "schema": { "$ref": "#/entities/PaymentRecord" }, "description": "Payment receipts and status" },
+    "/commissions/{commissionId}": { "schema": { "$ref": "#/entities/CommissionRecord" }, "description": "Platform commission records" },
+    "/driver_settlements/{settlementId}": { "schema": { "$ref": "#/entities/DriverSettlement" }, "description": "Driver payout requests" },
+    "/refunds/{refundId}": { "schema": { "$ref": "#/entities/RefundRecord" }, "description": "Customer refund requests" },
+    "/ratings/{ratingId}": { "schema": { "$ref": "#/entities/RatingRecord" }, "description": "Ride ratings" },
+    "/complaints/{complaintId}": { "schema": { "$ref": "#/entities/ComplaintRecord" }, "description": "Complaints and disputes" },
+    "/emergency_events/{eventId}": { "schema": { "$ref": "#/entities/EmergencyEvent" }, "description": "SOS safety incidents" },
+    "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/AppNotification" }, "description": "User notifications" },
+    "/support_requests/{requestId}": { "schema": { "$ref": "#/entities/SupportRequest" }, "description": "Support, privacy, and deletion requests" },
+    "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Immutable admin audit logs" },
+    "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Admin role documents" },
+    "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" }
+  }
+}

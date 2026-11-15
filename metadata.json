@@ -1,0 +1,6 @@
+{
+  "name": "GoLocal",
+  "description": "GoLocal by NR Next — Your Local. Our Priority. Separate Customer, Rider, and Admin experiences powered by centralized Firebase Auth & Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
