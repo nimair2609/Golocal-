@@ -1,3 +1,4 @@
+
 name: GoLocal Android Debug APK
 
 on:
@@ -40,15 +41,16 @@ jobs:
         run: |
           SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR" ]; then
-            echo "::error::Android SDK directory not found (ANDROID_HOME/ANDROID_SDK_ROOT unset)."
+            echo "::error::Android SDK directory not found."
             exit 1
           fi
 
           SDKMANAGER=$(command -v sdkmanager || find "$SDK_DIR/cmdline-tools" -name "sdkmanager" -type f 2>/dev/null | sort -V | tail -n 1 || true)
           if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager executable not found under $SDK_DIR."
+            echo "::error::sdkmanager executable not found."
             exit 1
           fi
+
           echo "Using sdkmanager: $SDKMANAGER"
 
           set +o pipefail
@@ -63,58 +65,57 @@ jobs:
           "$SDKMANAGER" "platform-tools"
 
           if grep -qE '^\s*build-tools;36\.0\.0(\s|\|)' "$SDK_CATALOG_FILE"; then
-            echo "Installing build-tools;36.0.0..."
             "$SDKMANAGER" "build-tools;36.0.0"
           else
             LATEST_BT36=$(grep -oE 'build-tools;36\.[0-9]+\.[0-9]+' "$SDK_CATALOG_FILE" | sort -V | tail -n 1 || true)
             if [ -n "$LATEST_BT36" ]; then
-              echo "Installing $LATEST_BT36..."
               "$SDKMANAGER" "$LATEST_BT36"
             else
-              echo "::error::No valid Android 36 build-tools package found in sdkmanager catalog."
+              echo "::error::No valid Android 36 build-tools package found."
               exit 1
             fi
           fi
 
           if grep -qE '^\s*platforms;android-36(\s|\|)' "$SDK_CATALOG_FILE"; then
-            echo "Installing platforms;android-36..."
             "$SDKMANAGER" "platforms;android-36"
           fi
 
-          # app/build.gradle.kts sets compileSdk release(36) minorApiLevel=1; install 36.1 only if valid in catalog
           if grep -qE '^\s*platforms;android-36\.1(\s|\|)' "$SDK_CATALOG_FILE"; then
-            echo "Installing platforms;android-36.1..."
             "$SDKMANAGER" "platforms;android-36.1"
           else
-            echo "Note: platforms;android-36.1 not listed separately in sdkmanager catalog; using platforms;android-36."
+            echo "Note: android-36.1 not listed separately; checking android-36."
           fi
 
-          echo "Verifying installed Android SDK packages before starting Gradle..."
           if [ ! -d "$SDK_DIR/platform-tools" ]; then
-            echo "::error::Missing $SDK_DIR/platform-tools after SDK installation."
+            echo "::error::Missing platform-tools."
             exit 1
           fi
+
           if [ ! -d "$SDK_DIR/platforms/android-36" ] && [ ! -d "$SDK_DIR/platforms/android-36.1" ]; then
-            echo "::error::Neither platforms/android-36 nor platforms/android-36.1 is installed under $SDK_DIR/platforms."
+            echo "::error::Android API 36 platform not installed."
             exit 1
           fi
+
           BUILD_TOOLS_DIR=$(find "$SDK_DIR/build-tools" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n 1 || true)
+
           if [ -z "$BUILD_TOOLS_DIR" ] || [ ! -x "$BUILD_TOOLS_DIR/apksigner" ] || [ ! -x "$BUILD_TOOLS_DIR/aapt2" ]; then
-            echo "::error::Valid Android build-tools with apksigner and aapt2 not found under $SDK_DIR/build-tools."
+            echo "::error::Valid Android build-tools not found."
             exit 1
           fi
+
           if [ ! -d "$SDK_DIR/licenses" ]; then
-            echo "::error::Android SDK licenses directory missing under $SDK_DIR/licenses."
+            echo "::error::Android SDK licenses directory missing."
             exit 1
           fi
-          echo "Verified Android SDK installation (build-tools: $BUILD_TOOLS_DIR)."
+
+          echo "Android SDK installation verified."
 
       - name: Set up Gradle (9.3.1 for AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
 
-      - name: Restore & Validate Firebase Configuration (google-services.json)
+      - name: Restore & Validate Firebase Configuration
         shell: bash
         env:
           GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
@@ -127,58 +128,82 @@ jobs:
           if not os.path.isfile(gs_path):
               b64_val = os.environ.get("GOOGLE_SERVICES_JSON_BASE64", "").strip()
               if not b64_val:
-                  print(
-                      "::error::Firebase configuration app/google-services.json is missing from the repository "
-                      "and GitHub secret GOOGLE_SERVICES_JSON_BASE64 is not configured. "
-                      "To fix: encode app/google-services.json to base64 "
-                      "(Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes(\"app\\google-services.json\"))) "
-                      "and add it under GitHub Repository -> Settings -> Secrets and variables -> Actions -> "
-                      "New repository secret named GOOGLE_SERVICES_JSON_BASE64."
-                  )
+                  print("::error::Firebase configuration missing.")
                   sys.exit(1)
+
               try:
-                  decoded = base64.b64decode("".join(b64_val.split()))
+                  decoded = base64.b64decode("".join(b64_val.split()), validate=True)
               except Exception:
-                  print("::error::Failed to base64-decode secret GOOGLE_SERVICES_JSON_BASE64. Verify it contains valid base64 without truncation.")
+                  print("::error::Invalid Firebase base64 secret.")
                   sys.exit(1)
 
               os.makedirs(os.path.dirname(gs_path), exist_ok=True)
               with open(gs_path, "wb") as f:
                   f.write(decoded)
-              print("Restored app/google-services.json from GOOGLE_SERVICES_JSON_BASE64 secret.")
+
+              print("Firebase configuration restored.")
           else:
-              print("Using committed app/google-services.json from repository.")
+              print("Using Firebase configuration from repository.")
 
           try:
               with open(gs_path, "r", encoding="utf-8") as f:
                   data = json.load(f)
           except Exception:
-              print("::error::app/google-services.json is not valid JSON.")
+              print("::error::Invalid google-services.json.")
               sys.exit(1)
 
           project_id = str(data.get("project_info", {}).get("project_id", "")).strip()
+
           if not project_id or project_id == "remixed-project-id":
-              print("::error::Invalid or placeholder Firebase project_id in app/google-services.json.")
+              print("::error::Invalid Firebase project ID.")
               sys.exit(1)
 
           expected_pkg = "com.aistudio.golocal.wbmxrq"
+
           matching_clients = [
               c for c in data.get("client", [])
               if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == expected_pkg
           ]
+
           if not matching_clients:
-              print(f"::error::app/google-services.json does not contain Android package_name {expected_pkg}.")
+              print(f"::error::Package ID mismatch: {expected_pkg}")
               sys.exit(1)
 
           oauth_clients = matching_clients[0].get("oauth_client", [])
           has_web_client = any(oc.get("client_type") == 3 for oc in oauth_clients)
 
-          print(f"Validated Firebase project_id: {project_id}")
-          print(f"Validated Android package_name: {expected_pkg}")
-          print(f"Web OAuth client (client_type=3 for default_web_client_id) present: {has_web_client}")
+          print(f"Firebase project validated: {project_id}")
+          print(f"Android package validated: {expected_pkg}")
+          print(f"Web OAuth client present: {has_web_client}")
+
           if not has_web_client:
-              print("::warning::No client_type=3 Web OAuth client found in app/google-services.json; Google Sign-In requires default_web_client_id.")
+              print("::warning::Web OAuth client missing. Google Sign-In may not work.")
           PY
+
+      # FIX: Gradle requires this exact root-level file.
+      - name: Generate Debug Keystore If Missing
+        shell: bash
+        run: |
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+
+            echo "Debug keystore generated successfully."
+          else
+            echo "Existing debug keystore found."
+          fi
+
+          keytool -list \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey
 
       - name: Build Android Debug APK
         shell: bash
@@ -189,7 +214,7 @@ jobs:
             echo "Using committed Gradle wrapper."
           else
             GRADLE_CMD="gradle"
-            echo "Gradle wrapper jar not committed; using Gradle 9.3.1 from setup-gradle."
+            echo "Using Gradle 9.3.1."
           fi
 
           "$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace
@@ -198,68 +223,64 @@ jobs:
         shell: bash
         run: |
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+
           if [ ! -s "$APK_PATH" ]; then
-            echo "::error::Debug APK was not generated at $APK_PATH"
+            echo "::error::Debug APK was not generated."
             exit 1
           fi
 
           ls -lh "$APK_PATH"
 
           SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR/build-tools" ]; then
-            echo "::error::Android SDK build-tools directory not found (ANDROID_HOME/ANDROID_SDK_ROOT unset)."
-            exit 1
-          fi
-
           BUILD_TOOLS_DIR=$(find "$SDK_DIR/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1 || true)
-          if [ -z "$BUILD_TOOLS_DIR" ] || [ ! -d "$BUILD_TOOLS_DIR" ]; then
-            echo "::error::No Android build-tools version is installed under $SDK_DIR/build-tools."
+
+          if [ -z "$BUILD_TOOLS_DIR" ]; then
+            echo "::error::Android build-tools missing."
             exit 1
           fi
-          echo "Using Android build-tools at: $BUILD_TOOLS_DIR"
 
           AAPT2="$BUILD_TOOLS_DIR/aapt2"
-          if [ ! -x "$AAPT2" ]; then
-            echo "::error::aapt2 not found or not executable at $AAPT2."
-            exit 1
-          fi
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+
           PKG_INFO=$("$AAPT2" dump badging "$APK_PATH" | grep "^package:" || true)
           echo "$PKG_INFO"
-          if [[ "$PKG_INFO" != *"name='com.aistudio.golocal.wbmxrq'"* ]]; then
-            echo "::error::Unexpected package name in Debug APK."
-            exit 1
-          fi
 
-          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
-          if [ ! -x "$APKSIGNER" ]; then
-            echo "::error::apksigner not found or not executable at $APKSIGNER; cannot verify APK signature or extract certificate fingerprints."
+          if [[ "$PKG_INFO" != *"name='com.aistudio.golocal.wbmxrq'"* ]]; then
+            echo "::error::Unexpected package name."
             exit 1
           fi
 
           "$APKSIGNER" verify "$APK_PATH"
-          echo "Debug APK signature verified."
+          echo "APK signature verified."
 
           CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK_PATH")
+
           CERT_OUTPUT="$CERT_OUTPUT" python3 - <<'PY'
           import json, os, re, sys
 
           cert_out = os.environ["CERT_OUTPUT"]
+
           sha1_match = re.search(r"SHA-1 digest:\s*([0-9a-fA-F]{40})", cert_out)
           sha256_match = re.search(r"SHA-256 digest:\s*([0-9a-fA-F]{64})", cert_out)
+
           if not sha1_match or not sha256_match:
-              print("::error::Failed to parse SHA-1 or SHA-256 certificate digest from apksigner.")
+              print("::error::Failed to extract certificate fingerprints.")
               sys.exit(1)
 
           sha1_raw = sha1_match.group(1).lower()
           sha256_raw = sha256_match.group(1).lower()
+
           fmt = lambda h: ":".join(h[i:i+2].upper() for i in range(0, len(h), 2))
+
           sha1_colon = fmt(sha1_raw)
           sha256_colon = fmt(sha256_raw)
 
           with open("app/google-services.json", "r", encoding="utf-8") as f:
               gs = json.load(f)
+
           project_id = gs.get("project_info", {}).get("project_id", "unknown")
           pkg = "com.aistudio.golocal.wbmxrq"
+
           registered_sha1s = [
               oc.get("android_info", {}).get("certificate_hash", "").lower()
               for c in gs.get("client", [])
@@ -267,13 +288,15 @@ jobs:
               for oc in c.get("oauth_client", [])
               if oc.get("client_type") == 1
           ]
+
           sha1_in_gs = sha1_raw in registered_sha1s
 
-          print(f"Debug Certificate SHA-1:   {sha1_colon}")
+          print(f"Debug Certificate SHA-1: {sha1_colon}")
           print(f"Debug Certificate SHA-256: {sha256_colon}")
-          print(f"SHA-1 present in app/google-services.json: {sha1_in_gs}")
+          print(f"SHA-1 present in google-services.json: {sha1_in_gs}")
 
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+
           if summary_path:
               with open(summary_path, "a", encoding="utf-8") as s:
                   s.write("## GoLocal Android Debug APK Build Summary\n\n")
@@ -283,8 +306,8 @@ jobs:
                   s.write(f"| **Firebase Project ID** | `{project_id}` |\n")
                   s.write(f"| **Debug SHA-1** | `{sha1_colon}` |\n")
                   s.write(f"| **Debug SHA-256** | `{sha256_colon}` |\n")
-                  s.write(f"| **Debug SHA-1 in `google-services.json`** | `{'Yes' if sha1_in_gs else 'No (Register in Firebase Console & update google-services.json)'}` |\n\n")
-                  s.write("> Signing credentials, API keys, and keystore passwords are never printed in workflow logs or summaries.\n")
+                  s.write(f"| **SHA-1 registered in Firebase config** | `{'Yes' if sha1_in_gs else 'No'}` |\n")
+                  s.write("\n> Debug signing key is not a production release key.\n")
           PY
 
       - name: Upload Debug APK Artifact
