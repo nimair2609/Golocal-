@@ -51,6 +51,50 @@ jobs:
             fi
           fi
 
+      - name: Verify Firebase Configuration (google-services.json)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          gs_path = "app/google-services.json"
+          if not os.path.isfile(gs_path):
+              print("::error::app/google-services.json is missing.")
+              sys.exit(1)
+
+          with open(gs_path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          project_id = data.get("project_info", {}).get("project_id", "")
+          if not project_id or project_id == "remixed-project-id":
+              print("::error::Invalid or placeholder Firebase project_id in app/google-services.json.")
+              sys.exit(1)
+
+          expected_pkg = "com.aistudio.golocal.wbmxrq"
+          matching_clients = [
+              c for c in data.get("client", [])
+              if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == expected_pkg
+          ]
+          if not matching_clients:
+              print(f"::error::app/google-services.json does not contain package_name {expected_pkg}.")
+              sys.exit(1)
+
+          oauth_clients = matching_clients[0].get("oauth_client", [])
+          has_web_client = any(oc.get("client_type") == 3 for oc in oauth_clients)
+          registered_hashes = [
+              oc.get("android_info", {}).get("certificate_hash", "").lower()
+              for oc in oauth_clients
+              if oc.get("client_type") == 1
+          ]
+
+          print(f"Verified Firebase project_id: {project_id}")
+          print(f"Verified Android package_name: {expected_pkg}")
+          print(f"Web OAuth client (client_type=3 for default_web_client_id) present: {has_web_client}")
+          print(f"Android OAuth certificate_hash entries count: {len(registered_hashes)}")
+          if not has_web_client:
+              print("::warning::No client_type=3 Web OAuth client found in app/google-services.json; Google Sign-In requires default_web_client_id.")
+          PY
+
       - name: Build Android Debug APK
         shell: bash
         run: |
@@ -65,7 +109,7 @@ jobs:
 
           "$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify Generated Debug APK
+      - name: Verify Debug APK & Extract Certificate Fingerprints
         shell: bash
         run: |
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
@@ -76,23 +120,75 @@ jobs:
 
           ls -lh "$APK_PATH"
 
-          if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/build-tools" ]; then
-            AAPT2=$(find "$ANDROID_HOME/build-tools" -name "aapt2" | sort -V | tail -n 1 || true)
-            if [ -n "$AAPT2" ]; then
-              PKG_INFO=$("$AAPT2" dump badging "$APK_PATH" | grep "^package:" || true)
-              echo "$PKG_INFO"
-              if [[ "$PKG_INFO" != *"name='com.aistudio.golocal.wbmxrq'"* ]]; then
-                echo "::error::Unexpected package name in Debug APK."
-                exit 1
-              fi
-            fi
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR/build-tools" ]; then
+            echo "::error::Android SDK build-tools directory not found (ANDROID_HOME/ANDROID_SDK_ROOT unset)."
+            exit 1
+          fi
 
-            APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -n 1 || true)
-            if [ -n "$APKSIGNER" ]; then
-              "$APKSIGNER" verify "$APK_PATH"
-              echo "Debug APK signature verified."
+          AAPT2=$(find "$SDK_DIR/build-tools" -name "aapt2" | sort -V | tail -n 1 || true)
+          if [ -n "$AAPT2" ]; then
+            PKG_INFO=$("$AAPT2" dump badging "$APK_PATH" | grep "^package:" || true)
+            echo "$PKG_INFO"
+            if [[ "$PKG_INFO" != *"name='com.aistudio.golocal.wbmxrq'"* ]]; then
+              echo "::error::Unexpected package name in Debug APK."
+              exit 1
             fi
           fi
+
+          APKSIGNER=$(find "$SDK_DIR/build-tools" -name "apksigner" | sort -V | tail -n 1 || true)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner not found in $SDK_DIR/build-tools; cannot extract APK certificate fingerprints."
+            exit 1
+          fi
+
+          CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK_PATH")
+          CERT_OUTPUT="$CERT_OUTPUT" python3 - <<'PY'
+          import json, os, re, sys
+
+          cert_out = os.environ["CERT_OUTPUT"]
+          sha1_match = re.search(r"SHA-1 digest:\s*([0-9a-fA-F]{40})", cert_out)
+          sha256_match = re.search(r"SHA-256 digest:\s*([0-9a-fA-F]{64})", cert_out)
+          if not sha1_match or not sha256_match:
+              print("::error::Failed to parse SHA-1 or SHA-256 certificate digest from apksigner.")
+              sys.exit(1)
+
+          sha1_raw = sha1_match.group(1).lower()
+          sha256_raw = sha256_match.group(1).lower()
+          fmt = lambda h: ":".join(h[i:i+2].upper() for i in range(0, len(h), 2))
+          sha1_colon = fmt(sha1_raw)
+          sha256_colon = fmt(sha256_raw)
+
+          with open("app/google-services.json", "r", encoding="utf-8") as f:
+              gs = json.load(f)
+          project_id = gs.get("project_info", {}).get("project_id", "unknown")
+          pkg = "com.aistudio.golocal.wbmxrq"
+          registered_sha1s = [
+              oc.get("android_info", {}).get("certificate_hash", "").lower()
+              for c in gs.get("client", [])
+              if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == pkg
+              for oc in c.get("oauth_client", [])
+              if oc.get("client_type") == 1
+          ]
+          sha1_in_gs = sha1_raw in registered_sha1s
+
+          print(f"Debug Certificate SHA-1:   {sha1_colon}")
+          print(f"Debug Certificate SHA-256: {sha256_colon}")
+          print(f"SHA-1 present in app/google-services.json: {sha1_in_gs}")
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as s:
+                  s.write("## GoLocal Android Debug APK Build Summary\n\n")
+                  s.write("| Property | Value |\n")
+                  s.write("|---|---|\n")
+                  s.write(f"| **Android Package ID** | `{pkg}` |\n")
+                  s.write(f"| **Firebase Project ID** | `{project_id}` |\n")
+                  s.write(f"| **Debug SHA-1** | `{sha1_colon}` |\n")
+                  s.write(f"| **Debug SHA-256** | `{sha256_colon}` |\n")
+                  s.write(f"| **Debug SHA-1 in `google-services.json`** | `{'Yes' if sha1_in_gs else 'No (Register in Firebase Console & re-download google-services.json)'}` |\n\n")
+                  s.write("> Signing credentials, API keys, and keystore passwords are never printed in workflow logs or summaries.\n")
+          PY
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
