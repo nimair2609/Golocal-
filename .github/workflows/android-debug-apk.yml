@@ -114,19 +114,6 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Restore Project Debug Keystore
-        shell: bash
-        run: |
-          if [ ! -f "debug.keystore" ]; then
-            if [ -f "debug.keystore.base64" ]; then
-              base64 --decode debug.keystore.base64 > debug.keystore
-              echo "Restored debug.keystore from debug.keystore.base64."
-            else
-              echo "::error::Neither debug.keystore nor debug.keystore.base64 exists in the repository."
-              exit 1
-            fi
-          fi
-
       - name: Restore & Validate Firebase Configuration (google-services.json)
         shell: bash
         env:
