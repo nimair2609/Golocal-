@@ -4,6 +4,8 @@ import android.content.Context
 import com.example.R
 import com.example.data.model.*
 import com.example.domain.FareCalculator
+import com.example.ui.auth.AuthDiagnostics
+import com.example.ui.auth.AuthStage
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -71,34 +73,43 @@ class GolocalRepository(
         photoUrl: String
     ): Result<UserAccount> = runCatching {
         val uid = requireUserId()
+        val safeFullName = fullName.trim().ifBlank { "GoLocal User" }.take(100)
+        val safeEmail = email.trim().take(150)
+        val safePhotoUrl = photoUrl.trim().take(500)
+
+        AuthDiagnostics.logStage(
+            stage = AuthStage.FIRESTORE_ACCOUNT_CHECK,
+            flow = "firestore_account",
+            detail = "Checking users/$uid"
+        )
+
         val userRef = db.collection("users").document(uid)
+        val custRef = db.collection("customer_profiles").document(uid)
         val existing = try {
             userRef.get().await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            val code = (e as? FirebaseFirestoreException)?.code?.name
+            AuthDiagnostics.logFailure(
+                stage = AuthStage.AUTH_FAILED,
+                flow = "firestore_account",
+                exceptionType = e::class.java.simpleName,
+                firebaseErrorCode = code,
+                detail = "Failed reading user document"
+            )
             handleFirestoreError(e, OperationType.GET, userRef.path, auth)
             throw e
         }
+
         if (existing.exists()) {
-            existing.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                ?: UserAccount(id = uid, userId = uid, fullName = fullName, email = email, photoUrl = photoUrl)
-        } else {
-            val newAccount = UserAccount(
-                id = uid,
-                userId = uid,
-                fullName = fullName.ifBlank { "GOLOCAL Rider" },
-                email = email,
-                photoUrl = photoUrl,
-                role = "customer",
-                preferredLanguage = "en",
-                lowNetworkMode = false,
-                privacyConsentAccepted = true,
-                accountStatus = "active"
+            AuthDiagnostics.logStage(
+                stage = AuthStage.FIRESTORE_ACCOUNT_EXISTS,
+                flow = "firestore_account",
+                detail = "Existing user record preserved"
             )
+            // Ensure companion customer_profiles/{uid} exists if a prior partial setup missed it
             try {
-                userRef.set(newAccount.toCreateMap()).await()
-                val custRef = db.collection("customer_profiles").document(uid)
                 if (!custRef.get().await().exists()) {
                     custRef.set(
                         mapOf(
@@ -107,10 +118,77 @@ class GolocalRepository(
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).await()
+                    AuthDiagnostics.logStage(
+                        stage = AuthStage.FIRESTORE_PROFILE_CREATED,
+                        flow = "firestore_account",
+                        detail = "Healed missing customer profile"
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                val code = (e as? FirebaseFirestoreException)?.code?.name
+                AuthDiagnostics.logWarning(
+                    stage = AuthStage.FIRESTORE_ACCOUNT_EXISTS,
+                    flow = "firestore_account",
+                    exceptionType = e::class.java.simpleName,
+                    firebaseErrorCode = code,
+                    detail = "Optional customer profile check failed softly"
+                )
+            }
+            existing.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                ?: UserAccount(
+                    id = uid,
+                    userId = uid,
+                    fullName = safeFullName,
+                    email = safeEmail,
+                    photoUrl = safePhotoUrl
+                )
+        } else {
+            val newAccount = UserAccount(
+                id = uid,
+                userId = uid,
+                fullName = safeFullName,
+                email = safeEmail,
+                photoUrl = safePhotoUrl,
+                role = "customer",
+                preferredLanguage = "en",
+                lowNetworkMode = false,
+                privacyConsentAccepted = true,
+                accountStatus = "active"
+            )
+            try {
+                userRef.set(newAccount.toCreateMap()).await()
+                AuthDiagnostics.logStage(
+                    stage = AuthStage.FIRESTORE_ACCOUNT_CREATED,
+                    flow = "firestore_account",
+                    detail = "Created new users/$uid record"
+                )
+                if (!custRef.get().await().exists()) {
+                    custRef.set(
+                        mapOf(
+                            "userId" to uid,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                    AuthDiagnostics.logStage(
+                        stage = AuthStage.FIRESTORE_PROFILE_CREATED,
+                        flow = "firestore_account",
+                        detail = "Created customer_profiles/$uid record"
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val code = (e as? FirebaseFirestoreException)?.code?.name
+                AuthDiagnostics.logFailure(
+                    stage = AuthStage.AUTH_FAILED,
+                    flow = "firestore_account",
+                    exceptionType = e::class.java.simpleName,
+                    firebaseErrorCode = code,
+                    detail = "Failed creating user or profile record"
+                )
                 handleFirestoreError(e, OperationType.CREATE, userRef.path, auth)
                 throw e
             }
@@ -852,7 +930,17 @@ class GolocalRepository(
         }
         return try {
             db.collection("admins").document(uid).get().await().exists()
-        } catch (_: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val code = (e as? FirebaseFirestoreException)?.code?.name
+            AuthDiagnostics.logWarning(
+                stage = AuthStage.FIRESTORE_ACCOUNT_CHECK,
+                flow = "admin_check",
+                exceptionType = e::class.java.simpleName,
+                firebaseErrorCode = code,
+                detail = "Admin allowlist check failed"
+            )
             false
         }
     }

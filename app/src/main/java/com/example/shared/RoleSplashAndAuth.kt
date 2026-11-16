@@ -361,6 +361,7 @@ fun RoleAuthScreen(
 
                     Button(
                         onClick = {
+                            if (isLoading) return@Button
                             if (mode == ExperienceMode.CUSTOMER && !consentAccepted) {
                                 errorMessage = "Please accept the Privacy Policy before continuing."
                                 return@Button

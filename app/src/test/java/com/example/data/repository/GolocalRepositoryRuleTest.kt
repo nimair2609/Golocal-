@@ -58,6 +58,54 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
+    fun ensureUserAccount_returningUserPreservesProfileAndHealsMissingCustomerProfile() = runBlocking {
+        val uid = signInTestUser("returning_${UUID.randomUUID()}@test.com")
+        val repo = GolocalRepository(firestore, auth)
+
+        val created = withTimeout(TIMEOUT_MS) {
+            repo.ensureUserAccount("Initial Name", "returning@test.com", "https://example.com/a.png").getOrThrow()
+        }
+        assertEquals(uid, created.userId)
+        assertEquals("Initial Name", created.fullName)
+
+        withTimeout(TIMEOUT_MS) {
+            repo.updateUserPreferences(fullName = "Custom Preferred Name", language = "bn").getOrThrow()
+        }
+
+        // Simulate missing customer_profiles/{uid} and re-run ensureUserAccount as happens on next login
+        withTimeout(TIMEOUT_MS) {
+            firestore.collection("customer_profiles").document(uid).delete().await()
+        }
+
+        val reloaded = withTimeout(TIMEOUT_MS) {
+            repo.ensureUserAccount("Google Name Override", "returning@test.com", "").getOrThrow()
+        }
+        assertEquals("Custom Preferred Name", reloaded.fullName)
+        assertEquals("bn", reloaded.preferredLanguage)
+
+        val healedProfile = withTimeout(TIMEOUT_MS) {
+            firestore.collection("customer_profiles").document(uid).get().await()
+        }
+        assertTrue("Missing customer_profiles/{uid} should be healed on returning login", healedProfile.exists())
+    }
+
+    @Test
+    fun ensureUserAccount_oversizedGoogleProfileFieldsAreSafelyTruncatedToPassRules() = runBlocking {
+        val uid = signInTestUser("longfields_${UUID.randomUUID()}@test.com")
+        val repo = GolocalRepository(firestore, auth)
+
+        val veryLongName = "N".repeat(180)
+        val veryLongPhoto = "https://example.com/" + "p".repeat(600)
+
+        val account = withTimeout(TIMEOUT_MS) {
+            repo.ensureUserAccount(veryLongName, "long@test.com", veryLongPhoto).getOrThrow()
+        }
+        assertEquals(uid, account.userId)
+        assertTrue(account.fullName.length <= 100)
+        assertTrue(account.photoUrl.length <= 500)
+    }
+
+    @Test
     fun crossUserIsolation_otherUserCannotReadUserAccountOrCancelBooking() = runBlocking {
         val aliceUid = signInTestUser("alice_iso_${UUID.randomUUID()}@test.com")
         val aliceRepo = GolocalRepository(firestore, auth)

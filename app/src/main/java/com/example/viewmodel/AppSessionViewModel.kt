@@ -14,6 +14,8 @@ import com.example.data.model.UserAccount
 import com.example.data.repository.ClientPreferences
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
+import com.example.ui.auth.AuthDiagnostics
+import com.example.ui.auth.AuthStage
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -26,6 +28,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class GpsLocationState(
     val lat: Double? = null,
@@ -52,6 +55,9 @@ class AppSessionViewModel(
 
     private val _isAdminChecked = MutableStateFlow(false)
     val isAdminChecked: StateFlow<Boolean> = _isAdminChecked.asStateFlow()
+
+    private val _isAccountReady = MutableStateFlow(false)
+    val isAccountReady: StateFlow<Boolean> = _isAccountReady.asStateFlow()
 
     private val _gpsLocation = MutableStateFlow(GpsLocationState())
     val gpsLocation: StateFlow<GpsLocationState> = _gpsLocation.asStateFlow()
@@ -118,11 +124,58 @@ class AppSessionViewModel(
         )
 
     init {
+        syncAccountAndRole()
+    }
+
+    fun retryAccountSync() {
+        syncAccountAndRole()
+    }
+
+    private fun syncAccountAndRole() {
         viewModelScope.launch {
-            repository.ensureUserAccount(userDisplayName, userEmail, userPhotoUrl)
-                .onFailure { _statusMessage.value = it.localizedMessage }
-            _isAdmin.value = repository.checkIsAdmin(currentUserId, userEmail)
-            _isAdminChecked.value = true
+            try {
+                val synced = withTimeoutOrNull(ACCOUNT_SYNC_TIMEOUT_MS) {
+                    repository.ensureUserAccount(userDisplayName, userEmail, userPhotoUrl)
+                        .onSuccess {
+                            _isAccountReady.value = true
+                            AuthDiagnostics.logStage(
+                                stage = AuthStage.AUTH_FLOW_COMPLETED,
+                                flow = "session_init",
+                                detail = "Account & session ready"
+                            )
+                        }
+                        .onFailure { err ->
+                            val fe = err as? FirebaseFirestoreException
+                            _statusMessage.value = when (fe?.code) {
+                                FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                                    "Account permission check failed. Please sign out and sign in again."
+                                FirebaseFirestoreException.Code.UNAVAILABLE,
+                                FirebaseFirestoreException.Code.DEADLINE_EXCEEDED ->
+                                    "Network issue syncing your GoLocal profile. Changes will sync when online."
+                                else ->
+                                    err.localizedMessage ?: "Unable to sync your GoLocal account right now."
+                            }
+                        }
+                    _isAdmin.value = repository.checkIsAdmin(currentUserId, userEmail)
+                    true
+                }
+                if (synced == null) {
+                    AuthDiagnostics.logWarning(
+                        stage = AuthStage.AUTH_FAILED,
+                        flow = "session_init",
+                        exceptionType = "AccountSyncTimeout",
+                        detail = "Timed out awaiting initial Firestore account & admin check"
+                    )
+                    _statusMessage.value = "Account sync timed out. Please check your connection."
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Unexpected error in syncAccountAndRole", e)
+                _statusMessage.value = e.localizedMessage ?: "Account initialization failed."
+            } finally {
+                _isAdminChecked.value = true
+            }
         }
     }
 
@@ -251,5 +304,6 @@ class AppSessionViewModel(
     private companion object {
         const val TAG = "AppSessionVM"
         const val STOP_TIMEOUT_MS = 5000L
+        const val ACCOUNT_SYNC_TIMEOUT_MS = 15_000L
     }
 }
