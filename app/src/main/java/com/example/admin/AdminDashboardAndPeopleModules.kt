@@ -129,7 +129,9 @@ fun AdminCustomersModule(adminViewModel: AdminViewModel) {
         val q = query.trim().lowercase()
         if (q.isBlank()) users
         else users.filter {
-            it.fullName.lowercase().contains(q) || it.email.lowercase().contains(q) || it.phone.contains(q)
+            it.fullName.lowercase().contains(q) ||
+                it.email.lowercase().contains(q) ||
+                it.effectiveMobileNumber().contains(q)
         }
     }
 
@@ -167,7 +169,13 @@ fun AdminCustomersModule(adminViewModel: AdminViewModel) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(u.fullName.ifBlank { "GoLocal User" }, style = MaterialTheme.typography.titleSmall)
-                                    Text("${u.email} • ${u.phone.ifBlank { "No phone" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        "${u.effectiveMobileNumber().ifBlank { "No phone" }} • Invoice: ${u.email.ifBlank { "No email" }}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                                 GolocalStatusBadge(
                                     label = u.accountStatus.uppercase(),

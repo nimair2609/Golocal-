@@ -1,17 +1,13 @@
 package com.example.ui.auth
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
@@ -31,7 +27,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalDeepNavy
 import com.example.ui.theme.GolocalLightBlue
@@ -41,132 +36,19 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
-import com.google.firebase.auth.PhoneAuthProvider
 import com.google.firebase.auth.auth
 
 @Composable
-fun PhoneAuthInlineCard(
-    onAuthSuccess: () -> Unit,
-    onBackToMethods: () -> Unit,
-    controllerFactory: ((kotlinx.coroutines.CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null
-) {
-    val scope = rememberCoroutineScope()
-    val controller = remember {
-        controllerFactory?.invoke(scope) { _ -> onAuthSuccess() }
-            ?: PhoneAuthController(
-                mode = PhoneAuthMode.SIGN_IN,
-                scope = scope,
-                onSuccess = { _ -> onAuthSuccess() }
-            )
-    }
-    DisposableEffect(controller) {
-        onDispose { controller.dispose() }
-    }
-
-    val state by controller.uiState.collectAsStateWithLifecycle()
-
-    BackHandler(enabled = true) {
-        if (state.step == PhoneAuthStep.VERIFY_OTP) {
-            controller.changeMobileNumber()
-        } else {
-            onBackToMethods()
-        }
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            IconButton(
-                onClick = {
-                    if (state.step == PhoneAuthStep.VERIFY_OTP) {
-                        controller.changeMobileNumber()
-                    } else {
-                        onBackToMethods()
-                    }
-                },
-                modifier = Modifier
-                    .size(48.dp)
-                    .testTag("phone_auth_back_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back to sign-in methods",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (state.step == PhoneAuthStep.INPUT_PHONE) {
-                        "Mobile Number Sign-In"
-                    } else {
-                        "Verify 6-Digit OTP"
-                    },
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = if (state.step == PhoneAuthStep.INPUT_PHONE) {
-                        "Fast OTP login with your Indian (+91) or supported mobile number"
-                    } else {
-                        "Enter the 6-digit SMS verification code"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        PhoneAuthFormContent(
-            mode = PhoneAuthMode.SIGN_IN,
-            controller = controller,
-            state = state
-        )
-    }
-}
-
-@Composable
 fun PhoneAuthFormContent(
-    mode: PhoneAuthMode,
     controller: PhoneAuthController,
-    state: PhoneAuthUiState
+    state: PhoneAuthUiState,
+    actionButtonLabel: String = "Send OTP",
+    buttonContainerColor: androidx.compose.ui.graphics.Color = GolocalPrimaryBlue
 ) {
     val context = LocalContext.current
     var countryMenuExpanded by remember { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) {
-            Row(
-                verticalAlignment = Alignment.Top,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-                    .clickable(enabled = !state.isBusy && state.step == PhoneAuthStep.INPUT_PHONE) {
-                        controller.setLinkConsentAccepted(!state.linkConsentAccepted)
-                    }
-                    .padding(10.dp)
-            ) {
-                Checkbox(
-                    checked = state.linkConsentAccepted,
-                    onCheckedChange = {
-                        if (!state.isBusy && state.step == PhoneAuthStep.INPUT_PHONE) {
-                            controller.setLinkConsentAccepted(it)
-                        }
-                    },
-                    modifier = Modifier.testTag("link_phone_consent_checkbox")
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "I verify this is my mobile number and consent to link OTP sign-in to my existing GoLocal account (UID & history preserved).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-        }
-
         if (!state.infoMessage.isNullOrBlank() && state.errorMessage.isNullOrBlank()) {
             Surface(
                 color = GolocalLightBlue.copy(alpha = 0.65f),
@@ -290,7 +172,7 @@ fun PhoneAuthFormContent(
                     .testTag("send_otp_button"),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = GolocalPrimaryBlue,
+                    containerColor = buttonContainerColor,
                     contentColor = GolocalPureWhite
                 )
             ) {
@@ -307,7 +189,7 @@ fun PhoneAuthFormContent(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Send OTP", style = MaterialTheme.typography.labelLarge)
+                    Text(actionButtonLabel, style = MaterialTheme.typography.labelLarge)
                 }
             }
         } else {
@@ -391,7 +273,7 @@ fun PhoneAuthFormContent(
                     .testTag("verify_otp_button"),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = GolocalPrimaryBlue,
+                    containerColor = buttonContainerColor,
                     contentColor = GolocalPureWhite
                 )
             ) {
@@ -408,14 +290,7 @@ fun PhoneAuthFormContent(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) {
-                            "Verify & Link Number"
-                        } else {
-                            "Verify & Continue"
-                        },
-                        style = MaterialTheme.typography.labelLarge
-                    )
+                    Text("Verify OTP & Continue", style = MaterialTheme.typography.labelLarge)
                 }
             }
 
@@ -484,24 +359,14 @@ private fun OtpSixDigitIndicator(otp: String) {
 }
 
 @Composable
-fun LinkedPhoneAccountCard(
-    fallbackAccountPhone: String,
-    onPhoneLinked: (String) -> Unit
+fun VerifiedMobileBadgeCard(
+    fallbackAccountPhone: String
 ) {
     val context = LocalContext.current
     val currentUser = remember(fallbackAccountPhone) {
         if (FirebaseApp.getApps(context).isNotEmpty()) Firebase.auth.currentUser else null
     }
-    var verifiedLinkedPhone by remember(currentUser?.phoneNumber, fallbackAccountPhone) {
-        mutableStateOf(
-            currentUser?.phoneNumber?.takeIf { it.isNotBlank() } ?: ""
-        )
-    }
-    val hasPhoneProvider = currentUser?.providerData?.any {
-        it.providerId == PhoneAuthProvider.PROVIDER_ID
-    } == true || verifiedLinkedPhone.isNotBlank()
-
-    var showLinkDialog by remember { mutableStateOf(false) }
+    val verifiedPhone = currentUser?.phoneNumber?.takeIf { it.isNotBlank() } ?: fallbackAccountPhone
 
     Surface(
         shape = RoundedCornerShape(18.dp),
@@ -527,101 +392,42 @@ fun LinkedPhoneAccountCard(
                     Icon(
                         imageVector = Icons.Filled.VerifiedUser,
                         contentDescription = null,
-                        tint = if (hasPhoneProvider) GolocalSuccess else MaterialTheme.colorScheme.primary
+                        tint = GolocalSuccess
                     )
                     Text("Mobile OTP Authentication", style = MaterialTheme.typography.titleSmall)
                 }
                 GolocalStatusBadge(
-                    label = if (hasPhoneProvider) "VERIFIED" else "NOT LINKED",
-                    tone = if (hasPhoneProvider) "success" else "info"
+                    label = if (verifiedPhone.isNotBlank()) "VERIFIED" else "ACTIVE",
+                    tone = "success"
                 )
             }
 
-            if (hasPhoneProvider) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = GolocalSuccess,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "Verified OTP Login Number: ${verifiedLinkedPhone.ifBlank { fallbackAccountPhone }}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = JetBrainsMono,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-                Text(
-                    text = "You can sign out and sign back in anytime using this verified mobile number without creating duplicate accounts.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = GolocalSuccess,
+                    modifier = Modifier.size(18.dp)
                 )
-            } else {
                 Text(
-                    text = "Link an Indian (+91) or supported mobile number to your existing Google account using live OTP verification. Your profile, bookings, and UID remain unchanged.",
+                    text = if (verifiedPhone.isNotBlank()) {
+                        "Verified Login Number: $verifiedPhone"
+                    } else {
+                        "Authenticated via Firebase Mobile OTP"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontFamily = JetBrainsMono,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-                OutlinedButton(
-                    onClick = { showLinkDialog = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .testTag("open_link_phone_button")
-                ) {
-                    Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Link Mobile Number via OTP")
-                }
             }
-        }
-    }
-
-    if (showLinkDialog) {
-        val dialogScope = rememberCoroutineScope()
-        val controller = remember {
-            PhoneAuthController(
-                mode = PhoneAuthMode.LINK_EXISTING_ACCOUNT,
-                scope = dialogScope,
-                onSuccess = { linkedE164 ->
-                    verifiedLinkedPhone = linkedE164
-                    showLinkDialog = false
-                    onPhoneLinked(linkedE164)
-                }
+            Text(
+                text = "Your mobile number is verified and read-only. Re-logging in with this number always restores this same GoLocal account.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        DisposableEffect(controller) {
-            onDispose { controller.dispose() }
-        }
-        val state by controller.uiState.collectAsStateWithLifecycle()
-
-        AlertDialog(
-            onDismissRequest = {
-                if (!state.isBusy) showLinkDialog = false
-            },
-            title = { Text("Link Mobile Number") },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    PhoneAuthFormContent(
-                        mode = PhoneAuthMode.LINK_EXISTING_ACCOUNT,
-                        controller = controller,
-                        state = state
-                    )
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(
-                    onClick = { showLinkDialog = false },
-                    enabled = !state.isBusy
-                ) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 }

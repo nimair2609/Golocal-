@@ -16,10 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -73,6 +71,7 @@ fun AdminAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 currentUserId = user.uid,
                 displayName = user.displayName ?: "GoLocal Admin",
                 email = user.email ?: "",
+                phoneNumber = user.phoneNumber ?: "",
                 photoUrl = user.photoUrl?.toString() ?: ""
             )
         }
@@ -85,11 +84,11 @@ fun AdminAuthenticatedShell(
     currentUserId: String,
     displayName: String,
     email: String,
+    phoneNumber: String = "",
     photoUrl: String
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember { CredentialManager.create(context) }
+    val adminIdentity = phoneNumber.ifBlank { email }.ifBlank { currentUserId }
 
     val sessionViewModel: AppSessionViewModel = viewModel(
         key = "admin_session_$currentUserId",
@@ -152,12 +151,12 @@ fun AdminAuthenticatedShell(
                         Icon(Icons.Filled.GppBad, contentDescription = null, tint = GolocalError, modifier = Modifier.size(48.dp))
                         Text("Unauthorized Administrator Account", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            text = "Signed in as $email, which does not hold GoLocal Admin privileges. All Admin Portal routes are strictly restricted.",
+                            text = "Signed in as $adminIdentity, which does not hold GoLocal Admin privileges. All Admin Portal routes are strictly restricted.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
-                            onClick = { signOut(credentialManager, scope) },
+                            onClick = { signOut(scope) },
                             colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                             modifier = Modifier.fillMaxWidth().testTag("admin_unauthorized_signout")
                         ) {
@@ -206,14 +205,14 @@ fun AdminAuthenticatedShell(
 
             val sidebarContent: @Composable () -> Unit = {
                 AdminSidebar(
-                    email = email,
+                    identity = adminIdentity,
                     modules = modules,
                     selectedModule = selectedModule,
                     onSelect = {
                         selectedModule = it
                         scope.launch { drawerState.close() }
                     },
-                    onSignOut = { signOut(credentialManager, scope) }
+                    onSignOut = { signOut(scope) }
                 )
             }
 
@@ -290,7 +289,7 @@ fun AdminAuthenticatedShell(
 
 @Composable
 private fun AdminSidebar(
-    email: String,
+    identity: String,
     modules: List<Triple<String, String, ImageVector>>,
     selectedModule: String,
     onSelect: (String) -> Unit,
@@ -343,7 +342,7 @@ private fun AdminSidebar(
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(email, style = MaterialTheme.typography.labelSmall, color = GolocalLightBlue, maxLines = 1)
+            Text(identity, style = MaterialTheme.typography.labelSmall, color = GolocalLightBlue, maxLines = 1)
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = Color.White.copy(alpha = 0.1f),

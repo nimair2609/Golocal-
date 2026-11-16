@@ -5,20 +5,40 @@
       "description": "Core authenticated user record with role, language, and consent metadata",
       "type": "object",
       "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
         "userId": { "type": "string", "description": "Firebase Auth UID" },
         "fullName": { "type": "string" },
-        "email": { "type": "string" },
+        "email": { "type": "string", "description": "Invoice delivery email only" },
         "phone": { "type": "string" },
+        "mobileNumber": { "type": "string", "description": "Verified E.164 mobile number" },
         "photoUrl": { "type": "string" },
         "role": { "type": "string", "enum": ["customer", "driver", "admin"] },
         "preferredLanguage": { "type": "string", "enum": ["en", "bn", "hi"] },
         "lowNetworkMode": { "type": "boolean" },
         "privacyConsentAccepted": { "type": "boolean" },
+        "profileCompleted": { "type": "boolean" },
+        "emailVerified": { "type": "boolean" },
+        "mobileVerified": { "type": "boolean" },
+        "hasEmergencyContact": { "type": "boolean" },
         "accountStatus": { "type": "string", "enum": ["active", "restricted", "deletion_requested"] },
+        "accountCreatedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "fullName", "role", "preferredLanguage", "accountStatus", "createdAt", "updatedAt"]
+    },
+    "PrivateEmergencyContact": {
+      "title": "PrivateEmergencyContact",
+      "description": "Strictly private emergency contact accessible only to owner during setup/SOS and authorized emergency personnel",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "emergencyContactNumber": { "type": "string" },
+        "relationshipNote": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "emergencyContactNumber", "createdAt", "updatedAt"]
     },
     "CustomerProfile": {
       "title": "CustomerProfile",
@@ -175,6 +195,7 @@
         "isRoundTrip": { "type": "boolean" },
         "cancellationReason": { "type": "string" },
         "customerRating": { "type": "integer" },
+        "invoiceEmail": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -246,6 +267,7 @@
         "netDriverEarningsInr": { "type": "number" },
         "paymentMethod": { "type": "string", "enum": ["cash", "upi"] },
         "gatewayReference": { "type": "string" },
+        "invoiceEmail": { "type": "string" },
         "status": { "type": "string", "enum": ["settled_cash", "pending_verification", "paid", "refunded"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -423,7 +445,8 @@
   },
   "firestore": {
     "/users/{userId}": { "schema": { "$ref": "#/entities/UserAccount" }, "description": "User accounts" },
-    "/customer_profiles/{userId}": { "schema": { "$ref": "#/entities/CustomerProfile" }, "description": "Customer saved places and SOS contacts" },
+    "/emergency_contacts/{userId}": { "schema": { "$ref": "#/entities/PrivateEmergencyContact" }, "description": "Strictly private SOS emergency contacts" },
+    "/customer_profiles/{userId}": { "schema": { "$ref": "#/entities/CustomerProfile" }, "description": "Customer saved places" },
     "/driver_profiles/{driverId}": { "schema": { "$ref": "#/entities/DriverProfile" }, "description": "Private driver KYC and payout details" },
     "/driver_directory/{driverId}": { "schema": { "$ref": "#/entities/DriverDirectoryEntry" }, "description": "Public verified driver discovery cards" },
     "/service_areas/{areaId}": { "schema": { "$ref": "#/entities/ServiceArea" }, "description": "West Bengal service areas and pickup hubs" },

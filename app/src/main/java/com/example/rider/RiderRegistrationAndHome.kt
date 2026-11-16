@@ -23,7 +23,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
 import com.example.data.model.CommissionRecord
@@ -47,9 +46,7 @@ fun RiderRegistrationAndVerificationGate(
     driverViewModel: DriverViewModel,
     verifiedPhone: String = ""
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember { CredentialManager.create(context) }
 
     var showForm by remember(existingProfile?.verificationStatus) {
         mutableStateOf(existingProfile == null || existingProfile.verificationStatus == "rejected")
@@ -101,7 +98,7 @@ fun RiderRegistrationAndVerificationGate(
                     Text("GoLocal Rider", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            OutlinedButton(onClick = { signOut(credentialManager, scope) }) {
+            OutlinedButton(onClick = { signOut(scope) }) {
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Sign Out")

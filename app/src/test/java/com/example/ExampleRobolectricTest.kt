@@ -3,6 +3,7 @@ package com.example
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -46,7 +47,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `customer auth screen renders Customer branding with zero Admin or Rider entry points`() {
+    fun `customer auth screen renders Customer Mobile OTP login with zero Google or Admin entry points`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.CUSTOMER, onAuthSuccess = {})
@@ -56,13 +57,15 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithText("GoLocal").assertIsDisplayed()
         composeTestRule.onNodeWithText("Your Local. Our Priority.").assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("by NR Next").fetchSemanticsNodes().isEmpty())
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("phone_number_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("Admin Portal").fetchSemanticsNodes().isEmpty())
         assertTrue(composeTestRule.onAllNodesWithText("Rider Mode").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
-    fun `rider auth screen renders Rider branding without Admin or Customer options`() {
+    fun `rider auth screen renders Rider Mobile OTP login without Google or Admin options`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.RIDER, onAuthSuccess = {})
@@ -70,13 +73,13 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("GoLocal Rider").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Drive Local. Earn Transparently.").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("Admin Portal").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
-    fun `admin auth screen renders strict Authorized Administrators Only gate without registration`() {
+    fun `admin auth screen renders strict Admin Mobile OTP gate without Google or public signup`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.ADMIN, onAuthSuccess = {})
@@ -84,8 +87,9 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("GoLocal Admin Portal").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Authorized Administrators Only").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Admin Mobile OTP Sign-In").assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
     }
 
     @Test

@@ -9,6 +9,8 @@ import com.example.data.model.AppLanguage
 import com.example.data.model.AppNotification
 import com.example.data.model.AppRole
 import com.example.data.model.CustomerProfile
+import com.example.data.model.PrivateEmergencyContact
+import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
 import com.example.data.model.UserAccount
 import com.example.data.repository.ClientPreferences
@@ -16,6 +18,7 @@ import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.ui.auth.AuthDiagnostics
 import com.example.ui.auth.AuthStage
+import com.example.ui.auth.RegistrationValidator
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -59,6 +62,15 @@ class AppSessionViewModel(
 
     private val _isAccountReady = MutableStateFlow(false)
     val isAccountReady: StateFlow<Boolean> = _isAccountReady.asStateFlow()
+
+    private val _registrationStatus = MutableStateFlow<RegistrationStatus>(RegistrationStatus.Checking)
+    val registrationStatus: StateFlow<RegistrationStatus> = _registrationStatus.asStateFlow()
+
+    private val _isSubmittingRegistration = MutableStateFlow(false)
+    val isSubmittingRegistration: StateFlow<Boolean> = _isSubmittingRegistration.asStateFlow()
+
+    private val _registrationError = MutableStateFlow<String?>(null)
+    val registrationError: StateFlow<String?> = _registrationError.asStateFlow()
 
     private val _gpsLocation = MutableStateFlow(GpsLocationState())
     val gpsLocation: StateFlow<GpsLocationState> = _gpsLocation.asStateFlow()
@@ -112,6 +124,18 @@ class AppSessionViewModel(
             initialValue = null
         )
 
+    val privateEmergencyContactState: StateFlow<PrivateEmergencyContact?> =
+        repository.observeMyEmergencyContact(currentUserId)
+            .catch { error ->
+                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                Log.w(TAG, "Failed to observe private emergency contact", error)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = null
+            )
+
     val notificationsState: StateFlow<List<AppNotification>> = repository.observeMyNotifications(currentUserId)
         .map { list -> list.sortedByDescending { it.createdAt?.seconds ?: 0L } }
         .catch { error ->
@@ -129,6 +153,8 @@ class AppSessionViewModel(
     }
 
     fun retryAccountSync() {
+        _registrationStatus.value = RegistrationStatus.Checking
+        _statusMessage.value = null
         syncAccountAndRole()
     }
 
@@ -136,14 +162,28 @@ class AppSessionViewModel(
         viewModelScope.launch {
             try {
                 val synced = withTimeoutOrNull(ACCOUNT_SYNC_TIMEOUT_MS) {
-                    repository.ensureUserAccount(userDisplayName, userEmail, userPhotoUrl, userPhoneNumber)
-                        .onSuccess {
-                            _isAccountReady.value = true
-                            AuthDiagnostics.logStage(
-                                stage = AuthStage.AUTH_FLOW_COMPLETED,
-                                flow = "session_init",
-                                detail = "Account & session ready"
-                            )
+                    repository.checkRegistrationStatus(currentUserId, userPhoneNumber)
+                        .onSuccess { status ->
+                            _registrationStatus.value = status
+                            when (status) {
+                                is RegistrationStatus.Completed -> {
+                                    _isAccountReady.value = true
+                                    AuthDiagnostics.logStage(
+                                        stage = AuthStage.AUTH_FLOW_COMPLETED,
+                                        flow = "session_init",
+                                        detail = "Returning user profile & session ready"
+                                    )
+                                }
+                                is RegistrationStatus.PendingRegistration -> {
+                                    _isAccountReady.value = false
+                                    AuthDiagnostics.logStage(
+                                        stage = AuthStage.REGISTRATION_REQUIRED,
+                                        flow = "session_init",
+                                        detail = "New or incomplete user requires registration"
+                                    )
+                                }
+                                RegistrationStatus.Checking -> Unit
+                            }
                         }
                         .onFailure { err ->
                             val fe = err as? FirebaseFirestoreException
@@ -152,9 +192,9 @@ class AppSessionViewModel(
                                     "Account permission check failed. Please sign out and sign in again."
                                 FirebaseFirestoreException.Code.UNAVAILABLE,
                                 FirebaseFirestoreException.Code.DEADLINE_EXCEEDED ->
-                                    "Network issue syncing your GoLocal profile. Changes will sync when online."
+                                    "Network issue checking your GoLocal profile. Tap Retry when online."
                                 else ->
-                                    err.localizedMessage ?: "Unable to sync your GoLocal account right now."
+                                    err.localizedMessage ?: "Unable to verify your GoLocal account right now."
                             }
                         }
                     _isAdmin.value = repository.checkIsAdmin(currentUserId, userEmail)
@@ -167,7 +207,7 @@ class AppSessionViewModel(
                         exceptionType = "AccountSyncTimeout",
                         detail = "Timed out awaiting initial Firestore account & admin check"
                     )
-                    _statusMessage.value = "Account sync timed out. Please check your connection."
+                    _statusMessage.value = "Account sync timed out. Please check your connection and retry."
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -177,6 +217,46 @@ class AppSessionViewModel(
             } finally {
                 _isAdminChecked.value = true
             }
+        }
+    }
+
+    fun completeRegistration(
+        fullName: String,
+        invoiceEmail: String,
+        emergencyContactE164: String,
+        termsAccepted: Boolean
+    ) {
+        if (_isSubmittingRegistration.value) return
+        val currentStatus = _registrationStatus.value as? RegistrationStatus.PendingRegistration
+        val verifiedPhone = currentStatus?.verifiedMobileNumber?.ifBlank { userPhoneNumber } ?: userPhoneNumber
+
+        _isSubmittingRegistration.value = true
+        _registrationError.value = null
+        viewModelScope.launch {
+            repository.completeMobileRegistration(
+                fullName = fullName,
+                verifiedMobileNumber = verifiedPhone,
+                invoiceEmail = invoiceEmail,
+                emergencyContactNumber = emergencyContactE164,
+                privacyConsentAccepted = termsAccepted,
+                role = _selectedRole.value.wire,
+                preferredLanguage = clientPreferences.value.language.code
+            )
+                .onSuccess { account ->
+                    _registrationStatus.value = RegistrationStatus.Completed(account)
+                    _isAccountReady.value = true
+                    _isSubmittingRegistration.value = false
+                    AuthDiagnostics.logStage(
+                        stage = AuthStage.REGISTRATION_COMPLETED,
+                        flow = "mobile_registration",
+                        detail = "Completed profile registration for ${account.userId}"
+                    )
+                    _statusMessage.value = "Welcome to GoLocal, ${account.fullName}!"
+                }
+                .onFailure { err ->
+                    _isSubmittingRegistration.value = false
+                    _registrationError.value = err.localizedMessage ?: "Could not save registration details. Please retry."
+                }
         }
     }
 
@@ -195,7 +275,9 @@ class AppSessionViewModel(
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             prefsRepository.setLanguage(language)
-            repository.updateUserPreferences(language = language.code)
+            if (_isAccountReady.value) {
+                repository.updateUserPreferences(language = language.code)
+            }
         }
     }
 
@@ -208,23 +290,37 @@ class AppSessionViewModel(
     fun setLowNetworkMode(enabled: Boolean) {
         viewModelScope.launch {
             prefsRepository.setLowNetworkMode(enabled)
-            repository.updateUserPreferences(lowNetworkMode = enabled)
+            if (_isAccountReady.value) {
+                repository.updateUserPreferences(lowNetworkMode = enabled)
+            }
         }
     }
 
     fun updateAccountAndProfile(
         fullName: String,
-        phone: String,
+        invoiceEmail: String,
         homeAddress: String,
         workAddress: String,
         nativeVillage: String,
-        nativeDistrict: String,
-        emergencyName: String,
-        emergencyPhone: String
+        nativeDistrict: String
     ) {
+        val nameErr = RegistrationValidator.validateFullName(fullName)
+        if (nameErr != null) {
+            _statusMessage.value = nameErr
+            return
+        }
+        val emailErr = RegistrationValidator.validateInvoiceEmail(invoiceEmail)
+        if (emailErr != null) {
+            _statusMessage.value = emailErr
+            return
+        }
+
         viewModelScope.launch {
             val existingProfile = customerProfileState.value
-            val r1 = repository.updateUserPreferences(fullName = fullName, phone = phone)
+            val r1 = repository.updateUserPreferences(
+                fullName = fullName.trim(),
+                email = invoiceEmail.trim()
+            )
             val r2 = repository.saveCustomerProfile(
                 CustomerProfile(
                     userId = currentUserId,
@@ -232,28 +328,30 @@ class AppSessionViewModel(
                     workAddress = workAddress,
                     nativeVillage = nativeVillage,
                     nativeDistrict = nativeDistrict,
-                    emergencyContactName = emergencyName,
-                    emergencyContactPhone = emergencyPhone,
                     createdAt = existingProfile?.createdAt
                 )
             )
             _statusMessage.value = if (r1.isSuccess && r2.isSuccess) {
-                "Profile & emergency contacts saved."
+                "Profile & GST invoice email updated."
             } else {
-                r1.exceptionOrNull()?.localizedMessage ?: r2.exceptionOrNull()?.localizedMessage ?: "Failed to save profile"
+                r1.exceptionOrNull()?.localizedMessage
+                    ?: r2.exceptionOrNull()?.localizedMessage
+                    ?: "Failed to save profile"
             }
         }
     }
 
-    fun onPhoneNumberLinked(verifiedPhoneE164: String) {
+    fun updatePrivateEmergencyContact(
+        emergencyContactE164: String,
+        relationshipNote: String = "Primary Emergency Contact"
+    ) {
         viewModelScope.launch {
-            repository.syncVerifiedPhoneOnAccount(verifiedPhoneE164)
+            repository.updatePrivateEmergencyContact(emergencyContactE164, relationshipNote)
                 .onSuccess {
-                    _statusMessage.value = "Verified mobile number $verifiedPhoneE164 linked to your GoLocal account."
+                    _statusMessage.value = "Private emergency contact updated securely."
                 }
                 .onFailure { err ->
-                    _statusMessage.value = err.localizedMessage
-                        ?: "Mobile number linked for login, but profile sync will retry when online."
+                    _statusMessage.value = err.localizedMessage ?: "Failed to update private emergency contact."
                 }
         }
     }

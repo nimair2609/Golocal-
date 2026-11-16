@@ -2,7 +2,9 @@ package com.example.data.repository
 
 import com.example.base.FirestoreEmulatorTestBase
 import com.example.data.model.Booking
+import com.example.data.model.CustomerProfile
 import com.example.data.model.DriverProfile
+import com.example.data.model.RegistrationStatus
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -45,7 +47,8 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
                     estimatedFareInr = 65.0,
                     minPermittedFareInr = 55.0,
                     maxPermittedFareInr = 85.0,
-                    paymentMethod = "cash"
+                    paymentMethod = "cash",
+                    invoiceEmail = "alice@test.com"
                 )
             ).getOrThrow()
         }
@@ -54,7 +57,7 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
         val bookings = withTimeout(FLOW_TIMEOUT_MS) {
             repo.observeCustomerBookings(uid).first { list -> list.any { it.id == bookingId } }
         }
-        assertTrue(bookings.any { it.id == bookingId && it.status == "searching" })
+        assertTrue(bookings.any { it.id == bookingId && it.status == "searching" && it.invoiceEmail == "alice@test.com" })
     }
 
     @Test
@@ -78,7 +81,7 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
         }
 
         val reloaded = withTimeout(TIMEOUT_MS) {
-            repo.ensureUserAccount("Google Name Override", "returning@test.com", "").getOrThrow()
+            repo.ensureUserAccount("Fallback Name", "returning@test.com", "").getOrThrow()
         }
         assertEquals("Custom Preferred Name", reloaded.fullName)
         assertEquals("bn", reloaded.preferredLanguage)
@@ -90,7 +93,7 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
-    fun ensureUserAccount_oversizedGoogleProfileFieldsAreSafelyTruncatedToPassRules() = runBlocking {
+    fun ensureUserAccount_oversizedProfileFieldsAreSafelyTruncatedToPassRules() = runBlocking {
         val uid = signInTestUser("longfields_${UUID.randomUUID()}@test.com")
         val repo = GolocalRepository(firestore, auth)
 
@@ -210,62 +213,84 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
     }
 
     @Test
-    fun ensureUserAccount_phoneAuthUserAndLinkingBackfill_respectsRulesAndPreservesAccount() = runBlocking {
-        // 1. Phone-authenticated user (blank email, E.164 phone) creates valid account & profile
-        val phoneUid = signInTestUser("phone_only_${UUID.randomUUID()}@test.com")
+    fun mobileOtpRegistration_createsIsolatedPrivateEmergencyContact_andReturnsCompletedOnReLogin() = runBlocking {
+        val userUid = signInTestUser("mobile_reg_${UUID.randomUUID()}@test.com")
         val repo = GolocalRepository(firestore, auth)
-        val created = withTimeout(TIMEOUT_MS) {
-            repo.ensureUserAccount(
-                fullName = "GoLocal Passenger",
-                email = "",
-                photoUrl = "",
-                phoneNumber = "+919876543210"
+
+        // 1. Fresh user must be gated to PendingRegistration
+        val initialStatus = withTimeout(TIMEOUT_MS) {
+            repo.checkRegistrationStatus(uid = userUid, verifiedPhoneNumber = "+919876543210").getOrThrow()
+        }
+        assertTrue(initialStatus is RegistrationStatus.PendingRegistration)
+        assertEquals("+919876543210", (initialStatus as RegistrationStatus.PendingRegistration).verifiedMobileNumber)
+
+        // 2. Complete registration atomically
+        val completed = withTimeout(TIMEOUT_MS) {
+            repo.completeMobileRegistration(
+                fullName = "Anirban Sen",
+                verifiedMobileNumber = "+919876543210",
+                invoiceEmail = "anirban.invoices@example.com",
+                emergencyContactNumber = "+919830011223",
+                privacyConsentAccepted = true,
+                role = "customer"
             ).getOrThrow()
         }
-        assertEquals(phoneUid, created.userId)
-        assertEquals("+919876543210", created.phone)
+        assertEquals(userUid, completed.uid)
+        assertEquals("+919876543210", completed.mobileNumber)
+        assertEquals("anirban.invoices@example.com", completed.email)
+        assertTrue(completed.profileCompleted)
+        assertTrue(completed.mobileVerified)
+        assertTrue(completed.hasEmergencyContact)
 
-        // Returning login preserves customized name & role
+        // 3. Returning user enters directly without recreating account
+        val returningStatus = withTimeout(TIMEOUT_MS) {
+            repo.checkRegistrationStatus(uid = userUid, verifiedPhoneNumber = "+919876543210").getOrThrow()
+        }
+        assertTrue(returningStatus is RegistrationStatus.Completed)
+        assertEquals("Anirban Sen", (returningStatus as RegistrationStatus.Completed).account.fullName)
+
+        // 4. Customer profile must NOT store raw emergency phone number
+        val customerProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            repo.observeCustomerProfile(userUid).first { it != null }
+        }
+        assertEquals("", customerProfile?.emergencyContactPhone ?: "")
+
+        // Saving profile details keeps emergencyContactPhone sanitized blank
         withTimeout(TIMEOUT_MS) {
-            repo.updateUserPreferences(fullName = "Verified Mobile Rider").getOrThrow()
-        }
-        val returning = withTimeout(TIMEOUT_MS) {
-            repo.ensureUserAccount(
-                fullName = "GoLocal Passenger",
-                email = "",
-                photoUrl = "",
-                phoneNumber = "+919876543210"
+            repo.saveCustomerProfile(
+                CustomerProfile(
+                    userId = userUid,
+                    homeAddress = "Bandel Bazar",
+                    workAddress = "Chinsurah",
+                    emergencyContactName = "Legacy Should Strip",
+                    emergencyContactPhone = "+919999999999"
+                )
             ).getOrThrow()
         }
-        assertEquals("Verified Mobile Rider", returning.fullName)
-        assertEquals("+919876543210", returning.phone)
+        val reloadedProfile = withTimeout(FLOW_TIMEOUT_MS) {
+            repo.observeCustomerProfile(userUid).first { it?.homeAddress == "Bandel Bazar" }
+        }
+        assertEquals("", reloadedProfile?.emergencyContactPhone ?: "")
 
-        // 2. Google-only user who later links a mobile number gets phone backfilled cleanly on same UID
-        val googleUid = signInTestUser("google_link_${UUID.randomUUID()}@test.com")
-        val googleRepo = GolocalRepository(firestore, auth)
-        val initialGoogle = withTimeout(TIMEOUT_MS) {
-            googleRepo.ensureUserAccount(
-                fullName = "Google User",
-                email = "google_user@test.com",
-                photoUrl = "",
-                phoneNumber = ""
-            ).getOrThrow()
+        // 5. Private emergency contact IS stored in isolated emergency_contacts/{uid} and readable by owner
+        val ownEmergency = withTimeout(FLOW_TIMEOUT_MS) {
+            repo.observeMyEmergencyContact(userUid).first { it != null }
         }
-        assertEquals("", initialGoogle.phone)
+        assertEquals("+919830011223", ownEmergency?.emergencyContactNumber)
 
-        withTimeout(TIMEOUT_MS) {
-            googleRepo.syncVerifiedPhoneOnAccount("+919811112222").getOrThrow()
+        // 6. Another user CANNOT read owner's private emergency contact
+        signInTestUser("intruder_${UUID.randomUUID()}@test.com")
+        var denied = false
+        try {
+            withTimeout(TIMEOUT_MS) {
+                firestore.collection("emergency_contacts").document(userUid).get().await()
+            }
+        } catch (e: Exception) {
+            if (e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                denied = true
+            }
         }
-        val afterLink = withTimeout(TIMEOUT_MS) {
-            googleRepo.ensureUserAccount(
-                fullName = "Google User",
-                email = "google_user@test.com",
-                photoUrl = "",
-                phoneNumber = "+919811112222"
-            ).getOrThrow()
-        }
-        assertEquals(googleUid, afterLink.userId)
-        assertEquals("+919811112222", afterLink.phone)
+        assertTrue("Other users must receive PERMISSION_DENIED reading emergency_contacts/{uid}", denied)
     }
 
     private companion object {

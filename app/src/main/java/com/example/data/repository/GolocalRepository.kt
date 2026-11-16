@@ -111,15 +111,17 @@ class GolocalRepository(
                 detail = "Existing user record preserved"
             )
             var existingAccount = existing.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-            if (safePhone.isNotBlank() && existingAccount != null && existingAccount.phone.isBlank()) {
+            if (safePhone.isNotBlank() && existingAccount != null && existingAccount.effectiveMobileNumber().isBlank()) {
                 try {
                     userRef.update(
                         mapOf(
                             "phone" to safePhone,
+                            "mobileNumber" to safePhone,
+                            "mobileVerified" to true,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     ).await()
-                    existingAccount = existingAccount.copy(phone = safePhone)
+                    existingAccount = existingAccount.copy(phone = safePhone, mobileNumber = safePhone, mobileVerified = true)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -164,24 +166,33 @@ class GolocalRepository(
             existingAccount
                 ?: UserAccount(
                     id = uid,
+                    uid = uid,
                     userId = uid,
                     fullName = safeFullName,
                     email = safeEmail,
                     phone = safePhone,
-                    photoUrl = safePhotoUrl
+                    mobileNumber = safePhone,
+                    photoUrl = safePhotoUrl,
+                    mobileVerified = safePhone.isNotBlank()
                 )
         } else {
             val newAccount = UserAccount(
                 id = uid,
+                uid = uid,
                 userId = uid,
                 fullName = safeFullName,
                 email = safeEmail,
                 phone = safePhone,
+                mobileNumber = safePhone,
                 photoUrl = safePhotoUrl,
                 role = "customer",
                 preferredLanguage = "en",
                 lowNetworkMode = false,
                 privacyConsentAccepted = true,
+                profileCompleted = safeFullName != "GoLocal User" && safeEmail.isNotBlank(),
+                emailVerified = false,
+                mobileVerified = safePhone.isNotBlank(),
+                hasEmergencyContact = false,
                 accountStatus = "active"
             )
             try {
@@ -223,12 +234,363 @@ class GolocalRepository(
         }
     }
 
+    suspend fun checkRegistrationStatus(
+        uid: String,
+        verifiedPhoneNumber: String
+    ): Result<RegistrationStatus> = runCatching {
+        val currentUid = requireUserId()
+        require(currentUid == uid) { "Session UID mismatch while checking registration." }
+        val userRef = db.collection("users").document(uid)
+        val emergencyRef = db.collection("emergency_contacts").document(uid)
+
+        AuthDiagnostics.logStage(
+            stage = AuthStage.FIRESTORE_ACCOUNT_CHECK,
+            flow = "registration_check",
+            detail = "Inspecting users/$uid completion status"
+        )
+
+        val userSnap = try {
+            userRef.get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, userRef.path, auth)
+            throw e
+        }
+
+        val resolvedPhone = verifiedPhoneNumber.trim()
+            .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
+            .take(25)
+
+        if (!userSnap.exists()) {
+            return@runCatching RegistrationStatus.PendingRegistration(
+                verifiedMobileNumber = resolvedPhone,
+                existingAccount = null
+            )
+        }
+
+        val account = userSnap.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            ?: return@runCatching RegistrationStatus.PendingRegistration(
+                verifiedMobileNumber = resolvedPhone,
+                existingAccount = null
+            )
+
+        val emergencyExists = try {
+            emergencyRef.get().await().exists()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+
+        val effectivePhone = resolvedPhone.ifBlank { account.effectiveMobileNumber() }
+        val isComplete = (account.profileCompleted ||
+            (account.fullName.isNotBlank() && account.fullName != "GoLocal User" && account.email.isNotBlank() && account.privacyConsentAccepted)) &&
+            account.fullName.isNotBlank() &&
+            account.email.isNotBlank() &&
+            account.privacyConsentAccepted &&
+            (account.hasEmergencyContact || emergencyExists)
+
+        if (isComplete) {
+            // Backfill mobileVerified / phone if missing on returning account without creating a duplicate
+            if (resolvedPhone.isNotBlank() && (account.effectiveMobileNumber().isBlank() || !account.mobileVerified)) {
+                try {
+                    userRef.update(
+                        mapOf(
+                            "uid" to uid,
+                            "phone" to resolvedPhone,
+                            "mobileNumber" to resolvedPhone,
+                            "mobileVerified" to true,
+                            "profileCompleted" to true,
+                            "hasEmergencyContact" to (account.hasEmergencyContact || emergencyExists),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Soft backfill
+                }
+            }
+            AuthDiagnostics.logStage(
+                stage = AuthStage.FIRESTORE_ACCOUNT_EXISTS,
+                flow = "registration_check",
+                detail = "Returning completed user profile verified"
+            )
+            RegistrationStatus.Completed(
+                account.copy(
+                    uid = account.uid.ifBlank { uid },
+                    mobileNumber = effectivePhone,
+                    phone = effectivePhone,
+                    mobileVerified = true,
+                    profileCompleted = true,
+                    hasEmergencyContact = account.hasEmergencyContact || emergencyExists
+                )
+            )
+        } else {
+            RegistrationStatus.PendingRegistration(
+                verifiedMobileNumber = effectivePhone,
+                existingAccount = account
+            )
+        }
+    }
+
+    suspend fun completeMobileRegistration(
+        fullName: String,
+        verifiedMobileNumber: String,
+        invoiceEmail: String,
+        emergencyContactNumber: String,
+        privacyConsentAccepted: Boolean,
+        role: String = "customer",
+        preferredLanguage: String = "en"
+    ): Result<UserAccount> = runCatching {
+        val uid = requireUserId()
+        val safeName = fullName.trim().take(100)
+        val safePhone = verifiedMobileNumber.trim()
+            .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
+            .take(25)
+        val safeEmail = invoiceEmail.trim().take(150)
+        val safeEmergency = emergencyContactNumber.trim().take(25)
+
+        require(safeName.length >= 2) { "Full name is required." }
+        require(safePhone.isNotBlank()) { "Verified mobile number is missing. Please verify OTP again." }
+        require(safeEmail.isNotBlank() && safeEmail.contains("@")) { "A valid email address is required for GST invoice delivery." }
+        require(safeEmergency.length >= 8) { "A valid emergency contact number is required." }
+        require(safeEmergency != safePhone) { "Emergency contact number must be different from your own mobile number." }
+        require(privacyConsentAccepted) { "Please accept Terms and Privacy Policy to continue." }
+
+        val userRef = db.collection("users").document(uid)
+        val custRef = db.collection("customer_profiles").document(uid)
+        val emergencyRef = db.collection("emergency_contacts").document(uid)
+
+        val existingUserSnap = userRef.get().await()
+        val existingCustSnap = custRef.get().await()
+        val existingEmergencySnap = emergencyRef.get().await()
+
+        val existingAccount = if (existingUserSnap.exists()) {
+            existingUserSnap.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+
+        val resolvedRole = existingAccount?.role?.takeIf { it.isNotBlank() } ?: role
+        val resolvedLang = existingAccount?.preferredLanguage?.takeIf { it.isNotBlank() } ?: preferredLanguage
+
+        val finalAccount = UserAccount(
+            id = uid,
+            uid = uid,
+            userId = uid,
+            fullName = safeName,
+            email = safeEmail,
+            phone = safePhone,
+            mobileNumber = safePhone,
+            photoUrl = existingAccount?.photoUrl ?: "",
+            role = resolvedRole,
+            preferredLanguage = resolvedLang,
+            lowNetworkMode = existingAccount?.lowNetworkMode ?: false,
+            privacyConsentAccepted = true,
+            profileCompleted = true,
+            emailVerified = false,
+            mobileVerified = true,
+            hasEmergencyContact = true,
+            accountStatus = existingAccount?.accountStatus ?: "active",
+            accountCreatedAt = existingAccount?.accountCreatedAt,
+            createdAt = existingAccount?.createdAt
+        )
+
+        try {
+            db.runBatch { batch ->
+                if (!existingUserSnap.exists()) {
+                    batch.set(userRef, finalAccount.toCreateMap())
+                } else {
+                    batch.update(
+                        userRef,
+                        mapOf(
+                            "uid" to uid,
+                            "fullName" to safeName,
+                            "email" to safeEmail,
+                            "phone" to safePhone,
+                            "mobileNumber" to safePhone,
+                            "privacyConsentAccepted" to true,
+                            "profileCompleted" to true,
+                            "emailVerified" to false,
+                            "mobileVerified" to true,
+                            "hasEmergencyContact" to true,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+
+                if (!existingCustSnap.exists()) {
+                    batch.set(
+                        custRef,
+                        mapOf(
+                            "userId" to uid,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+
+                if (!existingEmergencySnap.exists()) {
+                    batch.set(
+                        emergencyRef,
+                        mapOf(
+                            "userId" to uid,
+                            "emergencyContactNumber" to safeEmergency,
+                            "relationshipNote" to "Primary Emergency Contact",
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } else {
+                    batch.update(
+                        emergencyRef,
+                        mapOf(
+                            "emergencyContactNumber" to safeEmergency,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+            }.await()
+
+            AuthDiagnostics.logStage(
+                stage = AuthStage.FIRESTORE_ACCOUNT_CREATED,
+                flow = "mobile_registration",
+                detail = if (existingUserSnap.exists()) "Completed existing user profile" else "Registered new mobile OTP account"
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, userRef.path, auth)
+            throw e
+        }
+
+        finalAccount
+    }
+
     suspend fun syncVerifiedPhoneOnAccount(verifiedPhone: String): Result<Unit> {
         val safePhone = verifiedPhone.trim().take(25)
         if (safePhone.isBlank()) {
             return Result.failure(IllegalArgumentException("Verified phone number cannot be blank."))
         }
-        return updateUserPreferences(phone = safePhone)
+        return runCatching {
+            val uid = requireUserId()
+            val ref = db.collection("users").document(uid)
+            ref.update(
+                mapOf(
+                    "phone" to safePhone,
+                    "mobileNumber" to safePhone,
+                    "mobileVerified" to true,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        }
+    }
+
+    suspend fun updateInvoiceEmail(invoiceEmail: String): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val safeEmail = invoiceEmail.trim().take(150)
+        require(safeEmail.isNotBlank() && safeEmail.contains("@")) {
+            "Enter a valid email address for GST invoice delivery."
+        }
+        val ref = db.collection("users").document(uid)
+        try {
+            ref.update(
+                mapOf(
+                    "email" to safeEmail,
+                    "emailVerified" to false,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            throw e
+        }
+    }
+
+    fun observeMyEmergencyContact(uid: String): Flow<PrivateEmergencyContact?> =
+        db.collection("emergency_contacts").document(uid).snapshots()
+            .map { it.toObject(PrivateEmergencyContact::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
+            .catch { error ->
+                val fe = error.unwrapFirestoreError()
+                if (fe is CancellationException) throw fe
+                if (auth.currentUser?.uid == uid) {
+                    handleFirestoreError(fe, OperationType.GET, "emergency_contacts/$uid", auth)
+                }
+                emit(null)
+            }
+
+    suspend fun updatePrivateEmergencyContact(
+        emergencyContactNumber: String,
+        relationshipNote: String = "Primary Emergency Contact"
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val safeEmergency = emergencyContactNumber.trim().take(25)
+        val ownPhone = auth.currentUser?.phoneNumber?.trim().orEmpty()
+        require(safeEmergency.length >= 8) { "Enter a valid emergency contact number." }
+        if (ownPhone.isNotBlank()) {
+            require(safeEmergency != ownPhone) {
+                "Emergency contact number must be different from your own mobile number."
+            }
+        }
+        val emergencyRef = db.collection("emergency_contacts").document(uid)
+        val userRef = db.collection("users").document(uid)
+        val existingSnap = emergencyRef.get().await()
+        val safeNote = relationshipNote.trim().ifBlank { "Primary Emergency Contact" }.take(80)
+        try {
+            db.runBatch { batch ->
+                if (!existingSnap.exists()) {
+                    batch.set(
+                        emergencyRef,
+                        mapOf(
+                            "userId" to uid,
+                            "emergencyContactNumber" to safeEmergency,
+                            "relationshipNote" to safeNote,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } else {
+                    batch.update(
+                        emergencyRef,
+                        mapOf(
+                            "emergencyContactNumber" to safeEmergency,
+                            "relationshipNote" to safeNote,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.update(
+                    userRef,
+                    mapOf(
+                        "hasEmergencyContact" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, emergencyRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun fetchEmergencyContactForAuthorizedResponder(targetUserId: String): Result<PrivateEmergencyContact?> = runCatching {
+        requireUserId()
+        val ref = db.collection("emergency_contacts").document(targetUserId)
+        try {
+            val snap = ref.get().await()
+            snap.toObject(PrivateEmergencyContact::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, ref.path, auth)
+            throw e
+        }
     }
 
     fun observeUserAccount(uid: String): Flow<UserAccount?> =
@@ -258,6 +620,7 @@ class GolocalRepository(
     suspend fun updateUserPreferences(
         fullName: String? = null,
         phone: String? = null,
+        email: String? = null,
         language: String? = null,
         lowNetworkMode: Boolean? = null,
         privacyConsentAccepted: Boolean? = null
@@ -265,8 +628,16 @@ class GolocalRepository(
         val uid = requireUserId()
         val ref = db.collection("users").document(uid)
         val updates = buildMap<String, Any> {
-            if (!fullName.isNullOrBlank()) put("fullName", fullName.trim())
-            if (phone != null && phone.isNotBlank()) put("phone", phone.trim())
+            if (!fullName.isNullOrBlank()) put("fullName", fullName.trim().take(100))
+            if (phone != null && phone.isNotBlank()) {
+                val safePhone = phone.trim().take(25)
+                put("phone", safePhone)
+                put("mobileNumber", safePhone)
+            }
+            if (!email.isNullOrBlank()) {
+                put("email", email.trim().take(150))
+                put("emailVerified", false)
+            }
             if (!language.isNullOrBlank()) put("preferredLanguage", language)
             if (lowNetworkMode != null) put("lowNetworkMode", lowNetworkMode)
             if (privacyConsentAccepted != null) put("privacyConsentAccepted", privacyConsentAccepted)
@@ -291,8 +662,6 @@ class GolocalRepository(
             if (profile.workAddress.isNotBlank()) put("workAddress", profile.workAddress.trim())
             if (profile.nativeVillage.isNotBlank()) put("nativeVillage", profile.nativeVillage.trim())
             if (profile.nativeDistrict.isNotBlank()) put("nativeDistrict", profile.nativeDistrict.trim())
-            if (profile.emergencyContactName.isNotBlank()) put("emergencyContactName", profile.emergencyContactName.trim())
-            if (profile.emergencyContactPhone.isNotBlank()) put("emergencyContactPhone", profile.emergencyContactPhone.trim())
             if (profile.createdAt == null) put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -393,6 +762,7 @@ class GolocalRepository(
             if (booking.familyMemberName.isNotBlank()) put("familyMemberName", booking.familyMemberName)
             put("familyConsentConfirmed", booking.familyConsentConfirmed)
             put("isRoundTrip", booking.isRoundTrip)
+            if (booking.invoiceEmail.isNotBlank()) put("invoiceEmail", booking.invoiceEmail.trim().take(150))
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -614,6 +984,7 @@ class GolocalRepository(
             if (bookingId.isNotBlank()) put("bookingId", bookingId)
             put("lat", lat)
             put("lng", lng)
+            put("emergencyContactRef", "emergency_contacts/$uid")
             put("notes", notes.ifBlank { "Emergency SOS triggered from GOLOCAL app" })
             put("status", "active")
             put("createdAt", FieldValue.serverTimestamp())
@@ -868,6 +1239,8 @@ class GolocalRepository(
                         throw IllegalStateException("Settlement already recorded for this booking.")
                     }
 
+                    val resolvedInvoiceEmail = (snap.getString("invoiceEmail") ?: booking.invoiceEmail).trim().take(150)
+
                     tx.update(
                         bookingRef,
                         mapOf(
@@ -885,20 +1258,21 @@ class GolocalRepository(
                     )
                     tx.set(
                         paymentRef,
-                        mapOf(
-                            "bookingId" to booking.id,
-                            "customerId" to booking.customerId,
-                            "driverId" to uid,
-                            "grossFareInr" to settlement.grossFareInr,
-                            "gstInr" to settlement.gstInr,
-                            "platformCommissionInr" to settlement.platformCommissionInr,
-                            "netDriverEarningsInr" to settlement.netDriverEarningsInr,
-                            "paymentMethod" to booking.paymentMethod,
-                            "gatewayReference" to if (booking.paymentMethod == "cash") "CASH_COLLECTED" else "AWAITING_WEBHOOK",
-                            "status" to finalPayStatus,
-                            "createdAt" to FieldValue.serverTimestamp(),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
+                        buildMap<String, Any> {
+                            put("bookingId", booking.id)
+                            put("customerId", booking.customerId)
+                            put("driverId", uid)
+                            put("grossFareInr", settlement.grossFareInr)
+                            put("gstInr", settlement.gstInr)
+                            put("platformCommissionInr", settlement.platformCommissionInr)
+                            put("netDriverEarningsInr", settlement.netDriverEarningsInr)
+                            put("paymentMethod", booking.paymentMethod)
+                            if (resolvedInvoiceEmail.isNotBlank()) put("invoiceEmail", resolvedInvoiceEmail)
+                            put("gatewayReference", if (booking.paymentMethod == "cash") "CASH_COLLECTED" else "AWAITING_WEBHOOK")
+                            put("status", finalPayStatus)
+                            put("createdAt", FieldValue.serverTimestamp())
+                            put("updatedAt", FieldValue.serverTimestamp())
+                        }
                     )
                     tx.set(
                         commissionRef,

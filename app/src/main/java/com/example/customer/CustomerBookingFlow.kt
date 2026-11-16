@@ -50,8 +50,10 @@ fun CustomerBookRideScreen(
     val activeOffers by customerViewModel.activeOffers.collectAsStateWithLifecycle()
     val activeTripLocation by customerViewModel.activeTripLocation.collectAsStateWithLifecycle()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
+    val accountState by sessionViewModel.userAccountState.collectAsStateWithLifecycle()
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
     val isSubmitting by customerViewModel.isSubmitting.collectAsStateWithLifecycle()
+    val customerInvoiceEmail = (accountState as? com.example.data.model.UiState.Success)?.data?.email.orEmpty()
 
     var showPickupPicker by remember { mutableStateOf(false) }
     var showDestPicker by remember { mutableStateOf(false) }
@@ -379,7 +381,7 @@ fun CustomerBookRideScreen(
                     }
 
                     Button(
-                        onClick = { customerViewModel.submitBooking() },
+                        onClick = { customerViewModel.submitBooking(invoiceEmail = customerInvoiceEmail) },
                         enabled = !isSubmitting,
                         modifier = Modifier
                             .fillMaxWidth()

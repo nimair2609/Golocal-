@@ -91,25 +91,52 @@ class PhoneAuthUnitTest {
         assertTrue(valid is PhoneValidationResult.Valid)
         assertEquals("+919876543210", (valid as PhoneValidationResult.Valid).e164Phone)
 
-        // Handles pasted +91 prefix or leading 0 cleanly
         val pastedPrefix = PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "+91 98765-43210")
         assertEquals("+919876543210", (pastedPrefix as PhoneValidationResult.Valid).e164Phone)
 
         val leadingZero = PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "09123456789")
         assertEquals("+919123456789", (leadingZero as PhoneValidationResult.Valid).e164Phone)
 
-        // Rejects invalid lengths & invalid leading digits (must start with 6-9)
         assertTrue(PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "") is PhoneValidationResult.Invalid)
         assertTrue(PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "98765") is PhoneValidationResult.Invalid)
         assertTrue(PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "987654321012") is PhoneValidationResult.Invalid)
         assertTrue(PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "5123456789") is PhoneValidationResult.Invalid)
         assertTrue(PhoneNumberValidator.validateAndFormat(SupportedCountryCodes.INDIA, "98765abc10") is PhoneValidationResult.Invalid)
 
-        // International code validation
         val usOption = SupportedCountryCodes.all.first { it.dialCode == "+1" }
         val usValid = PhoneNumberValidator.validateAndFormat(usOption, "6505550101")
         assertEquals("+16505550101", (usValid as PhoneValidationResult.Valid).e164Phone)
         assertTrue(PhoneNumberValidator.validateAndFormat(usOption, "12345") is PhoneValidationResult.Invalid)
+    }
+
+    @Test
+    fun `RegistrationValidator enforces full name invoice email and distinct emergency contact`() {
+        assertNotNull(RegistrationValidator.validateFullName(""))
+        assertNotNull(RegistrationValidator.validateFullName("A"))
+        assertNotNull(RegistrationValidator.validateFullName("1234"))
+        assertNull(RegistrationValidator.validateFullName("Rohan Chakraborty"))
+
+        assertNotNull(RegistrationValidator.validateInvoiceEmail(""))
+        assertNotNull(RegistrationValidator.validateInvoiceEmail("not-an-email"))
+        assertNotNull(RegistrationValidator.validateInvoiceEmail("rohan@invalid"))
+        assertNull(RegistrationValidator.validateInvoiceEmail("rohan.invoices@example.com"))
+
+        // Emergency contact must not equal user's own verified mobile number
+        val sameNumberResult = RegistrationValidator.validateEmergencyContact(
+            country = SupportedCountryCodes.INDIA,
+            rawEmergency = "9876543210",
+            ownVerifiedMobileE164 = "+919876543210"
+        )
+        assertTrue(sameNumberResult is PhoneValidationResult.Invalid)
+        assertTrue((sameNumberResult as PhoneValidationResult.Invalid).message.contains("different"))
+
+        // Distinct valid number succeeds
+        val distinctResult = RegistrationValidator.validateEmergencyContact(
+            country = SupportedCountryCodes.INDIA,
+            rawEmergency = "9830011223",
+            ownVerifiedMobileE164 = "+919876543210"
+        )
+        assertEquals("+919830011223", (distinctResult as PhoneValidationResult.Valid).e164Phone)
     }
 
     @Test
@@ -126,22 +153,18 @@ class PhoneAuthUnitTest {
         var now = 1_000_000L
         val limiter = OtpRateLimiter(clockMillis = { now }, maxRequestsPerWindow = 5, windowMillis = 15 * 60_000L)
 
-        // Request 1 allowed
         val d1 = limiter.canRequestOtp() as OtpRateLimitDecision.Allowed
         assertEquals(60, d1.nextCooldownSeconds)
         limiter.recordOtpDispatched(d1.nextCooldownSeconds)
 
-        // Immediate resend blocked
         val blocked = limiter.canRequestOtp()
         assertTrue(blocked is OtpRateLimitDecision.Blocked)
         assertTrue((blocked as OtpRateLimitDecision.Blocked).remainingSeconds in 59..60)
 
-        // After 61s, request 2 allowed
         now += 61_000L
         val d2 = limiter.canRequestOtp() as OtpRateLimitDecision.Allowed
         limiter.recordOtpDispatched(d2.nextCooldownSeconds)
 
-        // Dispatch 3 more spaced past cooldowns
         now += 61_000L
         val d3 = limiter.canRequestOtp() as OtpRateLimitDecision.Allowed
         assertEquals(90, d3.nextCooldownSeconds)
@@ -156,7 +179,6 @@ class PhoneAuthUnitTest {
         val d5 = limiter.canRequestOtp() as OtpRateLimitDecision.Allowed
         limiter.recordOtpDispatched(d5.nextCooldownSeconds)
 
-        // 6th request within 15 min window must still be blocked even after cooldown or changing number
         now += 125_000L
         limiter.resetCooldownForNumberChange()
         val windowBlocked = limiter.canRequestOtp()
@@ -184,12 +206,7 @@ class PhoneAuthUnitTest {
         val (_, _, collision) = classifyPhoneAuthFailure(
             FirebaseAuthUserCollisionException("ERROR_CREDENTIAL_ALREADY_IN_USE", "In use")
         )
-        assertTrue(collision.contains("already linked to another GoLocal account"))
-
-        val (_, _, alreadyLinked) = classifyPhoneAuthFailure(
-            FirebaseAuthException("ERROR_PROVIDER_ALREADY_LINKED", "Already linked")
-        )
-        assertTrue(alreadyLinked.contains("already linked to this GoLocal account"))
+        assertTrue(collision.contains("sign in directly with this mobile number"))
 
         val (_, _, notEnabled) = classifyPhoneAuthFailure(
             FirebaseAuthException("ERROR_OPERATION_NOT_ALLOWED", "Disabled")
@@ -232,7 +249,6 @@ class PhoneAuthUnitTest {
 
         val fakeGateway = object : FirebasePhoneAuthGateway {
             override fun isFirebaseInitialized(context: Context): Boolean = true
-            override fun hasCurrentUser(): Boolean = false
             override fun verifyPhoneNumber(
                 activity: Activity,
                 e164Phone: String,
@@ -250,12 +266,9 @@ class PhoneAuthUnitTest {
                 signInErrorToThrow?.let { throw it }
                 return "+919876543210"
             }
-
-            override suspend fun linkWithCredential(credential: PhoneAuthCredential): String? = null
         }
 
         val controller = PhoneAuthController(
-            mode = PhoneAuthMode.SIGN_IN,
             scope = testScope,
             gateway = fakeGateway,
             rateLimiter = OtpRateLimiter(clockMillis = { 10_000L }),
@@ -309,83 +322,11 @@ class PhoneAuthUnitTest {
     }
 
     @Test
-    fun `phone linking requires explicit consent and handles duplicate phone collision safely`() = runBlocking {
-        var capturedCallbacks: PhoneAuthProvider.OnVerificationStateChangedCallbacks? = null
-        val linkCalls = AtomicInteger(0)
-        var linkedSuccess: String? = null
-        var shouldCollide = true
-
-        val fakeGateway = object : FirebasePhoneAuthGateway {
-            override fun isFirebaseInitialized(context: Context): Boolean = true
-            override fun hasCurrentUser(): Boolean = true
-            override fun verifyPhoneNumber(
-                activity: Activity,
-                e164Phone: String,
-                resendToken: PhoneAuthProvider.ForceResendingToken?,
-                callbacks: PhoneAuthProvider.OnVerificationStateChangedCallbacks
-            ) {
-                capturedCallbacks = callbacks
-            }
-
-            override fun createCredential(verificationId: String, smsCode: String): PhoneAuthCredential =
-                PhoneAuthProvider.getCredential(verificationId, smsCode)
-
-            override suspend fun signInWithCredential(credential: PhoneAuthCredential): String? = null
-
-            override suspend fun linkWithCredential(credential: PhoneAuthCredential): String? {
-                linkCalls.incrementAndGet()
-                if (shouldCollide) {
-                    throw FirebaseAuthUserCollisionException(
-                        "ERROR_CREDENTIAL_ALREADY_IN_USE",
-                        "Phone number belongs to another account"
-                    )
-                }
-                return "+919876543210"
-            }
-        }
-
-        val controller = PhoneAuthController(
-            mode = PhoneAuthMode.LINK_EXISTING_ACCOUNT,
-            scope = testScope,
-            gateway = fakeGateway,
-            rateLimiter = OtpRateLimiter(clockMillis = { 50_000L }),
-            onSuccess = { linkedSuccess = it }
-        )
-
-        controller.updatePhoneInput("9876543210")
-
-        // Without explicit consent checkbox, sendOtp must refuse
-        controller.sendOtp(activity)
-        assertNull(capturedCallbacks)
-        assertTrue(controller.uiState.value.errorMessage!!.contains("consent"))
-
-        // With consent accepted, OTP request proceeds
-        controller.setLinkConsentAccepted(true)
-        controller.sendOtp(activity)
-        assertNotNull(capturedCallbacks)
-
-        capturedCallbacks!!.onCodeSent("verif-link-1", PhoneAuthProvider.ForceResendingToken.zza())
-        controller.updateOtpInput("112233")
-        controller.verifyEnteredOtp()
-
-        // Collision prevented duplicate/overwritten account and reported clear guidance
-        assertEquals(1, linkCalls.get())
-        assertNull(linkedSuccess)
-        assertTrue(controller.uiState.value.errorMessage!!.contains("already linked to another GoLocal account"))
-
-        // When non-colliding phone is verified, link succeeds and preserves single account
-        shouldCollide = false
-        controller.verifyEnteredOtp()
-        assertEquals("+919876543210", linkedSuccess)
-    }
-
-    @Test
-    fun `customer and rider auth screens preserve Google Login alongside Mobile OTP flow`() {
+    fun `customer auth screen uses mobile OTP end to end without Google login`() {
         var fakeCallbacks: PhoneAuthProvider.OnVerificationStateChangedCallbacks? = null
         var authSucceeded = false
         val fakeGateway = object : FirebasePhoneAuthGateway {
             override fun isFirebaseInitialized(context: Context): Boolean = true
-            override fun hasCurrentUser(): Boolean = false
             override fun verifyPhoneNumber(
                 activity: Activity,
                 e164Phone: String,
@@ -399,7 +340,6 @@ class PhoneAuthUnitTest {
                 PhoneAuthProvider.getCredential(verificationId, smsCode)
 
             override suspend fun signInWithCredential(credential: PhoneAuthCredential): String = "+919876543210"
-            override suspend fun linkWithCredential(credential: PhoneAuthCredential): String = "+919876543210"
         }
 
         composeTestRule.setContent {
@@ -409,7 +349,6 @@ class PhoneAuthUnitTest {
                     onAuthSuccess = { authSucceeded = true },
                     phoneControllerFactory = { scope, onDone ->
                         PhoneAuthController(
-                            mode = PhoneAuthMode.SIGN_IN,
                             scope = scope,
                             gateway = fakeGateway,
                             rateLimiter = OtpRateLimiter(clockMillis = { 100_000L }),
@@ -421,13 +360,8 @@ class PhoneAuthUnitTest {
         }
         composeTestRule.waitForIdle()
 
-        // Both Google and Mobile options must be present
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
-        composeTestRule.onNodeWithTag("mobile_sign_in_button").performScrollTo().assertIsDisplayed()
-
-        // Enter Mobile Number flow
-        composeTestRule.onNodeWithTag("mobile_sign_in_button").performClick()
-        composeTestRule.waitForIdle()
+        // Google Login is completely removed; Mobile OTP form renders immediately
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("country_code_selector").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("🇮🇳 +91").assertIsDisplayed()
 
@@ -456,26 +390,20 @@ class PhoneAuthUnitTest {
     }
 
     @Test
-    fun `rider auth screen renders both Google Login and Mobile Number option`() {
+    fun `rider and admin auth screens render Mobile OTP login exclusively`() {
+        val activeMode = androidx.compose.runtime.mutableStateOf(ExperienceMode.RIDER)
         composeTestRule.setContent {
             GolocalTheme {
-                RoleAuthScreen(mode = ExperienceMode.RIDER, onAuthSuccess = {})
+                RoleAuthScreen(mode = activeMode.value, onAuthSuccess = {})
             }
         }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
-        composeTestRule.onNodeWithTag("mobile_sign_in_button").performScrollTo().assertIsDisplayed()
-    }
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
 
-    @Test
-    fun `admin auth screen keeps strict Google gate without mobile login button`() {
-        composeTestRule.setContent {
-            GolocalTheme {
-                RoleAuthScreen(mode = ExperienceMode.ADMIN, onAuthSuccess = {})
-            }
-        }
+        composeTestRule.runOnUiThread { activeMode.value = ExperienceMode.ADMIN }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
-        assertTrue(composeTestRule.onAllNodesWithTag("mobile_sign_in_button").fetchSemanticsNodes().isEmpty())
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
     }
 }

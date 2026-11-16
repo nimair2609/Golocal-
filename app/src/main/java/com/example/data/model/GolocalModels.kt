@@ -28,37 +28,76 @@ sealed interface UiState<out T> {
     data class Error(val message: String) : UiState<Nothing>
 }
 
+sealed interface RegistrationStatus {
+    data object Checking : RegistrationStatus
+    data class PendingRegistration(
+        val verifiedMobileNumber: String,
+        val existingAccount: UserAccount? = null
+    ) : RegistrationStatus
+    data class Completed(val account: UserAccount) : RegistrationStatus
+}
+
 @IgnoreExtraProperties
 data class UserAccount(
     @DocumentId val id: String = "",
+    val uid: String = "",
     val userId: String = "",
     val fullName: String = "",
-    val email: String = "",
+    val email: String = "", // Invoice delivery email only (never an authentication credential)
     val phone: String = "",
+    val mobileNumber: String = "",
     val photoUrl: String = "",
     val role: String = "customer",
     val preferredLanguage: String = "en",
     val lowNetworkMode: Boolean = false,
     val privacyConsentAccepted: Boolean = false,
+    val profileCompleted: Boolean = false,
+    val emailVerified: Boolean = false,
+    val mobileVerified: Boolean = false,
+    val hasEmergencyContact: Boolean = false,
     val accountStatus: String = "active",
+    @ServerTimestamp val accountCreatedAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
+    fun effectiveMobileNumber(): String = mobileNumber.ifBlank { phone }
+
     fun toCreateMap(): Map<String, Any> = buildMap {
+        val resolvedUid = uid.ifBlank { userId }
+        val resolvedPhone = effectiveMobileNumber()
+        put("uid", resolvedUid)
         put("userId", userId)
         put("fullName", fullName.ifBlank { "GoLocal User" })
         if (email.isNotBlank()) put("email", email)
-        if (phone.isNotBlank()) put("phone", phone)
+        if (resolvedPhone.isNotBlank()) {
+            put("phone", resolvedPhone)
+            put("mobileNumber", resolvedPhone)
+        }
         if (photoUrl.isNotBlank()) put("photoUrl", photoUrl)
         put("role", role)
         put("preferredLanguage", preferredLanguage)
         put("lowNetworkMode", lowNetworkMode)
         put("privacyConsentAccepted", privacyConsentAccepted)
+        put("profileCompleted", profileCompleted)
+        put("emailVerified", emailVerified)
+        put("mobileVerified", mobileVerified)
+        put("hasEmergencyContact", hasEmergencyContact)
         put("accountStatus", accountStatus)
+        put("accountCreatedAt", FieldValue.serverTimestamp())
         put("createdAt", FieldValue.serverTimestamp())
         put("updatedAt", FieldValue.serverTimestamp())
     }
 }
+
+@IgnoreExtraProperties
+data class PrivateEmergencyContact(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val emergencyContactNumber: String = "",
+    val relationshipNote: String = "Primary Emergency Contact",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
 
 @IgnoreExtraProperties
 data class CustomerProfile(
@@ -197,6 +236,7 @@ data class Booking(
     val familyConsentConfirmed: Boolean = false,
     val isRoundTrip: Boolean = false,
     val cancellationReason: String = "",
+    val invoiceEmail: String = "",
     val customerRating: Long? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -243,6 +283,7 @@ data class PaymentRecord(
     val platformCommissionInr: Double = 0.0,
     val netDriverEarningsInr: Double = 0.0,
     val paymentMethod: String = "cash",
+    val invoiceEmail: String = "",
     val gatewayReference: String = "",
     val status: String = "settled_cash",
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -316,6 +357,7 @@ data class EmergencyEvent(
     val bookingId: String = "",
     val lat: Double = 0.0,
     val lng: Double = 0.0,
+    val emergencyContactRef: String = "",
     val notes: String = "",
     val status: String = "active",
     @ServerTimestamp val createdAt: Timestamp? = null,

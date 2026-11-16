@@ -141,6 +141,52 @@ object PhoneNumberValidator {
     fun isValidOtp(rawOtp: String): Boolean = SIX_DIGIT_OTP_REGEX.matches(rawOtp.trim())
 }
 
+object RegistrationValidator {
+    private val EMAIL_REGEX = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
+
+    fun validateFullName(raw: String): String? {
+        val trimmed = raw.trim()
+        return when {
+            trimmed.isBlank() -> "Full Name is required."
+            trimmed.length < 2 -> "Enter your full name (at least 2 characters)."
+            trimmed.length > 100 -> "Full Name must be 100 characters or fewer."
+            !trimmed.any { it.isLetter() } -> "Full Name must include alphabetic characters."
+            else -> null
+        }
+    }
+
+    fun validateInvoiceEmail(raw: String): String? {
+        val trimmed = raw.trim()
+        return when {
+            trimmed.isBlank() -> "Email address is required for GST invoice delivery."
+            trimmed.length > 150 -> "Email address must be 150 characters or fewer."
+            !EMAIL_REGEX.matches(trimmed) -> "Enter a valid email address (used for GST invoices only)."
+            else -> null
+        }
+    }
+
+    fun validateEmergencyContact(
+        country: CountryCodeOption,
+        rawEmergency: String,
+        ownVerifiedMobileE164: String
+    ): PhoneValidationResult {
+        val trimmed = rawEmergency.trim()
+        if (trimmed.isBlank()) {
+            return PhoneValidationResult.Invalid("Emergency contact number is required.")
+        }
+        val formatted = PhoneNumberValidator.validateAndFormat(country, trimmed)
+        if (formatted is PhoneValidationResult.Valid) {
+            val ownClean = ownVerifiedMobileE164.trim()
+            if (ownClean.isNotBlank() && formatted.e164Phone == ownClean) {
+                return PhoneValidationResult.Invalid(
+                    "Emergency contact number must be different from your own verified mobile number."
+                )
+            }
+        }
+        return formatted
+    }
+}
+
 sealed class OtpRateLimitDecision {
     data class Allowed(val nextCooldownSeconds: Int) : OtpRateLimitDecision()
     data class Blocked(
@@ -212,11 +258,6 @@ class OtpRateLimiter(
     }
 }
 
-enum class PhoneAuthMode {
-    SIGN_IN,
-    LINK_EXISTING_ACCOUNT
-}
-
 enum class PhoneAuthStep {
     INPUT_PHONE,
     VERIFY_OTP
@@ -233,7 +274,6 @@ data class PhoneAuthUiState(
     val isVerifyingOtp: Boolean = false,
     val resendCooldownSeconds: Int = 0,
     val autoRetrievalTimedOut: Boolean = false,
-    val linkConsentAccepted: Boolean = false,
     val errorMessage: String? = null,
     val infoMessage: String? = null
 ) {
@@ -259,9 +299,7 @@ internal fun classifyPhoneAuthFailure(throwable: Throwable): Triple<String?, Str
         throwable is FirebaseAuthUserCollisionException ||
             firebaseErrorCode == "ERROR_CREDENTIAL_ALREADY_IN_USE" ||
             firebaseErrorCode == "ERROR_ACCOUNT_EXISTS_WITH_DIFFERENT_CREDENTIAL" ->
-            "This mobile number is already linked to another GoLocal account. Sign in with that mobile number directly, or verify a different number."
-        firebaseErrorCode == "ERROR_PROVIDER_ALREADY_LINKED" ->
-            "A verified mobile number is already linked to this GoLocal account."
+            "An account conflict occurred for this mobile number. Please sign in directly with this mobile number."
         firebaseErrorCode == "ERROR_INVALID_VERIFICATION_CODE" ->
             "Incorrect 6-digit OTP. Please double-check the SMS code and try again."
         firebaseErrorCode == "ERROR_SESSION_EXPIRED" ||
@@ -277,7 +315,7 @@ internal fun classifyPhoneAuthFailure(throwable: Throwable): Triple<String?, Str
         firebaseErrorCode == "ERROR_USER_DISABLED" ->
             "This GoLocal account has been disabled. Please contact support."
         firebaseErrorCode == "ERROR_REQUIRES_RECENT_LOGIN" ->
-            "Please sign out and sign back in recently before linking a mobile number."
+            "Please sign out and verify your mobile number again."
         firebaseErrorCode == "ERROR_APP_NOT_AUTHORIZED" ||
             firebaseErrorCode == "ERROR_INVALID_APP_CREDENTIAL" ||
             firebaseErrorCode == "ERROR_CAPTCHA_CHECK_FAILED" ->
@@ -301,7 +339,6 @@ internal fun classifyPhoneAuthFailure(throwable: Throwable): Triple<String?, Str
 
 interface FirebasePhoneAuthGateway {
     fun isFirebaseInitialized(context: Context): Boolean
-    fun hasCurrentUser(): Boolean
     fun verifyPhoneNumber(
         activity: Activity,
         e164Phone: String,
@@ -310,7 +347,6 @@ interface FirebasePhoneAuthGateway {
     )
     fun createCredential(verificationId: String, smsCode: String): PhoneAuthCredential
     suspend fun signInWithCredential(credential: PhoneAuthCredential): String?
-    suspend fun linkWithCredential(credential: PhoneAuthCredential): String?
 }
 
 class DefaultFirebasePhoneAuthGateway(
@@ -319,8 +355,6 @@ class DefaultFirebasePhoneAuthGateway(
 
     override fun isFirebaseInitialized(context: Context): Boolean =
         FirebaseApp.getApps(context).isNotEmpty()
-
-    override fun hasCurrentUser(): Boolean = authProvider().currentUser != null
 
     override fun verifyPhoneNumber(
         activity: Activity,
@@ -346,17 +380,9 @@ class DefaultFirebasePhoneAuthGateway(
         val result = authProvider().signInWithCredential(credential).await()
         return result.user?.phoneNumber ?: result.user?.uid
     }
-
-    override suspend fun linkWithCredential(credential: PhoneAuthCredential): String? {
-        val user = authProvider().currentUser
-            ?: throw IllegalStateException("You must be signed in before linking a mobile number.")
-        val result = user.linkWithCredential(credential).await()
-        return result.user?.phoneNumber ?: user.phoneNumber
-    }
 }
 
 class PhoneAuthController(
-    private val mode: PhoneAuthMode,
     private val scope: CoroutineScope,
     private val gateway: FirebasePhoneAuthGateway = DefaultFirebasePhoneAuthGateway(),
     private val rateLimiter: OtpRateLimiter = OtpRateLimiter(),
@@ -399,24 +425,13 @@ class PhoneAuthController(
         }
     }
 
-    fun setLinkConsentAccepted(accepted: Boolean) {
-        _uiState.update {
-            it.copy(
-                linkConsentAccepted = accepted,
-                errorMessage = null
-            )
-        }
-    }
-
     fun changeMobileNumber() {
         countdownJob?.cancel()
         countdownJob = null
         forceResendingToken = null
         activeVerificationUsed = false
         rateLimiter.resetCooldownForNumberChange()
-        if (mode == PhoneAuthMode.SIGN_IN) {
-            AuthFlowCoordinator.releaseInteractive()
-        }
+        AuthFlowCoordinator.releaseInteractive()
         _uiState.update {
             it.copy(
                 step = PhoneAuthStep.INPUT_PHONE,
@@ -435,15 +450,6 @@ class PhoneAuthController(
     fun sendOtp(context: Context, isResend: Boolean = false) {
         val current = _uiState.value
         if (current.isBusy) return
-
-        if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT && !current.linkConsentAccepted) {
-            _uiState.update {
-                it.copy(
-                    errorMessage = "Please confirm consent before linking a mobile number to your account."
-                )
-            }
-            return
-        }
 
         val validationTarget = if (isResend && current.formattedE164.isNotBlank()) {
             PhoneValidationResult.Valid(current.formattedE164, current.phoneInput)
@@ -481,13 +487,6 @@ class PhoneAuthController(
             return
         }
 
-        if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT && !gateway.hasCurrentUser()) {
-            _uiState.update {
-                it.copy(errorMessage = "Sign in to your GoLocal account before linking a mobile number.")
-            }
-            return
-        }
-
         val activity = context.findActivity()
         if (activity == null) {
             _uiState.update {
@@ -496,21 +495,16 @@ class PhoneAuthController(
             return
         }
 
-        if (mode == PhoneAuthMode.SIGN_IN && !AuthFlowCoordinator.tryAcquireInteractive()) {
+        if (!AuthFlowCoordinator.tryAcquireInteractive()) {
             _uiState.update {
                 it.copy(errorMessage = "Another sign-in request is already in progress. Please wait.")
             }
             return
         }
 
-        if (mode == PhoneAuthMode.SIGN_IN) {
-            AuthFlowCoordinator.clearSuppressAutoSignIn()
-            AuthFlowCoordinator.cancelAutoSignIn()
-        }
-
-        val flowName = if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) "phone_link" else "phone_sign_in"
+        val flowName = "phone_sign_in"
         AuthDiagnostics.logStage(
-            stage = if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) AuthStage.PHONE_LINK_STARTED else AuthStage.PHONE_OTP_REQUESTED,
+            stage = AuthStage.PHONE_OTP_REQUESTED,
             flow = flowName,
             detail = "target=${AuthDiagnostics.maskPhoneNumber(valid.e164Phone)} resend=$isResend"
         )
@@ -534,9 +528,7 @@ class PhoneAuthController(
                 callbacks = callbacks
             )
         } catch (e: Exception) {
-            if (mode == PhoneAuthMode.SIGN_IN) {
-                AuthFlowCoordinator.releaseInteractive()
-            }
+            AuthFlowCoordinator.releaseInteractive()
             val (code, excType, userMessage) = classifyPhoneAuthFailure(e)
             AuthDiagnostics.logFailure(
                 stage = AuthStage.AUTH_FAILED,
@@ -582,20 +574,18 @@ class PhoneAuthController(
             return
         }
 
-        if (mode == PhoneAuthMode.SIGN_IN && !AuthFlowCoordinator.tryAcquireInteractive()) {
+        if (!AuthFlowCoordinator.tryAcquireInteractive()) {
             _uiState.update {
                 it.copy(errorMessage = "Verification is already in progress. Please wait.")
             }
             return
         }
 
-        val flowName = if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) "phone_link" else "phone_sign_in"
+        val flowName = "phone_sign_in"
         val credential = try {
             gateway.createCredential(verificationId, code)
         } catch (e: Exception) {
-            if (mode == PhoneAuthMode.SIGN_IN) {
-                AuthFlowCoordinator.releaseInteractive()
-            }
+            AuthFlowCoordinator.releaseInteractive()
             val (_, _, msg) = classifyPhoneAuthFailure(e)
             _uiState.update { it.copy(errorMessage = msg) }
             return
@@ -623,15 +613,13 @@ class PhoneAuthController(
                 if (activeVerificationUsed || _uiState.value.isVerifyingOtp) {
                     return
                 }
-                if (mode == PhoneAuthMode.SIGN_IN) {
-                    AuthFlowCoordinator.releaseInteractive()
-                }
+                AuthFlowCoordinator.releaseInteractive()
                 AuthDiagnostics.logStage(
                     stage = AuthStage.PHONE_OTP_VERIFIED,
                     flow = flowName,
                     detail = "Auto-verification credential received"
                 )
-                if (mode == PhoneAuthMode.SIGN_IN && !AuthFlowCoordinator.tryAcquireInteractive()) {
+                if (!AuthFlowCoordinator.tryAcquireInteractive()) {
                     return
                 }
                 submitCredential(
@@ -643,9 +631,7 @@ class PhoneAuthController(
             }
 
             override fun onVerificationFailed(e: FirebaseException) {
-                if (mode == PhoneAuthMode.SIGN_IN) {
-                    AuthFlowCoordinator.releaseInteractive()
-                }
+                AuthFlowCoordinator.releaseInteractive()
                 val (code, excType, userMessage) = classifyPhoneAuthFailure(e)
                 AuthDiagnostics.logFailure(
                     stage = AuthStage.AUTH_FAILED,
@@ -668,9 +654,7 @@ class PhoneAuthController(
                 verificationId: String,
                 token: PhoneAuthProvider.ForceResendingToken
             ) {
-                if (mode == PhoneAuthMode.SIGN_IN) {
-                    AuthFlowCoordinator.releaseInteractive()
-                }
+                AuthFlowCoordinator.releaseInteractive()
                 forceResendingToken = token
                 activeVerificationUsed = false
                 rateLimiter.recordOtpDispatched(pendingCooldownSeconds)
@@ -729,22 +713,14 @@ class PhoneAuthController(
                 isSendingOtp = false,
                 isVerifyingOtp = true,
                 errorMessage = null,
-                infoMessage = if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) {
-                    "Verifying OTP & linking mobile number..."
-                } else {
-                    "Verifying OTP..."
-                }
+                infoMessage = "Verifying OTP..."
             )
         }
 
         scope.launch {
             try {
                 val resolvedPhone = withTimeout(FIREBASE_SIGN_IN_TIMEOUT_MS) {
-                    if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) {
-                        gateway.linkWithCredential(credential)
-                    } else {
-                        gateway.signInWithCredential(credential)
-                    }
+                    gateway.signInWithCredential(credential)
                 }
                 if (resolvedPhone != null) {
                     if (markVerificationUsed) {
@@ -752,11 +728,7 @@ class PhoneAuthController(
                     }
                     countdownJob?.cancel()
                     AuthDiagnostics.logStage(
-                        stage = if (mode == PhoneAuthMode.LINK_EXISTING_ACCOUNT) {
-                            AuthStage.PHONE_LINK_SUCCESS
-                        } else {
-                            AuthStage.FIREBASE_SIGN_IN_SUCCESS
-                        },
+                        stage = AuthStage.FIREBASE_SIGN_IN_SUCCESS,
                         flow = flowName,
                         detail = "Phone authentication completed"
                     )
@@ -825,9 +797,7 @@ class PhoneAuthController(
                     )
                 }
             } finally {
-                if (mode == PhoneAuthMode.SIGN_IN) {
-                    AuthFlowCoordinator.releaseInteractive()
-                }
+                AuthFlowCoordinator.releaseInteractive()
             }
         }
     }

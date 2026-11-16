@@ -7,6 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -18,12 +19,15 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.R
 import com.example.authStateFlow
 import com.example.data.model.AppRole
+import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.shared.ExperienceMode
 import com.example.shared.GolocalRoleSplashScreen
 import com.example.shared.RoleAuthScreen
+import com.example.ui.auth.NewUserRegistrationScreen
+import com.example.ui.auth.signOut
 import com.example.ui.components.GolocalStatusMessageBanner
 import com.example.ui.theme.GolocalTheme
 import com.example.updater.AppUpdateDialogHost
@@ -99,7 +103,13 @@ fun CustomerAuthenticatedShell(
         sessionViewModel.selectRole(AppRole.CUSTOMER)
     }
 
+    val scope = rememberCoroutineScope()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
+    val registrationStatus by sessionViewModel.registrationStatus.collectAsStateWithLifecycle()
+    val isSubmittingRegistration by sessionViewModel.isSubmittingRegistration.collectAsStateWithLifecycle()
+    val registrationError by sessionViewModel.registrationError.collectAsStateWithLifecycle()
+    val accountSyncStatusMsg by sessionViewModel.statusMessage.collectAsStateWithLifecycle()
+
     val darkTheme = when (prefs.darkThemeMode) {
         "dark" -> true
         "light" -> false
@@ -107,12 +117,69 @@ fun CustomerAuthenticatedShell(
     }
 
     GolocalTheme(darkTheme = darkTheme) {
+        when (val reg = registrationStatus) {
+            is RegistrationStatus.Checking -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (accountSyncStatusMsg != null) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = accountSyncStatusMsg ?: "",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Button(onClick = { sessionViewModel.retryAccountSync() }) {
+                                Text("Retry")
+                            }
+                            TextButton(onClick = { signOut(scope) }) {
+                                Text("Sign Out")
+                            }
+                        }
+                    } else {
+                        CircularProgressIndicator()
+                    }
+                }
+                return@GolocalTheme
+            }
+
+            is RegistrationStatus.PendingRegistration -> {
+                NewUserRegistrationScreen(
+                    verifiedMobileNumber = reg.verifiedMobileNumber.ifBlank { phoneNumber },
+                    existingAccount = reg.existingAccount,
+                    isSubmitting = isSubmittingRegistration,
+                    serverErrorMessage = registrationError,
+                    onSubmitRegistration = { fullName, invoiceEmail, emergencyContact, termsAccepted ->
+                        sessionViewModel.completeRegistration(
+                            fullName = fullName,
+                            invoiceEmail = invoiceEmail,
+                            emergencyContactE164 = emergencyContact,
+                            termsAccepted = termsAccepted
+                        )
+                    },
+                    onSignOut = { signOut(scope) }
+                )
+                return@GolocalTheme
+            }
+
+            is RegistrationStatus.Completed -> Unit
+        }
+
         if (!prefs.customerOnboarded) {
             CustomerOnboardingScreen(
                 onComplete = { sessionViewModel.setCustomerOnboarded(true) }
             )
             return@GolocalTheme
         }
+
+        val completedName = (registrationStatus as? RegistrationStatus.Completed)?.account?.fullName
+            ?.takeIf { it.isNotBlank() } ?: displayName
 
         val customerViewModel: CustomerViewModel = viewModel(
             key = "cust_vm_$currentUserId",
@@ -124,7 +191,7 @@ fun CustomerAuthenticatedShell(
                         repository = GolocalRepository(db),
                         prefsRepository = PreferencesRepository(app),
                         currentUserId = currentUserId,
-                        customerName = displayName
+                        customerName = completedName
                     )
                 }
             }

@@ -129,6 +129,13 @@ fun CustomerBookingsHistoryTab(
                                     }
                                     Text("Gross Paid: ₹${pay.grossFareInr.toInt()} (incl. GST ₹${pay.gstInr})", fontFamily = JetBrainsMono, style = MaterialTheme.typography.bodyMedium)
                                     Text("Method: ${pay.paymentMethod.uppercase()} • Ref: ${pay.gatewayReference}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (pay.invoiceEmail.isNotBlank()) {
+                                        Text(
+                                            text = "Invoice delivery email: ${pay.invoiceEmail}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -372,19 +379,22 @@ fun CustomerNotificationsTab(sessionViewModel: AppSessionViewModel) {
 fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
     val accountState by sessionViewModel.userAccountState.collectAsStateWithLifecycle()
     val customerProfile by sessionViewModel.customerProfileState.collectAsStateWithLifecycle()
+    val privateEmergency by sessionViewModel.privateEmergencyContactState.collectAsStateWithLifecycle()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     val account = (accountState as? UiState.Success)?.data
 
     var fullName by remember(account?.fullName) { mutableStateOf(account?.fullName ?: "") }
-    var phone by remember(account?.phone) { mutableStateOf(account?.phone ?: "") }
+    var invoiceEmail by remember(account?.email) { mutableStateOf(account?.email ?: "") }
     var homeAddress by remember(customerProfile?.homeAddress) { mutableStateOf(customerProfile?.homeAddress ?: "") }
     var workAddress by remember(customerProfile?.workAddress) { mutableStateOf(customerProfile?.workAddress ?: "") }
     var nativeVillage by remember(customerProfile?.nativeVillage) { mutableStateOf(customerProfile?.nativeVillage ?: "") }
     var nativeDistrict by remember(customerProfile?.nativeDistrict) { mutableStateOf(customerProfile?.nativeDistrict ?: "") }
-    var emergencyName by remember(customerProfile?.emergencyContactName) { mutableStateOf(customerProfile?.emergencyContactName ?: "") }
-    var emergencyPhone by remember(customerProfile?.emergencyContactPhone) { mutableStateOf(customerProfile?.emergencyContactPhone ?: "") }
 
     var showSupportDialog by remember { mutableStateOf(false) }
+    var showEmergencyDialog by remember { mutableStateOf(false) }
+
+    val verifiedPhone = account?.effectiveMobileNumber().orEmpty()
+    val hasEmergency = account?.hasEmergencyContact == true || privateEmergency != null
 
     Column(
         modifier = Modifier
@@ -401,35 +411,55 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
             modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Personal & Emergency Info", style = MaterialTheme.typography.titleSmall)
-                val emailText = account?.email?.takeIf { it.isNotBlank() }
-                val phoneText = account?.phone?.takeIf { it.isNotBlank() }
-                Text(
-                    text = when {
-                        emailText != null -> "Account Email: $emailText"
-                        phoneText != null -> "Mobile OTP Account: $phoneText"
-                        else -> "Authenticated GoLocal Account"
+                Text("Personal & Invoice Info", style = MaterialTheme.typography.titleSmall)
+
+                OutlinedTextField(
+                    value = verifiedPhone.ifBlank { "Verified via Mobile OTP" },
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
+                    label = { Text("Verified Mobile Number (Read-Only)") },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.VerifiedUser,
+                            contentDescription = "Verified",
+                            tint = GolocalSuccess
+                        )
                     },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    modifier = Modifier.fillMaxWidth().testTag("profile_verified_mobile_readonly"),
+                    singleLine = true
                 )
-                OutlinedTextField(value = fullName, onValueChange = { fullName = it }, label = { Text("Full Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Mobile Number") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+
+                OutlinedTextField(
+                    value = fullName,
+                    onValueChange = { fullName = it },
+                    label = { Text("Full Name *") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = invoiceEmail,
+                    onValueChange = { invoiceEmail = it },
+                    label = { Text("Email Address (for Ride Invoices) *") },
+                    supportingText = { Text("Used strictly for GST invoice delivery — never for login.") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
                 OutlinedTextField(value = homeAddress, onValueChange = { homeAddress = it }, label = { Text("Saved Home Address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(value = workAddress, onValueChange = { workAddress = it }, label = { Text("Saved Work Address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = nativeVillage, onValueChange = { nativeVillage = it }, label = { Text("Native Village") }, modifier = Modifier.weight(1f), singleLine = true)
                     OutlinedTextField(value = nativeDistrict, onValueChange = { nativeDistrict = it }, label = { Text("District") }, modifier = Modifier.weight(1f), singleLine = true)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = emergencyName, onValueChange = { emergencyName = it }, label = { Text("SOS Contact Name") }, modifier = Modifier.weight(1f), singleLine = true)
-                    OutlinedTextField(value = emergencyPhone, onValueChange = { emergencyPhone = it }, label = { Text("SOS Phone") }, modifier = Modifier.weight(1f), singleLine = true)
-                }
                 Button(
                     onClick = {
                         sessionViewModel.updateAccountAndProfile(
-                            fullName, phone, homeAddress, workAddress,
-                            nativeVillage, nativeDistrict, emergencyName, emergencyPhone
+                            fullName = fullName,
+                            invoiceEmail = invoiceEmail,
+                            homeAddress = homeAddress,
+                            workAddress = workAddress,
+                            nativeVillage = nativeVillage,
+                            nativeDistrict = nativeDistrict
                         )
                     },
                     modifier = Modifier.fillMaxWidth().testTag("save_profile_button")
@@ -439,9 +469,61 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
             }
         }
 
-        com.example.ui.auth.LinkedPhoneAccountCard(
-            fallbackAccountPhone = account?.phone ?: "",
-            onPhoneLinked = sessionViewModel::onPhoneNumberLinked
+        // Private Emergency Contact Card (Protected; never exposed to drivers or public profiles)
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+                .testTag("private_emergency_contact_card")
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Private Emergency Contact", style = MaterialTheme.typography.titleSmall)
+                    }
+                    GolocalStatusBadge(
+                        label = if (hasEmergency) "PROTECTED" else "REQUIRED",
+                        tone = if (hasEmergency) "success" else "warning"
+                    )
+                }
+                val maskedEmergency = privateEmergency?.emergencyContactNumber
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { com.example.ui.auth.AuthDiagnostics.maskPhoneNumber(it) }
+                Text(
+                    text = if (maskedEmergency != null) {
+                        "Protected SOS Contact: $maskedEmergency (hidden from drivers & public views)"
+                    } else if (hasEmergency) {
+                        "Protected SOS contact configured privately for emergency workflows only."
+                    } else {
+                        "Add a trusted emergency contact. It stays strictly private for SOS alerts."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(
+                    onClick = { showEmergencyDialog = true },
+                    modifier = Modifier.fillMaxWidth().testTag("update_private_emergency_button")
+                ) {
+                    Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (hasEmergency) "Update Private SOS Contact" else "Set Private SOS Contact")
+                }
+            }
+        }
+
+        com.example.ui.auth.VerifiedMobileBadgeCard(
+            fallbackAccountPhone = verifiedPhone
         )
 
         SharedAppSettingsAndSignOutSection(
@@ -449,6 +531,66 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
             sessionViewModel = sessionViewModel,
             supportHelpLabel = "Help & Customer Support",
             onOpenSupportDialog = { showSupportDialog = true }
+        )
+    }
+
+    if (showEmergencyDialog) {
+        var newEmergency by remember { mutableStateOf("") }
+        var relation by remember { mutableStateOf(privateEmergency?.relationshipNote ?: "Primary Emergency Contact") }
+        var localError by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { showEmergencyDialog = false },
+            title = { Text("Update Private SOS Contact") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Stored in isolated emergency records accessible only to you and authorized SOS responders.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (localError != null) {
+                        Text(localError ?: "", style = MaterialTheme.typography.bodySmall, color = GolocalError)
+                    }
+                    OutlinedTextField(
+                        value = newEmergency,
+                        onValueChange = {
+                            newEmergency = it.filter { ch -> ch.isDigit() || ch == '+' }.take(16)
+                            localError = null
+                        },
+                        label = { Text("Emergency Mobile Number (+91...) *") },
+                        placeholder = { Text("9876543210") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = relation,
+                        onValueChange = { relation = it.take(60) },
+                        label = { Text("Relationship Note") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val result = com.example.ui.auth.RegistrationValidator.validateEmergencyContact(
+                        country = com.example.ui.auth.SupportedCountryCodes.INDIA,
+                        rawEmergency = newEmergency,
+                        ownVerifiedMobileE164 = verifiedPhone
+                    )
+                    when (result) {
+                        is com.example.ui.auth.PhoneValidationResult.Invalid -> localError = result.message
+                        is com.example.ui.auth.PhoneValidationResult.Valid -> {
+                            sessionViewModel.updatePrivateEmergencyContact(result.e164Phone, relation)
+                            showEmergencyDialog = false
+                        }
+                    }
+                }) { Text("Save Privately") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEmergencyDialog = false }) { Text("Cancel") }
+            }
         )
     }
 

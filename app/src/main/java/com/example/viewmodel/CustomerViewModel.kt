@@ -284,7 +284,7 @@ class CustomerViewModel(
         }
     }
 
-    fun submitBooking(bookingChannel: String = "app") {
+    fun submitBooking(bookingChannel: String = "app", invoiceEmail: String = "") {
         val d = _draft.value
         val cfg = fareConfigs.value.firstOrNull { it.vehicleCategory == d.selectedCategory }
         if (d.selectedCategory == "parcel" && cfg?.isEnabled != true) {
@@ -338,7 +338,8 @@ class CustomerViewModel(
                 scheduledDateTimeLabel = d.scheduledDateTimeLabel,
                 familyMemberName = d.familyMemberName,
                 familyConsentConfirmed = d.familyConsentConfirmed,
-                isRoundTrip = d.isRoundTrip
+                isRoundTrip = d.isRoundTrip,
+                invoiceEmail = invoiceEmail.trim()
             )
             repository.createBooking(booking)
                 .onSuccess { id ->

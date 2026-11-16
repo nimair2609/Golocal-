@@ -4,7 +4,7 @@
     <string name="app_name_admin">GoLocal Admin</string>
     <string name="brand_byline">by NR Next</string>
     <string name="brand_tagline">Your Local. Our Priority.</string>
-    <string name="sign_in_google">Sign in with Google</string>
+    <string name="sign_in_mobile">Continue with Mobile OTP</string>
     <string name="sign_out">Sign out</string>
     <string name="support_helpline">+91-1800-103-0000</string>
 </resources>

@@ -1,5 +1,6 @@
 package com.example.shared
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -24,27 +25,26 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.data.model.AppLanguage
 import com.example.data.repository.ClientPreferences
-import com.example.ui.auth.attemptAutoSignIn
-import com.example.ui.auth.onGoogleSignInClicked
+import com.example.ui.auth.PhoneAuthController
+import com.example.ui.auth.PhoneAuthFormContent
+import com.example.ui.auth.PhoneAuthStep
 import com.example.ui.auth.signOut
 import com.example.ui.components.GoLocalFullLogo
 import com.example.ui.components.GoLocalLogoMark
 import com.example.ui.components.LanguageSelectorRow
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.theme.*
 import com.example.updater.AppUpdateDialogHost
 import com.example.updater.CheckForAppUpdatesCard
 import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AppSessionViewModel
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 
 enum class ExperienceMode(
@@ -58,26 +58,26 @@ enum class ExperienceMode(
     CUSTOMER(
         appTitle = "GoLocal",
         roleLabel = "Customer Mobility & Local Services",
-        headline = "Book Local Rides & Services",
-        description = "Book verified Totos, Autos, Bikes, Cabs, Railway Station & Bus Stand rides across West Bengal with transparent fare proposals.",
-        buttonLabel = "Continue with Google",
-        footerNotice = "By continuing, you agree to GoLocal's privacy & passenger safety policies."
+        headline = "Sign In with Mobile OTP",
+        description = "Book verified Totos, Autos, Bikes, Cabs, Railway Station & Bus Stand rides across West Bengal using your verified mobile number.",
+        buttonLabel = "Send OTP",
+        footerNotice = "New users complete a quick profile & safety setup right after OTP verification."
     ),
     RIDER(
         appTitle = "GoLocal Rider",
         roleLabel = "Verified Driver & Partner App",
-        headline = "Drive Local. Earn Transparently.",
-        description = "Accept nearby requests, propose fair fares within regulated bands, verify trips with 4-digit PIN, and track daily earnings.",
-        buttonLabel = "Sign in as Rider Partner",
+        headline = "Partner Login via Mobile OTP",
+        description = "Sign in or register as a GoLocal driver partner using your mobile number to accept requests, propose fair fares, and track earnings.",
+        buttonLabel = "Send Partner OTP",
         footerNotice = "Admin document verification (Driving Licence, RC & Insurance) is mandatory before going online."
     ),
     ADMIN(
         appTitle = "GoLocal Admin Portal",
         roleLabel = "Operations & Governance",
-        headline = "Authorized Administrators Only",
-        description = "Restricted management portal for rider verification, fare & commission rules, service areas, disputes, and audit logs.",
-        buttonLabel = "Sign in with Admin Google Account",
-        footerNotice = "Public self-registration is disabled. Access is enforced by Firebase Auth & Firestore security rules."
+        headline = "Admin Mobile OTP Sign-In",
+        description = "Restricted management portal for rider verification, fare & commission rules, service areas, SOS safety response, and audit logs.",
+        buttonLabel = "Send Admin OTP",
+        footerNotice = "Public self-registration is disabled. Access is enforced by Firebase Phone Auth & Firestore /admins/{uid} rules."
     )
 }
 
@@ -167,24 +167,23 @@ fun GolocalRoleSplashScreen(
 fun RoleAuthScreen(
     mode: ExperienceMode,
     onAuthSuccess: () -> Unit,
-    phoneControllerFactory: ((kotlinx.coroutines.CoroutineScope, (String) -> Unit) -> com.example.ui.auth.PhoneAuthController)? = null
+    phoneControllerFactory: ((CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember { CredentialManager.create(context) }
-    var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var consentAccepted by remember { mutableStateOf(true) }
-    var showMobileAuth by remember { mutableStateOf(false) }
+    val controller = remember(mode) {
+        phoneControllerFactory?.invoke(scope) { _ -> onAuthSuccess() }
+            ?: PhoneAuthController(
+                scope = scope,
+                onSuccess = { _ -> onAuthSuccess() }
+            )
+    }
+    DisposableEffect(controller) {
+        onDispose { controller.dispose() }
+    }
+    val phoneState by controller.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(mode) {
-        attemptAutoSignIn(
-            context = context,
-            credentialManager = credentialManager,
-            onAuthSuccess = onAuthSuccess,
-            onUnauthenticated = {},
-            scope = scope
-        )
+    BackHandler(enabled = phoneState.step == PhoneAuthStep.VERIFY_OTP) {
+        controller.changeMobileNumber()
     }
 
     val topGradient = when (mode) {
@@ -197,6 +196,7 @@ fun RoleAuthScreen(
             .fillMaxSize()
             .background(Brush.verticalGradient(colors = topGradient))
             .windowInsetsPadding(WindowInsets.safeDrawing)
+            .testTag("role_auth_screen_${mode.name.lowercase()}")
     ) {
         Column(
             modifier = Modifier
@@ -297,190 +297,57 @@ fun RoleAuthScreen(
                     modifier = Modifier.padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    if (showMobileAuth && mode != ExperienceMode.ADMIN) {
-                        com.example.ui.auth.PhoneAuthInlineCard(
-                            onAuthSuccess = onAuthSuccess,
-                            onBackToMethods = { showMobileAuth = false },
-                            controllerFactory = phoneControllerFactory
-                        )
-                    } else {
-                        Text(
-                            text = mode.headline,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = mode.description,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Text(
+                        text = if (phoneState.step == PhoneAuthStep.INPUT_PHONE) {
+                            mode.headline
+                        } else {
+                            "Verify 6-Digit OTP"
+                        },
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (phoneState.step == PhoneAuthStep.INPUT_PHONE) {
+                            mode.description
+                        } else {
+                            "Enter the 6-digit SMS verification code sent to ${phoneState.formattedE164}."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            when (mode) {
-                                ExperienceMode.CUSTOMER -> {
-                                    AuthBadge(Icons.Filled.VerifiedUser, "Verified Drivers", Modifier.weight(1f))
-                                    AuthBadge(Icons.Filled.Shield, "SOS & Trip PIN", Modifier.weight(1f))
-                                }
-                                ExperienceMode.RIDER -> {
-                                    AuthBadge(Icons.Filled.CurrencyRupee, "Propose Fares", Modifier.weight(1f))
-                                    AuthBadge(Icons.Filled.Badge, "KYC Verified", Modifier.weight(1f))
-                                }
-                                ExperienceMode.ADMIN -> {
-                                    AuthBadge(Icons.Filled.Lock, "Strict RBAC", Modifier.weight(1f))
-                                    AuthBadge(Icons.Filled.History, "Audit Trail", Modifier.weight(1f))
-                                }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        when (mode) {
+                            ExperienceMode.CUSTOMER -> {
+                                AuthBadge(Icons.Filled.VerifiedUser, "Verified Drivers", Modifier.weight(1f))
+                                AuthBadge(Icons.Filled.Shield, "SOS & Trip PIN", Modifier.weight(1f))
+                            }
+                            ExperienceMode.RIDER -> {
+                                AuthBadge(Icons.Filled.CurrencyRupee, "Propose Fares", Modifier.weight(1f))
+                                AuthBadge(Icons.Filled.Badge, "KYC Verified", Modifier.weight(1f))
+                            }
+                            ExperienceMode.ADMIN -> {
+                                AuthBadge(Icons.Filled.Lock, "Strict RBAC", Modifier.weight(1f))
+                                AuthBadge(Icons.Filled.History, "Audit Trail", Modifier.weight(1f))
                             }
                         }
-
-                        if (mode == ExperienceMode.CUSTOMER) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { consentAccepted = !consentAccepted }
-                            ) {
-                                Checkbox(
-                                    checked = consentAccepted,
-                                    onCheckedChange = { consentAccepted = it }
-                                )
-                                Text(
-                                    text = "I accept GoLocal's Privacy Policy & Passenger Safety terms.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        if (!errorMessage.isNullOrBlank()) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(
-                                    text = errorMessage ?: "",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.padding(12.dp)
-                                )
-                            }
-                        }
-
-                        Button(
-                            onClick = {
-                                if (isLoading) return@Button
-                                if (mode == ExperienceMode.CUSTOMER && !consentAccepted) {
-                                    errorMessage = "Please accept the Privacy Policy before continuing."
-                                    return@Button
-                                }
-                                errorMessage = null
-                                isLoading = true
-                                onGoogleSignInClicked(
-                                    context = context,
-                                    credentialManager = credentialManager,
-                                    onAuthSuccess = {
-                                        isLoading = false
-                                        onAuthSuccess()
-                                    },
-                                    onAuthError = { msg ->
-                                        isLoading = false
-                                        errorMessage = msg
-                                    },
-                                    scope = scope,
-                                    onAuthCancelled = {
-                                        isLoading = false
-                                    }
-                                )
-                            },
-                            enabled = !isLoading,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(54.dp)
-                                .testTag("google_sign_in_button"),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (mode == ExperienceMode.ADMIN) GolocalDeepNavy else GolocalPrimaryBlue,
-                                contentColor = GolocalPureWhite
-                            )
-                        ) {
-                            if (isLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(22.dp),
-                                    color = GolocalPureWhite,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.Lock,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = mode.buttonLabel,
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                            }
-                        }
-
-                        if (mode != ExperienceMode.ADMIN) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                HorizontalDivider(modifier = Modifier.weight(1f))
-                                Text(
-                                    text = "OR",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                HorizontalDivider(modifier = Modifier.weight(1f))
-                            }
-
-                            OutlinedButton(
-                                onClick = {
-                                    if (isLoading) return@OutlinedButton
-                                    if (mode == ExperienceMode.CUSTOMER && !consentAccepted) {
-                                        errorMessage = "Please accept the Privacy Policy before continuing."
-                                        return@OutlinedButton
-                                    }
-                                    errorMessage = null
-                                    showMobileAuth = true
-                                },
-                                enabled = !isLoading,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(54.dp)
-                                    .testTag("mobile_sign_in_button"),
-                                shape = RoundedCornerShape(14.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = GolocalLightBlue.copy(alpha = 0.28f),
-                                    contentColor = GolocalPrimaryBlue
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.5.dp, GolocalPrimaryBlue)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.PhoneAndroid,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Continue with Mobile Number",
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = mode.footerNotice,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
+
+                    PhoneAuthFormContent(
+                        controller = controller,
+                        state = phoneState,
+                        actionButtonLabel = mode.buttonLabel,
+                        buttonContainerColor = if (mode == ExperienceMode.ADMIN) GolocalDeepNavy else GolocalPrimaryBlue
+                    )
+
+                    Text(
+                        text = mode.footerNotice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -533,9 +400,7 @@ fun SharedAppSettingsAndSignOutSection(
     supportHelpLabel: String = "Help & Support",
     onOpenSupportDialog: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember { CredentialManager.create(context) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     Surface(
@@ -617,7 +482,7 @@ fun SharedAppSettingsAndSignOutSection(
                 Text("Request Account Deletion", color = GolocalError)
             }
             Button(
-                onClick = { signOut(credentialManager, scope) },
+                onClick = { signOut(scope) },
                 colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                 modifier = Modifier
                     .fillMaxWidth()

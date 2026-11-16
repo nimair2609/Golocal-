@@ -13,6 +13,7 @@ const OTHER_UID = "customer_bob";
 const DRIVER_UID = "driver_rahul";
 const UNVERIFIED_DRIVER_UID = "driver_pending";
 const DELEGATED_ADMIN_UID = "admin_sub";
+const EMERGENCY_RESPONDER_UID = "sos_responder_1";
 const ADMIN_EMAIL = "renukadas083@gmail.com";
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
@@ -46,17 +47,19 @@ beforeEach(async () => {
   }
 });
 
-test("Unauthenticated user: denied reading bookings and users", async () => {
+test("Unauthenticated user: denied reading bookings, users, and private emergency_contacts", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
   await assertFails(unauthDb.collection("bookings").get());
   await assertFails(unauthDb.collection("users").doc(CUSTOMER_UID).get());
+  await assertFails(unauthDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
   await assertFails(unauthDb.collection("platform_settings").doc("global").get());
 });
 
-test("User registration & update: prevents self-assigning or escalating to admin role", async () => {
-  const db = testEnv.authenticatedContext(CUSTOMER_UID, { email: "alice@example.com", email_verified: true }).firestore();
+test("User registration & update: supports mobile OTP registration fields and prevents escalating to admin role", async () => {
+  const db = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
   await assertFails(
     db.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
       userId: CUSTOMER_UID,
       fullName: "Alice Sen",
       role: "admin",
@@ -68,12 +71,29 @@ test("User registration & update: prevents self-assigning or escalating to admin
   );
   await assertSucceeds(
     db.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
       userId: CUSTOMER_UID,
       fullName: "Alice Sen",
+      email: "alice.invoices@example.com",
+      phone: "+919876543210",
+      mobileNumber: "+919876543210",
       role: "customer",
       preferredLanguage: "bn",
+      privacyConsentAccepted: true,
+      profileCompleted: true,
+      emailVerified: false,
+      mobileVerified: true,
+      hasEmergencyContact: true,
       accountStatus: "active",
+      accountCreatedAt: nowTs(),
       createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  // Owner can update invoice email & profileCompleted
+  await assertSucceeds(
+    db.collection("users").doc(CUSTOMER_UID).update({
+      email: "alice.gst@example.com",
       updatedAt: nowTs(),
     })
   );
@@ -86,13 +106,82 @@ test("User registration & update: prevents self-assigning or escalating to admin
   );
 });
 
+test("Private Emergency Contacts: strict isolation from other users and drivers, accessible to owner & authorized SOS responders", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const adminDb = ctx.firestore();
+    await adminDb.collection("driver_profiles").doc(DRIVER_UID).set({
+      driverId: DRIVER_UID,
+      legalName: "Rahul Das",
+      phone: "+919800000002",
+      district: "Hooghly",
+      vehicleCategory: "toto",
+      vehicleRegNumber: "WB15E1234",
+      drivingLicenceNumber: "WB15-20210001",
+      verificationStatus: "verified",
+      isOnline: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await adminDb.collection("emergency_personnel").doc(EMERGENCY_RESPONDER_UID).set({
+      uid: EMERGENCY_RESPONDER_UID,
+      displayName: "SOS Desk 1",
+    });
+  });
+
+  // Owner writes private emergency contact
+  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
+  await assertSucceeds(
+    aliceDb.collection("emergency_contacts").doc(CUSTOMER_UID).set({
+      userId: CUSTOMER_UID,
+      emergencyContactNumber: "+919830011223",
+      relationshipNote: "Primary Emergency Contact",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  // Owner can read and update their own emergency contact
+  await assertSucceeds(aliceDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
+  await assertSucceeds(
+    aliceDb.collection("emergency_contacts").doc(CUSTOMER_UID).update({
+      emergencyContactNumber: "+919830099887",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Another user CANNOT read or list or write Alice's emergency contact
+  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+  await assertFails(bobDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
+  await assertFails(bobDb.collection("emergency_contacts").get());
+  await assertFails(
+    bobDb.collection("emergency_contacts").doc(CUSTOMER_UID).set({
+      userId: CUSTOMER_UID,
+      emergencyContactNumber: "+919999999999",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Verified driver CANNOT read or list Alice's emergency contact
+  const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
+  await assertFails(driverDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
+  await assertFails(driverDb.collection("emergency_contacts").get());
+
+  // Authorized emergency personnel and Admin CAN read for SOS response
+  const responderDb = testEnv.authenticatedContext(EMERGENCY_RESPONDER_UID).firestore();
+  await assertSucceeds(responderDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  await assertSucceeds(adminDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
+});
+
 test("PII Isolation: another user cannot read Alice's user account or driver KYC", async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const adminDb = ctx.firestore();
     await adminDb.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
       userId: CUSTOMER_UID,
       fullName: "Alice Sen",
       phone: "+919800000001",
+      mobileNumber: "+919800000001",
       role: "customer",
       preferredLanguage: "en",
       accountStatus: "active",
@@ -193,6 +282,7 @@ test("Verified driver isolation: unverified users cannot read searching bookings
     await adminDb.collection("bookings").doc("booking_1").set({
       customerId: CUSTOMER_UID,
       customerName: "Alice",
+      invoiceEmail: "alice.invoices@example.com",
       bookingType: "now",
       vehicleCategory: "toto",
       pickupLabel: "Bandel Station",
@@ -364,7 +454,7 @@ test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{
     })
   );
 
-  // Primary bootstrapped admin delegates secondary admin
+  // Primary bootstrapped admin delegates secondary phone-authenticated admin by UID
   await assertSucceeds(
     realAdminDb.collection("admins").doc(DELEGATED_ADMIN_UID).set({
       uid: DELEGATED_ADMIN_UID,
@@ -375,8 +465,8 @@ test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{
     })
   );
 
-  // Delegated admin can list users & update platform_settings (including APK update manifest), but cannot modify /admins
-  const subAdminDb = testEnv.authenticatedContext(DELEGATED_ADMIN_UID, { email: "ops@nrnext.in", email_verified: true }).firestore();
+  // Delegated phone-authenticated admin can list users & update platform_settings, but cannot modify /admins
+  const subAdminDb = testEnv.authenticatedContext(DELEGATED_ADMIN_UID, { phone_number: "+919876543211" }).firestore();
   await assertSucceeds(subAdminDb.collection("users").get());
   await assertSucceeds(
     subAdminDb.collection("platform_settings").doc("global").set({
@@ -396,7 +486,7 @@ test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{
     })
   );
   // Customer cannot overwrite APK update manifest
-  const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { email: "alice@example.com", email_verified: true }).firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
   await assertFails(
     custDb.collection("platform_settings").doc("global").set({
       updatesEnabled: true,

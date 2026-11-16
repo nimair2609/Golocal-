@@ -42,6 +42,9 @@ class AdminViewModel(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
+    private val _sosEmergencyContacts = MutableStateFlow<Map<String, PrivateEmergencyContact?>>(emptyMap())
+    val sosEmergencyContacts: StateFlow<Map<String, PrivateEmergencyContact?>> = _sosEmergencyContacts.asStateFlow()
+
     val users: StateFlow<List<UserAccount>> = repository.observeAdminUsers()
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin users", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
@@ -246,6 +249,22 @@ class AdminViewModel(
             repository.adminResolveEmergency(id, status)
                 .onSuccess { _message.value = "SOS event marked $status." }
                 .onFailure { _message.value = it.localizedMessage ?: "Update failed" }
+        }
+    }
+
+    fun loadEmergencyContactForSos(userId: String) {
+        if (userId.isBlank()) return
+        viewModelScope.launch {
+            repository.fetchEmergencyContactForAuthorizedResponder(userId)
+                .onSuccess { contact ->
+                    _sosEmergencyContacts.value = _sosEmergencyContacts.value + (userId to contact)
+                    if (contact == null) {
+                        _message.value = "No private emergency contact recorded for user $userId."
+                    }
+                }
+                .onFailure {
+                    _message.value = it.localizedMessage ?: "Unable to fetch private emergency contact."
+                }
         }
     }
 

@@ -26,6 +26,7 @@ fun AdminBookingsModule(adminViewModel: AdminViewModel) {
     val bookings by adminViewModel.bookings.collectAsStateWithLifecycle()
     val complaints by adminViewModel.complaints.collectAsStateWithLifecycle()
     val emergencies by adminViewModel.emergencies.collectAsStateWithLifecycle()
+    val sosEmergencyContacts by adminViewModel.sosEmergencyContacts.collectAsStateWithLifecycle()
     val ratings by adminViewModel.ratings.collectAsStateWithLifecycle()
 
     var subTab by remember { mutableIntStateOf(0) }
@@ -101,7 +102,25 @@ fun AdminBookingsModule(adminViewModel: AdminViewModel) {
                                     GolocalStatusBadge(label = sos.status.uppercase(), tone = if (sos.status == "active") "error" else "success")
                                 }
                                 Text("Booking: ${sos.bookingId.ifBlank { "Home SOS" }} • GPS: ${sos.lat}, ${sos.lng}", style = MaterialTheme.typography.bodySmall)
+                                if (sos.emergencyContactRef.isNotBlank()) {
+                                    Text("Ref: ${sos.emergencyContactRef}", style = MaterialTheme.typography.labelSmall, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                                 Text(sos.notes, style = MaterialTheme.typography.bodySmall)
+                                val loadedContact = sosEmergencyContacts[sos.userId]
+                                if (loadedContact != null) {
+                                    Text(
+                                        text = "SOS Contact (${loadedContact.relationshipNote}): ${loadedContact.emergencyContactNumber}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontFamily = JetBrainsMono,
+                                        color = GolocalError
+                                    )
+                                } else {
+                                    OutlinedButton(
+                                        onClick = { adminViewModel.loadEmergencyContactForSos(sos.userId) }
+                                    ) {
+                                        Text("Load Private SOS Contact")
+                                    }
+                                }
                                 if (sos.status != "resolved") {
                                     Button(
                                         onClick = { adminViewModel.resolveEmergency(sos.id, "resolved") },
