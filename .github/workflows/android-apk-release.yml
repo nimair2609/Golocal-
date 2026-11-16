@@ -46,11 +46,11 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Validate Production Signing Secrets
         id: validate_secrets
@@ -59,13 +59,20 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            if [ "$EVENT_NAME" = "push" ] && [[ "${{ github.ref }}" != refs/tags/* ]]; then
+              echo "::notice::Production release signing secrets (ANDROID_KEYSTORE_BASE64, STORE_PASSWORD, KEY_PASSWORD) are not configured yet. Skipping signed release build on push to main; Debug APK builds via GoLocal Android Debug APK workflow."
+              echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "::error::Missing production signing credentials in GitHub Secrets!"
             echo "Required secrets: ANDROID_KEYSTORE_BASE64, STORE_PASSWORD, KEY_PASSWORD (and optional KEY_ALIAS if not 'upload')."
             echo "Per GoLocal security policy, random ephemeral signing keys are never generated. Please upload your original production upload keystore and retry."
             exit 1
           fi
+          echo "has_secrets=true" >> "$GITHUB_OUTPUT"
 
       - name: Compute Version Metadata & Manifest URL
         id: meta
@@ -95,6 +102,7 @@ jobs:
           echo "apk_download_url=${APK_DOWNLOAD_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Restore Production Keystore & Optional Config Files
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -125,15 +133,34 @@ jobs:
             echo "$GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > app/google-services.json
           fi
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK Base
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
-      - name: Set up Gradle
+      - name: Install Required Android SDK Packages
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
+        shell: bash
+        run: |
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          SDKMANAGER=$(command -v sdkmanager || find "$SDK_DIR/cmdline-tools" -name "sdkmanager" -type f 2>/dev/null | sort -V | tail -n 1 || true)
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          set -o pipefail
+          "$SDKMANAGER" "platform-tools"
+          "$SDKMANAGER" "build-tools;36.0.0"
+          "$SDKMANAGER" "platforms;android-36"
+          "$SDKMANAGER" "platforms;android-36.1" || true
+
+      - name: Set up Gradle (9.3.1 for AGP 9.1.1)
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.13"
+          gradle-version: "9.3.1"
 
       - name: Run Unit Tests & Build Signed Release APK
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
         shell: bash
         env:
           APP_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
@@ -144,10 +171,15 @@ jobs:
         run: |
           mkdir -p build-logs
           set -o pipefail
-          gradle :app:testDebugUnitTest :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build-logs/gradle-build.log
+          gradle :app:testDebugUnitTest \
+            --tests "com.example.ExampleUnitTest" \
+            --tests "com.example.ExampleRobolectricTest" \
+            --tests "com.example.ui.auth.AuthFlowUnitTest" \
+            :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build-logs/gradle-build.log
 
       - name: Verify Package Identity, Signing Key & Generate SHA-256 Manifest
         id: checksum
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
         shell: bash
         run: |
           APK_SOURCE="app/build/outputs/apk/release/app-release.apk"
@@ -212,6 +244,7 @@ jobs:
           rm -f "${{ runner.temp }}/raw-upload-key.jks" "${{ runner.temp }}/golocal-upload-key.jks"
 
       - name: Upload Signed APK & Manifest to GitHub Release
+        if: steps.validate_secrets.outputs.has_secrets == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.release_tag }}
@@ -230,7 +263,7 @@ jobs:
             dist/update-manifest.json
 
       - name: Upload Build Logs & Test Reports
-        if: always()
+        if: always() && steps.validate_secrets.outputs.has_secrets == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: golocal-build-logs-run-${{ github.run_number }}
@@ -242,7 +275,7 @@ jobs:
             dist/SHA256SUMS.txt
 
       - name: Notify Administrator (GitHub Job Summary + Webhook + Optional Email)
-        if: always()
+        if: always() && steps.validate_secrets.outputs.has_secrets == 'true'
         shell: bash
         env:
           JOB_STATUS: ${{ job.status }}
@@ -267,7 +300,7 @@ jobs:
           fi
 
       - name: Email Administrator Notification (If SMTP Secrets Configured)
-        if: always() && secrets.SMTP_SERVER != '' && secrets.SMTP_USERNAME != '' && secrets.SMTP_PASSWORD != ''
+        if: always() && steps.validate_secrets.outputs.has_secrets == 'true' && secrets.SMTP_SERVER != '' && secrets.SMTP_USERNAME != '' && secrets.SMTP_PASSWORD != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}

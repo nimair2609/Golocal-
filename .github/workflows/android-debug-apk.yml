@@ -71,19 +71,20 @@ jobs:
             if [ -n "$LATEST_BT36" ]; then
               "$SDKMANAGER" "$LATEST_BT36"
             else
-              echo "::error::No valid Android 36 build-tools package found."
-              exit 1
+              "$SDKMANAGER" "build-tools;36.0.0"
             fi
           fi
 
           if grep -qE '^\s*platforms;android-36(\s|\|)' "$SDK_CATALOG_FILE"; then
             "$SDKMANAGER" "platforms;android-36"
+          else
+            "$SDKMANAGER" "platforms;android-36" || true
           fi
 
           if grep -qE '^\s*platforms;android-36\.1(\s|\|)' "$SDK_CATALOG_FILE"; then
             "$SDKMANAGER" "platforms;android-36.1"
           else
-            echo "Note: android-36.1 not listed separately; checking android-36."
+            "$SDKMANAGER" "platforms;android-36.1" || true
           fi
 
           if [ ! -d "$SDK_DIR/platform-tools" ]; then
