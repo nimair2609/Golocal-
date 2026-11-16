@@ -37,7 +37,7 @@ class GolocalRepository(
 
     private fun requireUserId(): String {
         return auth.currentUser?.uid
-            ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
+            ?: throw IllegalStateException("User must be signed in before accessing Firestore.")
     }
 
     private fun <T> safeQueryFlow(
@@ -70,12 +70,14 @@ class GolocalRepository(
     suspend fun ensureUserAccount(
         fullName: String,
         email: String,
-        photoUrl: String
+        photoUrl: String,
+        phoneNumber: String = ""
     ): Result<UserAccount> = runCatching {
         val uid = requireUserId()
         val safeFullName = fullName.trim().ifBlank { "GoLocal User" }.take(100)
         val safeEmail = email.trim().take(150)
         val safePhotoUrl = photoUrl.trim().take(500)
+        val safePhone = phoneNumber.trim().take(25)
 
         AuthDiagnostics.logStage(
             stage = AuthStage.FIRESTORE_ACCOUNT_CHECK,
@@ -108,6 +110,29 @@ class GolocalRepository(
                 flow = "firestore_account",
                 detail = "Existing user record preserved"
             )
+            var existingAccount = existing.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            if (safePhone.isNotBlank() && existingAccount != null && existingAccount.phone.isBlank()) {
+                try {
+                    userRef.update(
+                        mapOf(
+                            "phone" to safePhone,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                    existingAccount = existingAccount.copy(phone = safePhone)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val code = (e as? FirebaseFirestoreException)?.code?.name
+                    AuthDiagnostics.logWarning(
+                        stage = AuthStage.FIRESTORE_ACCOUNT_EXISTS,
+                        flow = "firestore_account",
+                        exceptionType = e::class.java.simpleName,
+                        firebaseErrorCode = code,
+                        detail = "Optional verified phone backfill skipped softly"
+                    )
+                }
+            }
             // Ensure companion customer_profiles/{uid} exists if a prior partial setup missed it
             try {
                 if (!custRef.get().await().exists()) {
@@ -136,12 +161,13 @@ class GolocalRepository(
                     detail = "Optional customer profile check failed softly"
                 )
             }
-            existing.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            existingAccount
                 ?: UserAccount(
                     id = uid,
                     userId = uid,
                     fullName = safeFullName,
                     email = safeEmail,
+                    phone = safePhone,
                     photoUrl = safePhotoUrl
                 )
         } else {
@@ -150,6 +176,7 @@ class GolocalRepository(
                 userId = uid,
                 fullName = safeFullName,
                 email = safeEmail,
+                phone = safePhone,
                 photoUrl = safePhotoUrl,
                 role = "customer",
                 preferredLanguage = "en",
@@ -194,6 +221,14 @@ class GolocalRepository(
             }
             newAccount
         }
+    }
+
+    suspend fun syncVerifiedPhoneOnAccount(verifiedPhone: String): Result<Unit> {
+        val safePhone = verifiedPhone.trim().take(25)
+        if (safePhone.isBlank()) {
+            return Result.failure(IllegalArgumentException("Verified phone number cannot be blank."))
+        }
+        return updateUserPreferences(phone = safePhone)
     }
 
     fun observeUserAccount(uid: String): Flow<UserAccount?> =

@@ -44,7 +44,8 @@ import java.util.Calendar
 fun RiderRegistrationAndVerificationGate(
     existingProfile: DriverProfile?,
     displayName: String,
-    driverViewModel: DriverViewModel
+    driverViewModel: DriverViewModel,
+    verifiedPhone: String = ""
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -55,7 +56,9 @@ fun RiderRegistrationAndVerificationGate(
     }
 
     var legalName by remember(existingProfile?.legalName) { mutableStateOf(existingProfile?.legalName?.ifBlank { displayName } ?: displayName) }
-    var phone by remember(existingProfile?.phone) { mutableStateOf(existingProfile?.phone ?: "") }
+    var phone by remember(existingProfile?.phone, verifiedPhone) {
+        mutableStateOf(existingProfile?.phone?.ifBlank { verifiedPhone } ?: verifiedPhone)
+    }
     var address by remember(existingProfile?.address) { mutableStateOf(existingProfile?.address ?: "") }
     var district by remember(existingProfile?.district) { mutableStateOf(existingProfile?.district?.ifBlank { "Hooghly" } ?: "Hooghly") }
     var block by remember(existingProfile?.block) { mutableStateOf(existingProfile?.block ?: "") }

@@ -393,6 +393,11 @@ fun RiderProfileTab(
             }
         }
 
+        com.example.ui.auth.LinkedPhoneAccountCard(
+            fallbackAccountPhone = profile.phone,
+            onPhoneLinked = sessionViewModel::onPhoneNumberLinked
+        )
+
         SharedAppSettingsAndSignOutSection(
             prefs = prefs,
             sessionViewModel = sessionViewModel,

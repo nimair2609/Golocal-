@@ -62,7 +62,8 @@ fun RiderAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 currentUserId = user.uid,
                 displayName = user.displayName ?: "GoLocal Rider",
                 email = user.email ?: "",
-                photoUrl = user.photoUrl?.toString() ?: ""
+                photoUrl = user.photoUrl?.toString() ?: "",
+                phoneNumber = user.phoneNumber ?: ""
             )
         }
     }
@@ -73,7 +74,8 @@ fun RiderAuthenticatedShell(
     currentUserId: String,
     displayName: String,
     email: String,
-    photoUrl: String
+    photoUrl: String,
+    phoneNumber: String = ""
 ) {
     val sessionViewModel: AppSessionViewModel = viewModel(
         key = "rider_session_$currentUserId",
@@ -87,7 +89,8 @@ fun RiderAuthenticatedShell(
                     currentUserId = currentUserId,
                     userDisplayName = displayName,
                     userEmail = email,
-                    userPhotoUrl = photoUrl
+                    userPhotoUrl = photoUrl,
+                    userPhoneNumber = phoneNumber
                 )
             }
         }
@@ -160,6 +163,7 @@ fun RiderAuthenticatedShell(
                                 RiderRegistrationAndVerificationGate(
                                     existingProfile = profile,
                                     displayName = displayName,
+                                    verifiedPhone = phoneNumber,
                                     driverViewModel = driverViewModel
                                 )
                             }

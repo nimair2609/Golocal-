@@ -61,7 +61,8 @@ fun CustomerAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 currentUserId = user.uid,
                 displayName = user.displayName ?: "GoLocal Passenger",
                 email = user.email ?: "",
-                photoUrl = user.photoUrl?.toString() ?: ""
+                photoUrl = user.photoUrl?.toString() ?: "",
+                phoneNumber = user.phoneNumber ?: ""
             )
         }
     }
@@ -72,7 +73,8 @@ fun CustomerAuthenticatedShell(
     currentUserId: String,
     displayName: String,
     email: String,
-    photoUrl: String
+    photoUrl: String,
+    phoneNumber: String = ""
 ) {
     val sessionViewModel: AppSessionViewModel = viewModel(
         key = "cust_session_$currentUserId",
@@ -86,7 +88,8 @@ fun CustomerAuthenticatedShell(
                     currentUserId = currentUserId,
                     userDisplayName = displayName,
                     userEmail = email,
-                    userPhotoUrl = photoUrl
+                    userPhotoUrl = photoUrl,
+                    userPhoneNumber = phoneNumber
                 )
             }
         }

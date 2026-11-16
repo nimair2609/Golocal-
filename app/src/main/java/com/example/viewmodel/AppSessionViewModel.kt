@@ -44,7 +44,8 @@ class AppSessionViewModel(
     private val currentUserId: String,
     private val userDisplayName: String,
     private val userEmail: String,
-    private val userPhotoUrl: String
+    private val userPhotoUrl: String,
+    private val userPhoneNumber: String = ""
 ) : ViewModel() {
 
     private val _selectedRole = MutableStateFlow(AppRole.CUSTOMER)
@@ -135,7 +136,7 @@ class AppSessionViewModel(
         viewModelScope.launch {
             try {
                 val synced = withTimeoutOrNull(ACCOUNT_SYNC_TIMEOUT_MS) {
-                    repository.ensureUserAccount(userDisplayName, userEmail, userPhotoUrl)
+                    repository.ensureUserAccount(userDisplayName, userEmail, userPhotoUrl, userPhoneNumber)
                         .onSuccess {
                             _isAccountReady.value = true
                             AuthDiagnostics.logStage(
@@ -241,6 +242,19 @@ class AppSessionViewModel(
             } else {
                 r1.exceptionOrNull()?.localizedMessage ?: r2.exceptionOrNull()?.localizedMessage ?: "Failed to save profile"
             }
+        }
+    }
+
+    fun onPhoneNumberLinked(verifiedPhoneE164: String) {
+        viewModelScope.launch {
+            repository.syncVerifiedPhoneOnAccount(verifiedPhoneE164)
+                .onSuccess {
+                    _statusMessage.value = "Verified mobile number $verifiedPhoneE164 linked to your GoLocal account."
+                }
+                .onFailure { err ->
+                    _statusMessage.value = err.localizedMessage
+                        ?: "Mobile number linked for login, but profile sync will retry when online."
+                }
         }
     }
 

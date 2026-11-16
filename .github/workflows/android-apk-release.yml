@@ -144,7 +144,14 @@ jobs:
         shell: bash
         run: |
           SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          SDKMANAGER=$(command -v sdkmanager || find "$SDK_DIR/cmdline-tools" -name "sdkmanager" -type f 2>/dev/null | sort -V | tail -n 1 || true)
+          SDKMANAGER=$(find "$SDK_DIR/cmdline-tools" -name "sdkmanager" -type f 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(command -v sdkmanager || true)
+          fi
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager executable not found."
+            exit 1
+          fi
           set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           set -o pipefail

@@ -209,6 +209,65 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertNotNull(caught)
     }
 
+    @Test
+    fun ensureUserAccount_phoneAuthUserAndLinkingBackfill_respectsRulesAndPreservesAccount() = runBlocking {
+        // 1. Phone-authenticated user (blank email, E.164 phone) creates valid account & profile
+        val phoneUid = signInTestUser("phone_only_${UUID.randomUUID()}@test.com")
+        val repo = GolocalRepository(firestore, auth)
+        val created = withTimeout(TIMEOUT_MS) {
+            repo.ensureUserAccount(
+                fullName = "GoLocal Passenger",
+                email = "",
+                photoUrl = "",
+                phoneNumber = "+919876543210"
+            ).getOrThrow()
+        }
+        assertEquals(phoneUid, created.userId)
+        assertEquals("+919876543210", created.phone)
+
+        // Returning login preserves customized name & role
+        withTimeout(TIMEOUT_MS) {
+            repo.updateUserPreferences(fullName = "Verified Mobile Rider").getOrThrow()
+        }
+        val returning = withTimeout(TIMEOUT_MS) {
+            repo.ensureUserAccount(
+                fullName = "GoLocal Passenger",
+                email = "",
+                photoUrl = "",
+                phoneNumber = "+919876543210"
+            ).getOrThrow()
+        }
+        assertEquals("Verified Mobile Rider", returning.fullName)
+        assertEquals("+919876543210", returning.phone)
+
+        // 2. Google-only user who later links a mobile number gets phone backfilled cleanly on same UID
+        val googleUid = signInTestUser("google_link_${UUID.randomUUID()}@test.com")
+        val googleRepo = GolocalRepository(firestore, auth)
+        val initialGoogle = withTimeout(TIMEOUT_MS) {
+            googleRepo.ensureUserAccount(
+                fullName = "Google User",
+                email = "google_user@test.com",
+                photoUrl = "",
+                phoneNumber = ""
+            ).getOrThrow()
+        }
+        assertEquals("", initialGoogle.phone)
+
+        withTimeout(TIMEOUT_MS) {
+            googleRepo.syncVerifiedPhoneOnAccount("+919811112222").getOrThrow()
+        }
+        val afterLink = withTimeout(TIMEOUT_MS) {
+            googleRepo.ensureUserAccount(
+                fullName = "Google User",
+                email = "google_user@test.com",
+                photoUrl = "",
+                phoneNumber = "+919811112222"
+            ).getOrThrow()
+        }
+        assertEquals(googleUid, afterLink.userId)
+        assertEquals("+919811112222", afterLink.phone)
+    }
+
     private companion object {
         const val TIMEOUT_MS = 5000L
         const val FLOW_TIMEOUT_MS = 4000L

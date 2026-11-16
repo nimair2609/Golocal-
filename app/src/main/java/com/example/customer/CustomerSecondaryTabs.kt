@@ -402,7 +402,17 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Personal & Emergency Info", style = MaterialTheme.typography.titleSmall)
-                Text("Account Email: ${account?.email ?: "Google Authenticated"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val emailText = account?.email?.takeIf { it.isNotBlank() }
+                val phoneText = account?.phone?.takeIf { it.isNotBlank() }
+                Text(
+                    text = when {
+                        emailText != null -> "Account Email: $emailText"
+                        phoneText != null -> "Mobile OTP Account: $phoneText"
+                        else -> "Authenticated GoLocal Account"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 OutlinedTextField(value = fullName, onValueChange = { fullName = it }, label = { Text("Full Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Mobile Number") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(value = homeAddress, onValueChange = { homeAddress = it }, label = { Text("Saved Home Address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -428,6 +438,11 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
                 }
             }
         }
+
+        com.example.ui.auth.LinkedPhoneAccountCard(
+            fallbackAccountPhone = account?.phone ?: "",
+            onPhoneLinked = sessionViewModel::onPhoneNumberLinked
+        )
 
         SharedAppSettingsAndSignOutSection(
             prefs = prefs,

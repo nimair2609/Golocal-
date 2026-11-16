@@ -166,7 +166,8 @@ fun GolocalRoleSplashScreen(
 @Composable
 fun RoleAuthScreen(
     mode: ExperienceMode,
-    onAuthSuccess: () -> Unit
+    onAuthSuccess: () -> Unit,
+    phoneControllerFactory: ((kotlinx.coroutines.CoroutineScope, (String) -> Unit) -> com.example.ui.auth.PhoneAuthController)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -174,6 +175,7 @@ fun RoleAuthScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var consentAccepted by remember { mutableStateOf(true) }
+    var showMobileAuth by remember { mutableStateOf(false) }
 
     LaunchedEffect(mode) {
         attemptAutoSignIn(
@@ -295,132 +297,190 @@ fun RoleAuthScreen(
                     modifier = Modifier.padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text(
-                        text = mode.headline,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = mode.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (showMobileAuth && mode != ExperienceMode.ADMIN) {
+                        com.example.ui.auth.PhoneAuthInlineCard(
+                            onAuthSuccess = onAuthSuccess,
+                            onBackToMethods = { showMobileAuth = false },
+                            controllerFactory = phoneControllerFactory
+                        )
+                    } else {
+                        Text(
+                            text = mode.headline,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = mode.description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        when (mode) {
-                            ExperienceMode.CUSTOMER -> {
-                                AuthBadge(Icons.Filled.VerifiedUser, "Verified Drivers", Modifier.weight(1f))
-                                AuthBadge(Icons.Filled.Shield, "SOS & Trip PIN", Modifier.weight(1f))
-                            }
-                            ExperienceMode.RIDER -> {
-                                AuthBadge(Icons.Filled.CurrencyRupee, "Propose Fares", Modifier.weight(1f))
-                                AuthBadge(Icons.Filled.Badge, "KYC Verified", Modifier.weight(1f))
-                            }
-                            ExperienceMode.ADMIN -> {
-                                AuthBadge(Icons.Filled.Lock, "Strict RBAC", Modifier.weight(1f))
-                                AuthBadge(Icons.Filled.History, "Audit Trail", Modifier.weight(1f))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            when (mode) {
+                                ExperienceMode.CUSTOMER -> {
+                                    AuthBadge(Icons.Filled.VerifiedUser, "Verified Drivers", Modifier.weight(1f))
+                                    AuthBadge(Icons.Filled.Shield, "SOS & Trip PIN", Modifier.weight(1f))
+                                }
+                                ExperienceMode.RIDER -> {
+                                    AuthBadge(Icons.Filled.CurrencyRupee, "Propose Fares", Modifier.weight(1f))
+                                    AuthBadge(Icons.Filled.Badge, "KYC Verified", Modifier.weight(1f))
+                                }
+                                ExperienceMode.ADMIN -> {
+                                    AuthBadge(Icons.Filled.Lock, "Strict RBAC", Modifier.weight(1f))
+                                    AuthBadge(Icons.Filled.History, "Audit Trail", Modifier.weight(1f))
+                                }
                             }
                         }
-                    }
 
-                    if (mode == ExperienceMode.CUSTOMER) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        if (mode == ExperienceMode.CUSTOMER) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { consentAccepted = !consentAccepted }
+                            ) {
+                                Checkbox(
+                                    checked = consentAccepted,
+                                    onCheckedChange = { consentAccepted = it }
+                                )
+                                Text(
+                                    text = "I accept GoLocal's Privacy Policy & Passenger Safety terms.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        if (!errorMessage.isNullOrBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = errorMessage ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (isLoading) return@Button
+                                if (mode == ExperienceMode.CUSTOMER && !consentAccepted) {
+                                    errorMessage = "Please accept the Privacy Policy before continuing."
+                                    return@Button
+                                }
+                                errorMessage = null
+                                isLoading = true
+                                onGoogleSignInClicked(
+                                    context = context,
+                                    credentialManager = credentialManager,
+                                    onAuthSuccess = {
+                                        isLoading = false
+                                        onAuthSuccess()
+                                    },
+                                    onAuthError = { msg ->
+                                        isLoading = false
+                                        errorMessage = msg
+                                    },
+                                    scope = scope,
+                                    onAuthCancelled = {
+                                        isLoading = false
+                                    }
+                                )
+                            },
+                            enabled = !isLoading,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { consentAccepted = !consentAccepted }
+                                .height(54.dp)
+                                .testTag("google_sign_in_button"),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (mode == ExperienceMode.ADMIN) GolocalDeepNavy else GolocalPrimaryBlue,
+                                contentColor = GolocalPureWhite
+                            )
                         ) {
-                            Checkbox(
-                                checked = consentAccepted,
-                                onCheckedChange = { consentAccepted = it }
-                            )
-                            Text(
-                                text = "I accept GoLocal's Privacy Policy & Passenger Safety terms.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    if (!errorMessage.isNullOrBlank()) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                text = errorMessage ?: "",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            if (isLoading) return@Button
-                            if (mode == ExperienceMode.CUSTOMER && !consentAccepted) {
-                                errorMessage = "Please accept the Privacy Policy before continuing."
-                                return@Button
+                            if (isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    color = GolocalPureWhite,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.Lock,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = mode.buttonLabel,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
                             }
-                            errorMessage = null
-                            isLoading = true
-                            onGoogleSignInClicked(
-                                context = context,
-                                credentialManager = credentialManager,
-                                onAuthSuccess = {
-                                    isLoading = false
-                                    onAuthSuccess()
-                                },
-                                onAuthError = { msg ->
-                                    isLoading = false
-                                    errorMessage = msg
-                                },
-                                scope = scope,
-                                onAuthCancelled = {
-                                    isLoading = false
-                                }
-                            )
-                        },
-                        enabled = !isLoading,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp)
-                            .testTag("google_sign_in_button"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (mode == ExperienceMode.ADMIN) GolocalDeepNavy else GolocalPrimaryBlue,
-                            contentColor = GolocalPureWhite
-                        )
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                color = GolocalPureWhite,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Filled.Lock,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = mode.buttonLabel,
-                                style = MaterialTheme.typography.labelLarge
-                            )
                         }
-                    }
 
-                    Text(
-                        text = mode.footerNotice,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                        if (mode != ExperienceMode.ADMIN) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                HorizontalDivider(modifier = Modifier.weight(1f))
+                                Text(
+                                    text = "OR",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                HorizontalDivider(modifier = Modifier.weight(1f))
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    if (isLoading) return@OutlinedButton
+                                    if (mode == ExperienceMode.CUSTOMER && !consentAccepted) {
+                                        errorMessage = "Please accept the Privacy Policy before continuing."
+                                        return@OutlinedButton
+                                    }
+                                    errorMessage = null
+                                    showMobileAuth = true
+                                },
+                                enabled = !isLoading,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(54.dp)
+                                    .testTag("mobile_sign_in_button"),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = GolocalLightBlue.copy(alpha = 0.28f),
+                                    contentColor = GolocalPrimaryBlue
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(1.5.dp, GolocalPrimaryBlue)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.PhoneAndroid,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Continue with Mobile Number",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = mode.footerNotice,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }

@@ -7,6 +7,12 @@ enum class AuthStage {
     AUTH_INIT,
     GOOGLE_CREDENTIAL_REQUEST,
     GOOGLE_CREDENTIAL_RECEIVED,
+    PHONE_OTP_REQUESTED,
+    PHONE_OTP_SENT,
+    PHONE_OTP_VERIFYING,
+    PHONE_OTP_VERIFIED,
+    PHONE_LINK_STARTED,
+    PHONE_LINK_SUCCESS,
     FIREBASE_SIGN_IN_STARTED,
     FIREBASE_SIGN_IN_SUCCESS,
     FIRESTORE_ACCOUNT_CHECK,
@@ -34,6 +40,15 @@ object AuthDiagnostics {
 
     private val recordedEvents: MutableList<AuthDiagnosticEvent> =
         Collections.synchronizedList(mutableListOf())
+
+    fun maskPhoneNumber(rawPhone: String): String {
+        val cleaned = rawPhone.trim()
+        if (cleaned.length <= 4) return "****"
+        val prefix = if (cleaned.startsWith("+") && cleaned.length > 6) cleaned.take(3) else ""
+        val suffix = cleaned.takeLast(4)
+        val maskLen = (cleaned.length - prefix.length - suffix.length).coerceAtLeast(4)
+        return "$prefix${"*".repeat(maskLen)}$suffix"
+    }
 
     fun logStage(
         stage: AuthStage,
@@ -113,6 +128,7 @@ object AuthDiagnostics {
         return raw
             .replace(Regex("eyJ[A-Za-z0-9_\\-]+=*\\.[A-Za-z0-9_\\-]+=*\\.[A-Za-z0-9_\\-]+=*"), "[REDACTED_TOKEN]")
             .replace(Regex("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"), "[REDACTED_EMAIL]")
+            .replace(Regex("(?:\\+\\d{1,3}[\\s\\-]?)?\\d{8,14}"), "[REDACTED_PHONE]")
             .take(180)
     }
 }
