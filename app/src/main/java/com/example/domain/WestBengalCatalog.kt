@@ -13,6 +13,19 @@ data class WestBengalPlace(
 
 object WestBengalCatalog {
     val places: List<WestBengalPlace> = listOf(
+        // Default Launch Cluster: Borai (PIN 721457), Mohanpur Block, Paschim Medinipur
+        WestBengalPlace("borai_721457", "Borai Market & Stand (PIN 721457)", "বড়াই বাজার ও স্ট্যান্ড (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8160, 87.3703),
+        WestBengalPlace("mohanpur_block", "Mohanpur Block HQ & Market", "মোহনপুর ব্লক ও বাজার", "Paschim Medinipur", "Mohanpur", "town", 21.8439, 87.4191),
+        WestBengalPlace("gholai_721457", "Gholai Village (PIN 721457)", "ঘোলাই গ্রাম (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8050, 87.3590),
+        WestBengalPlace("paikbar_721457", "Paikbar Village (PIN 721457)", "পাইকবাড় গ্রাম (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8255, 87.3845),
+        WestBengalPlace("agarara_721457", "Agarara More (PIN 721457)", "আগরআড়া মোড় (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8325, 87.3520),
+        WestBengalPlace("jaysankhapur_721457", "Jaysankhapur Village", "জয়শঙ্খপুর গ্রাম", "Paschim Medinipur", "Mohanpur", "village", 21.7975, 87.3860),
+        WestBengalPlace("nilda_mohanpur", "Nilda Gram Panchayat", "নিলদা গ্রাম পঞ্চায়েত", "Paschim Medinipur", "Mohanpur", "village", 21.8552, 87.3920),
+        WestBengalPlace("dantan_stn", "Dantan Railway Station & Town", "দাঁতন রেল স্টেশন ও শহর", "Paschim Medinipur", "Dantan I", "railway_station", 21.9504, 87.2693),
+        WestBengalPlace("egra_bus_stand", "Egra Central Bus Stand", "এগরা বাস স্ট্যান্ড", "Purba Medinipur", "Egra I", "bus_stand", 21.9001, 87.5378),
+        WestBengalPlace("belda_stn", "Belda Railway Station", "বেলদা রেল স্টেশন", "Paschim Medinipur", "Narayangarh", "railway_station", 22.0835, 87.3452),
+        WestBengalPlace("contai_bus", "Contai (Kanthi) Central Bus Stand", "কাঁথি সেন্ট্রাল বাস স্ট্যান্ড", "Purba Medinipur", "Contai I", "bus_stand", 21.7781, 87.7517),
+        // Wider West Bengal Coverage
         WestBengalPlace("bandel_jn", "Bandel Junction Railway Station", "ব্যান্ডেল জংশন রেল স্টেশন", "Hooghly", "Chinsurah-Mogra", "railway_station", 22.9238, 88.3788),
         WestBengalPlace("chinsurah_ma", "Chinsurah Gharimore Market", "চুঁচুড়া ঘড়িমোড় বাজার", "Hooghly", "Chinsurah-Mogra", "market", 22.8902, 88.3937),
         WestBengalPlace("imambara_hosp", "Hooghly Imambara District Hospital", "ইমামবাড়া জেলা হাসপাতাল", "Hooghly", "Chinsurah-Mogra", "hospital", 22.9041, 88.3976),
@@ -54,7 +67,8 @@ object WestBengalCatalog {
                 place.nameBn.contains(q) ||
                 place.district.lowercase().contains(q) ||
                 place.block.lowercase().contains(q) ||
-                place.category.lowercase().contains(q)
+                place.category.lowercase().contains(q) ||
+                (q.contains("721457") && place.block.equals("Mohanpur", ignoreCase = true))
             catMatch && textMatch
         }
     }

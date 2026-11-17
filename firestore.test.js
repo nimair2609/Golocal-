@@ -830,3 +830,123 @@ test("Private Bus Governance: unapproved tariff blocks customer booking; approve
   );
 });
 
+test("Operations Staff RBAC: strict separation from Owner Admin and PII isolation, while permitting live dispatch assistance", async () => {
+  const OPS_UID = "ops_staff_borai";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const adminDb = ctx.firestore();
+    await adminDb.collection("operations_staff").doc(OPS_UID).set({
+      userId: OPS_UID,
+      displayName: "Mohanpur Ops Desk",
+      phoneOrEmail: "+919800099111",
+      isActive: true,
+      assignedDistrict: "Paschim Medinipur",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await adminDb.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
+      userId: CUSTOMER_UID,
+      fullName: "Alice Sen",
+      phone: "+919800000001",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await adminDb.collection("driver_directory").doc(DRIVER_UID).set({
+      driverId: DRIVER_UID,
+      displayName: "Rahul Das",
+      vehicleCategory: "toto",
+      maskedPlate: "WB34****1234",
+      district: "Paschim Medinipur",
+      block: "Mohanpur",
+      verificationStatus: "verified",
+      isOnline: true,
+      currentLat: 21.8160,
+      currentLng: 87.3703,
+      updatedAt: nowTs(),
+    });
+    await adminDb.collection("bookings").doc("borai_booking_1").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice Sen",
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Borai Market (721457)",
+      pickupDistrict: "Paschim Medinipur",
+      pickupLat: 21.8160,
+      pickupLng: 87.3703,
+      destinationLabel: "Mohanpur Block HQ",
+      destinationDistrict: "Paschim Medinipur",
+      destinationLat: 21.8439,
+      destinationLng: 87.4191,
+      distanceKm: 6.2,
+      estimatedDurationMin: 16,
+      estimatedFareInr: 72,
+      minPermittedFareInr: 60,
+      maxPermittedFareInr: 95,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "searching",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  const ownerDb = testEnv.authenticatedContext("owner_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const opsDb = testEnv.authenticatedContext(OPS_UID, { phone_number: "+919800099111" }).firestore();
+
+  // Owner CAN configure Borai service_areas & polygon zones
+  await assertSucceeds(
+    ownerDb.collection("service_areas").doc("borai_721457_zone").set({
+      name: "Borai & Mohanpur Launch Zone",
+      district: "Paschim Medinipur",
+      block: "Mohanpur",
+      pincode: "721457",
+      zoneType: "village",
+      lat: 21.8160,
+      lng: 87.3703,
+      centerLat: 21.8160,
+      centerLng: 87.3703,
+      radiusKm: 12.0,
+      villages: ["Borai", "Mohanpur", "Gholai", "Paikbar"],
+      pickupEnabled: true,
+      dropoffEnabled: true,
+      supportedVehicleCategories: ["toto", "auto", "bike", "cab"],
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Ops CANNOT modify service areas, fare configs, platform settings, or escalate to Owner Admin
+  await assertFails(
+    opsDb.collection("service_areas").doc("borai_721457_zone").update({
+      isActive: false,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(opsDb.collection("admins").doc(OPS_UID).set({ userId: OPS_UID, email: "x@y.com", createdAt: nowTs() }));
+  await assertFails(opsDb.collection("operations_staff").doc("other_ops").set({ userId: "other_ops", displayName: "Rogue", isActive: true, createdAt: nowTs(), updatedAt: nowTs() }));
+  await assertFails(opsDb.collection("users").doc(CUSTOMER_UID).get());
+  await assertFails(opsDb.collection("platform_settings").doc("global").set({ helplineNumber: "+911234", updatedAt: nowTs() }));
+
+  // Ops CAN monitor searching/active bookings & verified driver directory and assign a verified driver
+  await assertSucceeds(opsDb.collection("bookings").doc("borai_booking_1").get());
+  await assertSucceeds(opsDb.collection("driver_directory").doc(DRIVER_UID).get());
+  await assertSucceeds(
+    opsDb.collection("bookings").doc("borai_booking_1").update({
+      status: "assigned",
+      assignedDriverId: DRIVER_UID,
+      assignedDriverName: "Rahul Das",
+      assignedVehicleLabel: "toto - WB34****1234",
+      agreedFareInr: 72,
+      tripPin: "4821",
+      assignedByOpsUid: OPS_UID,
+      opsAssignmentNote: "Dispatched from Borai stand",
+      updatedAt: nowTs(),
+    })
+  );
+});
+
+

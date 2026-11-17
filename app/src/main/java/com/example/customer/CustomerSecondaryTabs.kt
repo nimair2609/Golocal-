@@ -524,8 +524,7 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
         com.example.ui.auth.AccountSecurityLinkingCard(
             fallbackAccountPhone = verifiedPhone,
             fallbackAccountEmail = invoiceEmail,
-            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) },
-            onGoogleLinked = { sessionViewModel.onAccountCredentialLinked(null) }
+            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) }
         )
 
         // Private Emergency Contact Card (Protected; never exposed to drivers or public profiles)

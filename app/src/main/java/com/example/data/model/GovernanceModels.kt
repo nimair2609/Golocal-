@@ -71,6 +71,9 @@ data class DisputeRecord(
     val status: String = "open", // open, under_review, resolved_refund, resolved_closed
     val adminResolutionNote: String = "",
     val resolvedBy: String = "",
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val locationLabel: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )

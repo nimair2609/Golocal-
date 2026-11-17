@@ -25,22 +25,27 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.customer.StructuredCancellationDialog
+import com.example.data.map.RouteResult
 import com.example.data.model.Booking
 import com.example.data.model.CommissionRecord
 import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.DriverDocumentItem
 import com.example.data.model.DriverProfile
+import com.example.data.model.GeoPointDto
+import com.example.data.tracking.LocationTelemetryState
+import com.example.domain.BoraiLaunchConfig
 import com.example.ui.auth.signOut
 import com.example.ui.components.GoLocalLogoMark
+import com.example.ui.components.GoLocalOsmMapCard
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalMetricCard
 import com.example.ui.components.GolocalStatusBadge
-import com.example.ui.components.InteractiveBengalMapCanvas
 import com.example.ui.theme.*
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.DriverViewModel
 import com.example.viewmodel.GovernanceViewModel
 import java.util.Calendar
+import java.util.Locale
 
 @Composable
 fun RiderRegistrationAndVerificationGate(
@@ -62,7 +67,9 @@ fun RiderRegistrationAndVerificationGate(
         mutableStateOf(existingProfile?.phone?.ifBlank { verifiedPhone } ?: verifiedPhone)
     }
     var address by remember(existingProfile?.address) { mutableStateOf(existingProfile?.address ?: "") }
-    var district by remember(existingProfile?.district) { mutableStateOf(existingProfile?.district?.ifBlank { "Hooghly" } ?: "Hooghly") }
+    var district by remember(existingProfile?.district) {
+        mutableStateOf(existingProfile?.district?.ifBlank { BoraiLaunchConfig.DEFAULT_DISTRICT } ?: BoraiLaunchConfig.DEFAULT_DISTRICT)
+    }
     var block by remember(existingProfile?.block) { mutableStateOf(existingProfile?.block ?: "") }
     var vehicleCategory by remember(existingProfile?.vehicleCategory) { mutableStateOf(existingProfile?.vehicleCategory ?: "toto") }
     var vehicleModel by remember(existingProfile?.vehicleModel) { mutableStateOf(existingProfile?.vehicleModel ?: "") }
@@ -108,7 +115,10 @@ fun RiderRegistrationAndVerificationGate(
                     Text("GoLocal Rider", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            OutlinedButton(onClick = { signOut(scope, context = context) }) {
+            OutlinedButton(onClick = {
+                driverViewModel.stopAllTrackingForSignOut()
+                signOut(scope, context = context)
+            }) {
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Sign Out")
@@ -245,9 +255,17 @@ fun RiderHomeDashboardTab(
 ) {
     val context = LocalContext.current
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
+    val telemetry by driverViewModel.telemetryState.collectAsStateWithLifecycle()
+    val activeTripRoute by driverViewModel.activeTripRoute.collectAsStateWithLifecycle()
+
+    LaunchedEffect(context) {
+        driverViewModel.attachContext(context)
+    }
+
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
+        driverViewModel.refreshLocationPermission(context)
         if (perms.values.any { it }) {
             sessionViewModel.detectDeviceLocation(context)
         }
@@ -272,8 +290,8 @@ fun RiderHomeDashboardTab(
         it.status in setOf("assigned", "arriving", "arrived", "in_progress")
     }
 
-    val currentLat = gps.lat ?: 22.9041
-    val currentLng = gps.lng ?: 88.3976
+    val currentLat = if (telemetry.hasRealFix) telemetry.lastLat else (gps.lat ?: BoraiLaunchConfig.DEFAULT_LAT)
+    val currentLng = if (telemetry.hasRealFix) telemetry.lastLng else (gps.lng ?: BoraiLaunchConfig.DEFAULT_LNG)
 
     Column(
         modifier = Modifier
@@ -308,7 +326,7 @@ fun RiderHomeDashboardTab(
             )
         }
 
-        // Online Status Banner
+        // Online Status & Foreground Location Telemetry Banner
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = if (profile.isOnline) GolocalSuccessContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -316,48 +334,68 @@ fun RiderHomeDashboardTab(
                 .fillMaxWidth()
                 .border(1.dp, if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
         ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (profile.isOnline) Icons.Filled.Check else Icons.Filled.Pause,
-                            contentDescription = null,
-                            tint = GolocalPureWhite
-                        )
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (profile.isOnline) Icons.Filled.Check else Icons.Filled.Pause,
+                                contentDescription = null,
+                                tint = GolocalPureWhite
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = if (profile.isOnline) "You're Online!" else "You're Offline",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Text(
+                                text = telemetry.statusMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    Column {
-                        Text(
-                            text = if (profile.isOnline) "You're Online!" else "You're Offline",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = if (profile.isOnline) "Ready to receive local ride requests" else "Toggle switch to start receiving rides",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    TextButton(
+                        onClick = {
+                            locationLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
+                    ) {
+                        Text(if (!telemetry.permissionGranted) "Allow GPS" else if (gps.isDetecting) "GPS..." else "Sync GPS")
                     }
                 }
-                TextButton(
-                    onClick = {
-                        locationLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION
-                            )
+                if (!telemetry.permissionGranted || telemetry.isGpsSignalLost) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (!telemetry.permissionGranted) GolocalError.copy(alpha = 0.12f) else GolocalWarning.copy(alpha = 0.16f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = if (!telemetry.permissionGranted) {
+                                "Foreground Location Permission required to broadcast live coordinates while Online or on an active trip."
+                            } else {
+                                "GPS signal interrupted — last verified location preserved safely until satellite lock returns."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (!telemetry.permissionGranted) GolocalError else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
-                ) {
-                    Text(if (gps.isDetecting) "GPS..." else "Sync GPS")
                 }
             }
         }
@@ -431,6 +469,8 @@ fun RiderHomeDashboardTab(
                 booking = activeTrip,
                 currentLat = currentLat,
                 currentLng = currentLng,
+                telemetry = telemetry,
+                route = activeTripRoute,
                 onlineSelf = DriverDirectoryEntry(
                     driverId = profile.driverId,
                     displayName = profile.legalName,
@@ -464,13 +504,10 @@ fun RiderHomeDashboardTab(
                 )
             }
         } else {
-            InteractiveBengalMapCanvas(
-                pickupLat = currentLat,
-                pickupLng = currentLng,
-                pickupLabel = gps.label.ifBlank { "${profile.district} Stand" },
-                destLat = currentLat + 0.015,
-                destLng = currentLng + 0.015,
-                destLabel = "Nearby Zone",
+            GoLocalOsmMapCard(
+                centerLat = currentLat,
+                centerLng = currentLng,
+                driverLivePoint = GeoPointDto(currentLat, currentLng),
                 onlineDrivers = if (profile.isOnline) listOf(
                     DriverDirectoryEntry(
                         driverId = profile.driverId,
@@ -480,8 +517,9 @@ fun RiderHomeDashboardTab(
                         currentLng = currentLng
                     )
                 ) else emptyList(),
-                liveTripLocation = null,
-                lowNetworkMode = lowNetworkMode
+                lowNetworkMode = lowNetworkMode,
+                statusBadgeText = if (profile.isOnline) "Partner Duty GPS Active" else "Partner Stand Map (OSM)",
+                height = if (lowNetworkMode) 150.dp else 210.dp
             )
 
             Button(
@@ -535,6 +573,8 @@ private fun ActiveRiderTripExecutionCard(
     booking: Booking,
     currentLat: Double,
     currentLng: Double,
+    telemetry: LocationTelemetryState,
+    route: RouteResult?,
     onlineSelf: DriverDirectoryEntry,
     lowNetworkMode: Boolean,
     onAdvanceState: (nextStatus: String, pin: String) -> Unit,
@@ -555,21 +595,37 @@ private fun ActiveRiderTripExecutionCard(
                 GolocalStatusBadge(label = booking.status.uppercase(), tone = "success")
             }
 
-            InteractiveBengalMapCanvas(
-                pickupLat = booking.pickupLat,
-                pickupLng = booking.pickupLng,
+            GoLocalOsmMapCard(
+                centerLat = currentLat,
+                centerLng = currentLng,
+                pickupPoint = GeoPointDto(booking.pickupLat, booking.pickupLng),
                 pickupLabel = booking.pickupLabel,
-                destLat = booking.destinationLat,
-                destLng = booking.destinationLng,
-                destLabel = booking.destinationLabel,
+                destinationPoint = GeoPointDto(booking.destinationLat, booking.destinationLng),
+                destinationLabel = booking.destinationLabel,
+                driverLivePoint = GeoPointDto(currentLat, currentLng),
                 onlineDrivers = listOf(onlineSelf),
-                liveTripLocation = null,
-                lowNetworkMode = lowNetworkMode
+                routePoints = route?.points.orEmpty(),
+                lowNetworkMode = lowNetworkMode,
+                statusBadgeText = if (booking.status == "in_progress") "Trip Route (OSM)" else "Navigating to Pickup (OSM)",
+                height = if (lowNetworkMode) 150.dp else 225.dp
             )
 
             Text("Passenger: ${booking.customerName}", style = MaterialTheme.typography.titleSmall)
             Text("Route: ${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.bodyMedium)
-            Text("Agreed Fare: ₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${booking.distanceKm} km", fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
+            Text(
+                text = "Agreed Fare: ₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${route?.distanceKm ?: booking.distanceKm} km (~${route?.durationMin ?: booking.estimatedDurationMin} min)",
+                fontFamily = JetBrainsMono,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = if (telemetry.isGpsSignalLost) {
+                    "GPS Signal Lost — holding last coordinates (${String.format(Locale.US, "%.4f", currentLat)}, ${String.format(Locale.US, "%.4f", currentLng)})"
+                } else {
+                    "Customer-visible live GPS: ${String.format(Locale.US, "%.4f", currentLat)}, ${String.format(Locale.US, "%.4f", currentLng)} (${telemetry.accuracyMeters.toInt()}m)"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (telemetry.isGpsSignalLost) GolocalError else GolocalSuccess
+            )
 
             when (booking.status) {
                 "assigned" -> {
@@ -604,13 +660,12 @@ private fun ActiveRiderTripExecutionCard(
                     }
                 }
                 "in_progress" -> {
-                    Text("Live GPS coordinate broadcast active (${String.format("%.4f", currentLat)}, ${String.format("%.4f", currentLng)})", style = MaterialTheme.typography.bodySmall, color = GolocalSuccess)
                     Button(
                         onClick = { onAdvanceState("completed", "") },
                         colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess),
                         modifier = Modifier.fillMaxWidth().testTag("rider_complete_ride_button")
                     ) {
-                        Text("Complete Ride & Settle Fare")
+                        Text("Complete Ride, Settle Fare & Stop GPS")
                     }
                 }
             }

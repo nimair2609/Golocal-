@@ -854,6 +854,9 @@ class GolocalRepository(
             put("familyConsentConfirmed", booking.familyConsentConfirmed)
             put("isRoundTrip", booking.isRoundTrip)
             if (booking.invoiceEmail.isNotBlank()) put("invoiceEmail", booking.invoiceEmail.trim().take(150))
+            if (booking.routeProvider.isNotBlank()) put("routeProvider", booking.routeProvider.trim().take(60))
+            if (booking.pickupZoneId.isNotBlank()) put("pickupZoneId", booking.pickupZoneId.trim().take(128))
+            if (booking.dropoffZoneId.isNotBlank()) put("dropoffZoneId", booking.dropoffZoneId.trim().take(128))
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -1044,7 +1047,14 @@ class GolocalRepository(
         ref.id
     }
 
-    suspend fun submitComplaint(bookingId: String, category: String, description: String): Result<String> = runCatching {
+    suspend fun submitComplaint(
+        bookingId: String,
+        category: String,
+        description: String,
+        lat: Double? = null,
+        lng: Double? = null,
+        locationLabel: String = ""
+    ): Result<String> = runCatching {
         val uid = requireUserId()
         val ref = db.collection("complaints").document()
         val payload = buildMap<String, Any> {
@@ -1053,6 +1063,11 @@ class GolocalRepository(
             put("category", category)
             put("description", description.trim())
             put("status", "open")
+            if (lat != null && lng != null) {
+                put("lat", lat)
+                put("lng", lng)
+            }
+            if (locationLabel.isNotBlank()) put("locationLabel", locationLabel.trim().take(200))
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -1604,26 +1619,13 @@ class GolocalRepository(
     suspend fun adminAddServiceArea(area: ServiceArea): Result<String> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
-        val ref = db.collection("service_areas").document()
+        val ref = if (area.id.isNotBlank()) db.collection("service_areas").document(area.id.trim()) else db.collection("service_areas").document()
         val auditRef = db.collection("audit_logs").document()
         try {
             db.runBatch { batch ->
                 batch.set(
                     ref,
-                    buildMap<String, Any> {
-                        put("name", area.name.trim())
-                        if (area.nameBn.isNotBlank()) put("nameBn", area.nameBn.trim())
-                        put("district", area.district.trim())
-                        if (area.block.isNotBlank()) put("block", area.block.trim())
-                        put("zoneType", area.zoneType)
-                        put("lat", area.lat)
-                        put("lng", area.lng)
-                        put("isActive", area.isActive)
-                        put("parcelApproved", area.parcelApproved)
-                        put("operationalHours", area.operationalHours)
-                        put("createdAt", FieldValue.serverTimestamp())
-                        put("updatedAt", FieldValue.serverTimestamp())
-                    }
+                    buildServiceAreaMap(area, includeCreatedAt = true)
                 )
                 batch.set(
                     auditRef,
@@ -1645,6 +1647,74 @@ class GolocalRepository(
             throw e
         }
         ref.id
+    }
+
+    suspend fun adminUpdateServiceArea(area: ServiceArea): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(area.id.isNotBlank()) { "Service area ID is required for update." }
+        val ref = db.collection("service_areas").document(area.id)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.update(ref, buildServiceAreaMap(area, includeCreatedAt = false))
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "UPDATE_SERVICE_AREA",
+                        "targetCollection" to "service_areas",
+                        "targetId" to area.id,
+                        "summary" to "Updated zone ${area.name} (radius=${area.radiusKm}km, pickup=${area.pickupEnabled}, drop=${area.dropoffEnabled})",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun adminSeedBoraiDefaultZone(): Result<String> {
+        val defaultArea = com.example.domain.BoraiLaunchConfig.defaultZoneTemplate()
+        return adminAddServiceArea(defaultArea)
+    }
+
+    private fun buildServiceAreaMap(area: ServiceArea, includeCreatedAt: Boolean): Map<String, Any> = buildMap {
+        put("name", area.name.trim())
+        if (area.nameBn.isNotBlank()) put("nameBn", area.nameBn.trim())
+        put("district", area.district.trim())
+        if (area.block.isNotBlank()) put("block", area.block.trim())
+        if (area.pincode.isNotBlank()) put("pincode", area.pincode.trim().take(16))
+        put("zoneType", area.zoneType)
+        put("lat", area.lat)
+        put("lng", area.lng)
+        put("centerLat", if (area.centerLat != 0.0) area.centerLat else area.lat)
+        put("centerLng", if (area.centerLng != 0.0) area.centerLng else area.lng)
+        put("radiusKm", area.radiusKm.coerceIn(0.5, 500.0))
+        if (area.polygonPoints.isNotEmpty()) {
+            put("polygonPoints", area.polygonPoints.take(50).map { mapOf("lat" to it.lat, "lng" to it.lng) })
+        }
+        if (area.villages.isNotEmpty()) {
+            put("villages", area.villages.take(100))
+        }
+        put("pickupEnabled", area.pickupEnabled)
+        put("dropoffEnabled", area.dropoffEnabled)
+        if (area.supportedVehicleCategories.isNotEmpty()) {
+            put("supportedVehicleCategories", area.supportedVehicleCategories.take(10))
+        }
+        if (area.availabilityNote.isNotBlank()) {
+            put("availabilityNote", area.availabilityNote.trim().take(240))
+        }
+        put("isActive", area.isActive)
+        put("parcelApproved", area.parcelApproved)
+        put("operationalHours", area.operationalHours)
+        if (includeCreatedAt) put("createdAt", FieldValue.serverTimestamp())
+        put("updatedAt", FieldValue.serverTimestamp())
     }
 
     suspend fun adminUpdateComplaintStatus(complaintId: String, status: String, note: String): Result<Unit> = runCatching {
@@ -2091,5 +2161,193 @@ class GolocalRepository(
             handleFirestoreError(e, OperationType.DELETE, ref.path, auth)
             throw e
         }
+    }
+
+    // --- Role Separation (Owner Admin vs Operations Staff) & Live Ops Dispatch ---
+
+    suspend fun checkPortalRole(uid: String, email: String?): PortalRole {
+        if (checkIsAdmin(uid, email)) {
+            return PortalRole.OWNER_ADMIN
+        }
+        return try {
+            val doc = db.collection("operations_staff").document(uid).get().await()
+            val isActive = doc.getBoolean("isActive") ?: true
+            if (doc.exists() && isActive) PortalRole.OPERATIONS_STAFF else PortalRole.NONE
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            PortalRole.NONE
+        }
+    }
+
+    fun observeOperationsStaff(): Flow<List<OperationsStaffEntry>> =
+        safeQueryFlow("operations_staff", db.collection("operations_staff")) {
+            it.toObject(OperationsStaffEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    fun observeAllDriverDirectoryEntries(): Flow<List<DriverDirectoryEntry>> =
+        safeQueryFlow("driver_directory", db.collection("driver_directory")) {
+            it.toObject(DriverDirectoryEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    fun observeAllTripLocations(): Flow<List<TripLocation>> =
+        safeQueryFlow("trip_locations", db.collection("trip_locations")) {
+            it.toObject(TripLocation::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    suspend fun adminGrantOperationsAccess(
+        targetUid: String,
+        displayName: String,
+        phoneOrEmail: String,
+        assignedDistrict: String = "Paschim Medinipur"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanUid = targetUid.trim()
+        require(cleanUid.isNotBlank()) { "Operations staff Firebase UID is required." }
+        val ref = db.collection("operations_staff").document(cleanUid)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.set(
+                    ref,
+                    buildMap<String, Any> {
+                        put("userId", cleanUid)
+                        put("displayName", displayName.trim().ifBlank { "GoLocal Ops Staff" }.take(100))
+                        if (phoneOrEmail.isNotBlank()) put("phoneOrEmail", phoneOrEmail.trim().take(150))
+                        put("isActive", true)
+                        put("assignedDistrict", assignedDistrict.trim().ifBlank { "Paschim Medinipur" }.take(80))
+                        put("createdAt", FieldValue.serverTimestamp())
+                        put("updatedAt", FieldValue.serverTimestamp())
+                    }
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "GRANT_OPS_ACCESS",
+                        "targetCollection" to "operations_staff",
+                        "targetId" to cleanUid,
+                        "summary" to "Granted Operations Staff role to ${displayName.ifBlank { cleanUid }}",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, ref.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun adminRevokeOperationsAccess(targetUid: String): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanUid = targetUid.trim()
+        val ref = db.collection("operations_staff").document(cleanUid)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.delete(ref)
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "REVOKE_OPS_ACCESS",
+                        "targetCollection" to "operations_staff",
+                        "targetId" to cleanUid,
+                        "summary" to "Revoked Operations Staff role for $cleanUid",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, ref.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun opsAssignDriverToBooking(
+        booking: Booking,
+        driver: DriverDirectoryEntry,
+        note: String = ""
+    ): Result<String> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(booking.status == "searching" || booking.status == "assigned") {
+            "Only searching or pending-dispatch bookings can be assigned by Operations."
+        }
+        require(driver.verificationStatus == "verified") {
+            "Driver ${driver.displayName} must be KYC-verified before assignment."
+        }
+        val tripPin = booking.tripPin.ifBlank { Random.nextInt(1000, 9999).toString() }
+        val lockedFare = if (booking.agreedFareInr > 0.0) booking.agreedFareInr else booking.estimatedFareInr
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val assignmentRef = db.collection("ride_assignments").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+        val vehicleLabel = listOf(driver.vehicleCategory.uppercase(), driver.vehicleModel, driver.maskedPlate)
+            .filter { it.isNotBlank() }.joinToString(" • ")
+
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(bookingRef)
+                val curStatus = snap.getString("status") ?: ""
+                if (curStatus !in listOf("searching", "assigned")) {
+                    throw IllegalStateException("Booking status ($curStatus) cannot be reassigned.")
+                }
+                tx.update(
+                    bookingRef,
+                    buildMap<String, Any> {
+                        put("status", "assigned")
+                        put("assignedDriverId", driver.driverId)
+                        put("assignedDriverName", driver.displayName)
+                        put("assignedVehicleLabel", vehicleLabel)
+                        put("agreedFareInr", lockedFare)
+                        put("tripPin", tripPin)
+                        put("assignedByOpsUid", actorUid)
+                        put("opsAssignmentNote", note.ifBlank { "Assigned by GoLocal Operations Desk" }.take(300))
+                        put("updatedAt", FieldValue.serverTimestamp())
+                    }
+                )
+                val existingAssign = tx.get(assignmentRef)
+                if (!existingAssign.exists()) {
+                    tx.set(
+                        assignmentRef,
+                        mapOf(
+                            "bookingId" to booking.id,
+                            "customerId" to booking.customerId,
+                            "driverId" to driver.driverId,
+                            "lockedFareInr" to lockedFare.coerceAtLeast(1.0),
+                            "status" to "active",
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                tx.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "OPS_ASSIGN_DRIVER",
+                        "targetCollection" to "bookings",
+                        "targetId" to booking.id,
+                        "summary" to "Ops assigned ${driver.displayName} to ${booking.pickupLabel} -> ${booking.destinationLabel}",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, bookingRef.path, auth)
+            throw e
+        }
+        tripPin
     }
 }

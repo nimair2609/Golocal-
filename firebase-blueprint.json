@@ -124,8 +124,18 @@
         "district": { "type": "string" },
         "block": { "type": "string" },
         "zoneType": { "type": "string", "enum": ["railway_station", "bus_stand", "airport", "village", "hospital", "market", "town"] },
+        "pincode": { "type": "string" },
         "lat": { "type": "number" },
         "lng": { "type": "number" },
+        "centerLat": { "type": "number" },
+        "centerLng": { "type": "number" },
+        "radiusKm": { "type": "number" },
+        "polygonPoints": { "type": "array" },
+        "villages": { "type": "array" },
+        "pickupEnabled": { "type": "boolean" },
+        "dropoffEnabled": { "type": "boolean" },
+        "supportedVehicleCategories": { "type": "array" },
+        "availabilityNote": { "type": "string" },
         "isActive": { "type": "boolean" },
         "parcelApproved": { "type": "boolean" },
         "operationalHours": { "type": "string" },
@@ -206,6 +216,11 @@
         "statusHistory": { "type": "array" },
         "customerRating": { "type": "integer" },
         "invoiceEmail": { "type": "string" },
+        "routeProvider": { "type": "string" },
+        "pickupZoneId": { "type": "string" },
+        "dropoffZoneId": { "type": "string" },
+        "assignedByOpsUid": { "type": "string" },
+        "opsAssignmentNote": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -362,6 +377,9 @@
         "description": { "type": "string" },
         "status": { "type": "string", "enum": ["open", "investigating", "resolved"] },
         "resolutionNote": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "locationLabel": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -428,7 +446,7 @@
     },
     "AdminRoleDoc": {
       "title": "AdminRoleDoc",
-      "description": "Authoritative admin allowlist entry",
+      "description": "Authoritative Owner Admin allowlist entry",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -436,6 +454,21 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "email", "createdAt"]
+    },
+    "OperationsStaff": {
+      "title": "OperationsStaff",
+      "description": "Operations Portal staff allowlist (live dispatch & monitoring without Owner Admin permissions)",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "phoneOrEmail": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "assignedDistrict": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "isActive", "createdAt", "updatedAt"]
     },
     "PlatformSettings": {
       "title": "PlatformSettings",
@@ -656,7 +689,8 @@
     "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/AppNotification" }, "description": "User notifications" },
     "/support_requests/{requestId}": { "schema": { "$ref": "#/entities/SupportRequest" }, "description": "Support, privacy, and deletion requests" },
     "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Immutable admin audit logs" },
-    "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Admin role documents" },
+    "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Owner Admin role documents" },
+    "/operations_staff/{staffUid}": { "schema": { "$ref": "#/entities/OperationsStaff" }, "description": "Operations Portal staff allowlist" },
     "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" }
   }
 }

@@ -27,7 +27,8 @@ import com.example.viewmodel.GovernanceViewModel
 @Composable
 fun AdminBookingsModule(
     adminViewModel: AdminViewModel,
-    governanceViewModel: GovernanceViewModel? = null
+    governanceViewModel: GovernanceViewModel? = null,
+    portalRole: com.example.data.model.PortalRole = com.example.data.model.PortalRole.OWNER_ADMIN
 ) {
     val bookings by adminViewModel.bookings.collectAsStateWithLifecycle()
     val drivers by adminViewModel.drivers.collectAsStateWithLifecycle()
@@ -162,22 +163,24 @@ fun AdminBookingsModule(
                                     GolocalStatusBadge(label = flag.severity.uppercase(), tone = if (flag.severity == "high") "error" else "warning")
                                 }
                                 Text(flag.reasonSummary, style = MaterialTheme.typography.bodySmall)
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (flag.targetRole == "driver" || flag.targetRole == "pair") {
-                                        OutlinedButton(onClick = {
-                                            governanceViewModel?.adminReviewDriverKyc(
-                                                flag.targetUserId,
-                                                "suspended",
-                                                "Suspended after Admin review of ${flag.patternType}"
-                                            )
-                                        }) {
-                                            Text("Suspend Driver", color = GolocalError)
-                                        }
-                                    } else if (flag.targetRole == "customer") {
-                                        OutlinedButton(onClick = {
-                                            adminViewModel.setUserAccountStatus(flag.targetUserId, "restricted")
-                                        }) {
-                                            Text("Restrict Account", color = GolocalError)
+                                if (portalRole == com.example.data.model.PortalRole.OWNER_ADMIN) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        if (flag.targetRole == "driver" || flag.targetRole == "pair") {
+                                            OutlinedButton(onClick = {
+                                                governanceViewModel?.adminReviewDriverKyc(
+                                                    flag.targetUserId,
+                                                    "suspended",
+                                                    "Suspended after Admin review of ${flag.patternType}"
+                                                )
+                                            }) {
+                                                Text("Suspend Driver", color = GolocalError)
+                                            }
+                                        } else if (flag.targetRole == "customer") {
+                                            OutlinedButton(onClick = {
+                                                adminViewModel.setUserAccountStatus(flag.targetUserId, "restricted")
+                                            }) {
+                                                Text("Restrict Account", color = GolocalError)
+                                            }
                                         }
                                     }
                                 }
@@ -381,33 +384,7 @@ fun AdminServicesModule(adminViewModel: AdminViewModel) {
                 }
             }
         } else {
-            Button(onClick = { showAddArea = true }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Filled.AddLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Add West Bengal Service Area")
-            }
-            if (serviceAreas.isEmpty()) {
-                GolocalEmptyState(title = "No Custom Service Areas", message = "Add towns, stations, bus stands, airports, or rural blocks to govern service coverage.")
-            } else {
-                serviceAreas.forEach { area ->
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                    ) {
-                        Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(area.name, style = MaterialTheme.typography.titleSmall)
-                                Text("${area.district} • ${area.zoneType.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(
-                                checked = area.isActive,
-                                onCheckedChange = { adminViewModel.toggleServiceArea(area.id, it) }
-                            )
-                        }
-                    }
-                }
-            }
+            OwnerServiceZonesConfigurator(adminViewModel = adminViewModel)
         }
     }
 
@@ -448,40 +425,6 @@ fun AdminServicesModule(adminViewModel: AdminViewModel) {
                 }) { Text("Publish New Version") }
             },
             dismissButton = { TextButton(onClick = { editingConfig = null }) { Text("Cancel") } }
-        )
-    }
-
-    if (showAddArea) {
-        var name by remember { mutableStateOf("") }
-        var nameBn by remember { mutableStateOf("") }
-        var district by remember { mutableStateOf("Hooghly") }
-        var block by remember { mutableStateOf("") }
-        var zoneType by remember { mutableStateOf("railway_station") }
-        var parcelOk by remember { mutableStateOf(false) }
-
-        AlertDialog(
-            onDismissRequest = { showAddArea = false },
-            title = { Text("Add Service Area") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Area / Hub Name *") }, singleLine = true)
-                    OutlinedTextField(value = nameBn, onValueChange = { nameBn = it }, label = { Text("Bengali Name (Optional)") }, singleLine = true)
-                    OutlinedTextField(value = district, onValueChange = { district = it }, label = { Text("District *") }, singleLine = true)
-                    OutlinedTextField(value = block, onValueChange = { block = it }, label = { Text("Block / Town") }, singleLine = true)
-                    OutlinedTextField(value = zoneType, onValueChange = { zoneType = it }, label = { Text("Type (railway_station, bus_stand, airport, village)") }, singleLine = true)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = parcelOk, onCheckedChange = { parcelOk = it })
-                        Text("Parcel Delivery Approved")
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    adminViewModel.addServiceArea(name, nameBn, district, block, zoneType, parcelOk)
-                    showAddArea = false
-                }) { Text("Save Area") }
-            },
-            dismissButton = { TextButton(onClick = { showAddArea = false }) { Text("Cancel") } }
         )
     }
 }

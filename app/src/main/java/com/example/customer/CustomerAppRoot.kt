@@ -219,6 +219,9 @@ fun CustomerAuthenticatedShell(
                 }
             }
         )
+        LaunchedEffect(currentUserId, context) {
+            customerViewModel.attachContext(context)
+        }
         val governanceViewModel: GovernanceViewModel = viewModel(
             key = "cust_gov_$currentUserId",
             factory = viewModelFactory {
@@ -377,8 +380,8 @@ fun CustomerAuthenticatedShell(
                                         onQuickSos = {
                                             customerViewModel.triggerSos(
                                                 bookingId = activeBooking?.id ?: "",
-                                                lat = gps.lat ?: 22.90,
-                                                lng = gps.lng ?: 88.39,
+                                                lat = gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT,
+                                                lng = gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG,
                                                 notes = "Emergency SOS triggered from Customer Home"
                                             )
                                         }

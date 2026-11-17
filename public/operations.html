@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Operations Portal</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="./css/portal.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-mark">GL</div>
+      <div>
+        <h1>GoLocal Live Operations Portal</h1>
+        <div class="subtitle">Real-Time Dispatch, Delay Monitoring, Service Areas &amp; Escalation Context</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="opsRoleBadge" class="badge badge-info hidden">OPERATIONS</span>
+      <a id="ownerLinkBtn" class="btn btn-light hidden" href="./owner.html">Owner Portal</a>
+      <button id="opsSignOutBtn" class="btn btn-light" type="button">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="opsGateAlert" class="alert alert-error hidden"></div>
+
+    <section id="opsContent" class="hidden">
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Active Bookings</div>
+          <div class="metric-value" id="oActiveCount">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Unassigned</div>
+          <div class="metric-value" id="oSearchingCount">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Delayed (&ge;10m)</div>
+          <div class="metric-value" id="oDelayedCount">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Live RTDB Partners</div>
+          <div class="metric-value" id="oDriversCount">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Open Escalations</div>
+          <div class="metric-value" id="oEscalationsCount">0</div>
+        </div>
+      </div>
+
+      <div class="portal-grid">
+        <div class="stack">
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Live Operations Map (OpenStreetMap)</h2>
+              <button id="opsCenterBoraiBtn" class="btn btn-secondary" type="button">Center Borai (721457)</button>
+            </div>
+
+            <div class="row">
+              <select id="opsFilterStatus" style="max-width:200px;">
+                <option value="active">Active &amp; Unassigned</option>
+                <option value="searching">Unassigned Only</option>
+                <option value="delayed">Pickup Delay (&ge;10 min)</option>
+                <option value="all">All Recent Bookings</option>
+              </select>
+              <select id="opsFilterCategory" style="max-width:170px;">
+                <option value="all">All Categories</option>
+                <option value="toto">Toto</option>
+                <option value="auto">Auto</option>
+                <option value="bike">Bike</option>
+                <option value="cab">Cab</option>
+                <option value="outstation">Outstation</option>
+              </select>
+              <select id="opsFilterDistrict" style="max-width:190px;">
+                <option value="all">All Districts</option>
+              </select>
+            </div>
+
+            <div class="map-shell">
+              <div id="opsMap" class="map-canvas"></div>
+              <div class="map-attribution-bar">
+                <div class="legend">
+                  <span><span class="legend-dot" style="background:#f59e0b;"></span>Unassigned Booking</span>
+                  <span><span class="legend-dot" style="background:#dc2626;"></span>Delayed / SOS / Complaint</span>
+                  <span><span class="legend-dot" style="background:#1565c0;"></span>Active Booking</span>
+                  <span><span class="legend-dot" style="background:#15803d;"></span>Live Partner GPS</span>
+                </div>
+                <div>Map data © OpenStreetMap contributors</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card stack">
+            <h3>Service-Area Monitoring (Read-Only)</h3>
+            <div id="opsZonesMonitor" class="list-scroll" style="max-height:220px;"></div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card stack">
+            <h3>Unassigned &amp; Delayed Bookings Dispatch</h3>
+            <div id="opsAssignPanel" class="alert alert-info hidden"></div>
+            <div id="opsBookingsQueue" class="list-scroll" style="max-height:360px;"></div>
+          </div>
+
+          <div class="card stack">
+            <h3>Complaint, Dispute &amp; SOS Location Context</h3>
+            <div id="opsEscalationsList" class="list-scroll" style="max-height:340px;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="./js/operations-portal.js"></script>
+</body>
+</html>

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Governance &amp; Operations Portals</title>
+  <link rel="stylesheet" href="./css/portal.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-mark">GL</div>
+      <div>
+        <h1>GoLocal Mobility Portals</h1>
+        <div class="subtitle">Phone OTP Authentication • OpenStreetMap + MapLibre GL JS</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="sessionBadge" class="badge badge-info hidden">Signed In</span>
+      <button id="signOutBtn" class="btn btn-light hidden" type="button">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="auth-wrapper">
+    <section class="auth-card stack">
+      <div>
+        <span class="badge badge-info">Strict Role Access</span>
+        <h2 style="margin: 8px 0 4px;">Portal Sign-In (Mobile OTP)</h2>
+        <p class="list-item-muted" style="margin: 0;">
+          Access is restricted to verified <strong>Owner Admins</strong> (<code>/admins/{uid}</code>) and
+          <strong>Operations Staff</strong> (<code>/operations_staff/{uid}</code>). Public self-signup and Google Sign-In are disabled.
+        </p>
+      </div>
+
+      <div id="authAlert" class="alert alert-error hidden"></div>
+
+      <!-- Step 1: Phone input -->
+      <div id="phoneStep" class="stack">
+        <div>
+          <label class="field-label" for="phoneInput">Authorized Mobile Number (India +91 or E.164)</label>
+          <input id="phoneInput" type="tel" placeholder="+91 9876543210" autocomplete="tel" />
+        </div>
+        <div id="recaptchaContainer"></div>
+        <button id="sendOtpBtn" class="btn btn-primary" type="button">Send 6-Digit OTP</button>
+      </div>
+
+      <!-- Step 2: OTP verify -->
+      <div id="otpStep" class="stack hidden">
+        <div class="alert alert-info" id="otpTargetLabel">Enter the 6-digit SMS code.</div>
+        <div>
+          <label class="field-label" for="otpInput">6-Digit OTP</label>
+          <input id="otpInput" type="tel" maxlength="6" placeholder="123456" />
+        </div>
+        <div class="row">
+          <button id="verifyOtpBtn" class="btn btn-primary" type="button">Verify &amp; Enter Portal</button>
+          <button id="changePhoneBtn" class="btn btn-secondary" type="button">Change Number</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Authenticated Role Router -->
+      <div id="roleRouter" class="stack hidden">
+        <div class="alert alert-success" id="roleWelcome"></div>
+        <div id="portalLinks" class="stack"></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      PORTAL_ROLES,
+      resolvePortalRole,
+      normalizeIndianPhone,
+      createPhoneRecaptcha,
+      sendPhoneOtp,
+      logoutPortal,
+      watchAuth,
+      escapeHtml
+    } from "./js/firebase-config.js";
+
+    const phoneStep = document.getElementById("phoneStep");
+    const otpStep = document.getElementById("otpStep");
+    const roleRouter = document.getElementById("roleRouter");
+    const portalLinks = document.getElementById("portalLinks");
+    const roleWelcome = document.getElementById("roleWelcome");
+    const authAlert = document.getElementById("authAlert");
+    const sessionBadge = document.getElementById("sessionBadge");
+    const signOutBtn = document.getElementById("signOutBtn");
+    const phoneInput = document.getElementById("phoneInput");
+    const otpInput = document.getElementById("otpInput");
+    const sendOtpBtn = document.getElementById("sendOtpBtn");
+    const verifyOtpBtn = document.getElementById("verifyOtpBtn");
+    const changePhoneBtn = document.getElementById("changePhoneBtn");
+    const otpTargetLabel = document.getElementById("otpTargetLabel");
+
+    let confirmationResult = null;
+    let recaptchaVerifier = null;
+
+    function showError(msg) {
+      authAlert.textContent = msg;
+      authAlert.classList.remove("hidden");
+    }
+
+    function clearError() {
+      authAlert.textContent = "";
+      authAlert.classList.add("hidden");
+    }
+
+    function ensureRecaptcha() {
+      if (!recaptchaVerifier) {
+        recaptchaVerifier = createPhoneRecaptcha("recaptchaContainer");
+      }
+      return recaptchaVerifier;
+    }
+
+    sendOtpBtn.addEventListener("click", async () => {
+      clearError();
+      const e164 = normalizeIndianPhone(phoneInput.value);
+      if (!e164) {
+        showError("Enter a valid 10-digit Indian mobile number or E.164 phone number.");
+        return;
+      }
+      sendOtpBtn.disabled = true;
+      sendOtpBtn.textContent = "Sending OTP...";
+      try {
+        const verifier = ensureRecaptcha();
+        confirmationResult = await sendPhoneOtp(e164, verifier);
+        otpTargetLabel.textContent = `Verification SMS sent to ${e164}`;
+        phoneStep.classList.add("hidden");
+        otpStep.classList.remove("hidden");
+      } catch (err) {
+        showError(err?.message || "Failed to send OTP. Check Firebase Phone Auth configuration.");
+      } finally {
+        sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = "Send 6-Digit OTP";
+      }
+    });
+
+    changePhoneBtn.addEventListener("click", () => {
+      clearError();
+      otpInput.value = "";
+      confirmationResult = null;
+      otpStep.classList.add("hidden");
+      phoneStep.classList.remove("hidden");
+    });
+
+    verifyOtpBtn.addEventListener("click", async () => {
+      clearError();
+      const code = otpInput.value.trim();
+      if (!/^\d{6}$/.test(code)) {
+        showError("Enter the exact 6-digit OTP code.");
+        return;
+      }
+      if (!confirmationResult) {
+        showError("Request an OTP first.");
+        return;
+      }
+      verifyOtpBtn.disabled = true;
+      verifyOtpBtn.textContent = "Verifying...";
+      try {
+        await confirmationResult.confirm(code);
+      } catch (err) {
+        showError(err?.message || "Invalid or expired OTP code.");
+      } finally {
+        verifyOtpBtn.disabled = false;
+        verifyOtpBtn.textContent = "Verify & Enter Portal";
+      }
+    });
+
+    signOutBtn.addEventListener("click", async () => {
+      await logoutPortal();
+    });
+
+    watchAuth(async (user) => {
+      clearError();
+      if (!user) {
+        sessionBadge.classList.add("hidden");
+        signOutBtn.classList.add("hidden");
+        roleRouter.classList.add("hidden");
+        otpStep.classList.add("hidden");
+        phoneStep.classList.remove("hidden");
+        portalLinks.innerHTML = "";
+        return;
+      }
+
+      sessionBadge.classList.remove("hidden");
+      sessionBadge.textContent = user.phoneNumber || user.uid.slice(0, 8);
+      signOutBtn.classList.remove("hidden");
+      phoneStep.classList.add("hidden");
+      otpStep.classList.add("hidden");
+      roleRouter.classList.remove("hidden");
+
+      const role = await resolvePortalRole(user);
+      if (role === PORTAL_ROLES.OWNER_ADMIN) {
+        roleWelcome.innerHTML = `Verified <strong>Owner Admin</strong> (${escapeHtml(user.phoneNumber || user.uid)})`;
+        portalLinks.innerHTML = `
+          <a class="btn btn-primary" href="./owner.html">Open Owner Admin Portal</a>
+          <a class="btn btn-secondary" href="./operations.html">Open Live Operations Portal</a>
+        `;
+      } else if (role === PORTAL_ROLES.OPERATIONS_STAFF) {
+        roleWelcome.innerHTML = `Verified <strong>Operations Staff</strong> (${escapeHtml(user.phoneNumber || user.uid)})`;
+        portalLinks.innerHTML = `
+          <a class="btn btn-primary" href="./operations.html">Open Live Operations Portal</a>
+          <p class="list-item-muted" style="margin:0;">Owner Admin settings, financials &amp; staff permissions remain restricted.</p>
+        `;
+      } else {
+        roleRouter.classList.add("hidden");
+        showError(`Access denied for UID ${user.uid}. Your account is not allowlisted in /admins or /operations_staff.`);
+      }
+    });
+  </script>
+</body>
+</html>

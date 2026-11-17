@@ -12,6 +12,18 @@ enum class AppRole(val wire: String) {
     ADMIN("admin")
 }
 
+enum class PortalRole {
+    OWNER_ADMIN,
+    OPERATIONS_STAFF,
+    NONE
+}
+
+@IgnoreExtraProperties
+data class GeoPointDto(
+    val lat: Double = 0.0,
+    val lng: Double = 0.0
+)
+
 enum class AppLanguage(val code: String, val displayLabel: String) {
     EN("en", "English"),
     BN("bn", "বাংলা"),
@@ -162,8 +174,8 @@ data class DriverDirectoryEntry(
     val block: String = "",
     val verificationStatus: String = "pending",
     val isOnline: Boolean = false,
-    val currentLat: Double = 22.90,
-    val currentLng: Double = 88.39,
+    val currentLat: Double = 21.8160,
+    val currentLng: Double = 87.3703,
     val ratingAvg: Double = 5.0,
     val completedRides: Long = 0L,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -176,9 +188,19 @@ data class ServiceArea(
     val nameBn: String = "",
     val district: String = "",
     val block: String = "",
+    val pincode: String = "",
     val zoneType: String = "town", // railway_station, bus_stand, airport, village, hospital, market, town
-    val lat: Double = 22.90,
-    val lng: Double = 88.39,
+    val lat: Double = 21.8160,
+    val lng: Double = 87.3703,
+    val centerLat: Double = 21.8160,
+    val centerLng: Double = 87.3703,
+    val radiusKm: Double = 8.0,
+    val polygonPoints: List<GeoPointDto> = emptyList(),
+    val villages: List<String> = emptyList(),
+    val pickupEnabled: Boolean = true,
+    val dropoffEnabled: Boolean = true,
+    val supportedVehicleCategories: List<String> = listOf("toto", "auto", "bike", "cab"),
+    val availabilityNote: String = "",
     val isActive: Boolean = true,
     val parcelApproved: Boolean = false,
     val operationalHours: String = "05:00 - 23:00",
@@ -253,6 +275,11 @@ data class Booking(
     val statusHistory: List<StatusHistoryEntry> = emptyList(),
     val invoiceEmail: String = "",
     val customerRating: Long? = null,
+    val routeProvider: String = "",
+    val pickupZoneId: String = "",
+    val dropoffZoneId: String = "",
+    val assignedByOpsUid: String = "",
+    val opsAssignmentNote: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -369,6 +396,9 @@ data class ComplaintRecord(
     val description: String = "",
     val status: String = "open",
     val resolutionNote: String = "",
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val locationLabel: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -429,6 +459,31 @@ data class AdminAccountEntry(
     val displayName: String = "",
     val addedBy: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
+data class OperationsStaffEntry(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val displayName: String = "",
+    val phoneOrEmail: String = "",
+    val isActive: Boolean = true,
+    val assignedDistrict: String = "Paschim Medinipur",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+data class LiveDriverRtdbLocation(
+    val driverId: String = "",
+    val bookingId: String = "",
+    val customerId: String = "",
+    val lat: Double = 0.0,
+    val lng: Double = 0.0,
+    val accuracyMeters: Float = 0f,
+    val speedMps: Float = 0f,
+    val headingDeg: Float = 0f,
+    val trackingStatus: String = "stopped", // active, paused_gps_lost, stopped
+    val updatedAtEpochMs: Long = 0L
 )
 
 @IgnoreExtraProperties

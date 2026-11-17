@@ -5,10 +5,13 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.map.GeocodingSearchAdapter
+import com.example.data.map.MapProviderConfig
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppNotification
 import com.example.data.model.AppRole
 import com.example.data.model.CustomerProfile
+import com.example.data.model.PortalRole
 import com.example.data.model.PrivateEmergencyContact
 import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
@@ -16,6 +19,7 @@ import com.example.data.model.UserAccount
 import com.example.data.repository.ClientPreferences
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
+import com.example.data.tracking.LiveLocationTracker
 import com.example.ui.auth.AuthDiagnostics
 import com.example.ui.auth.AuthStage
 import com.example.ui.auth.RegistrationValidator
@@ -56,6 +60,9 @@ class AppSessionViewModel(
 
     private val _isAdmin = MutableStateFlow(false)
     val isAdmin: StateFlow<Boolean> = _isAdmin.asStateFlow()
+
+    private val _portalRole = MutableStateFlow(PortalRole.NONE)
+    val portalRole: StateFlow<PortalRole> = _portalRole.asStateFlow()
 
     private val _isAdminChecked = MutableStateFlow(false)
     val isAdminChecked: StateFlow<Boolean> = _isAdminChecked.asStateFlow()
@@ -204,7 +211,9 @@ class AppSessionViewModel(
                                     err.localizedMessage ?: "Unable to verify your GoLocal account right now."
                             }
                         }
-                    _isAdmin.value = repository.checkIsAdmin(currentUserId, userEmail)
+                    val role = repository.checkPortalRole(currentUserId, userEmail)
+                    _portalRole.value = role
+                    _isAdmin.value = (role == PortalRole.OWNER_ADMIN)
                     true
                 }
                 if (synced == null) {
@@ -425,22 +434,39 @@ class AppSessionViewModel(
 
     @SuppressLint("MissingPermission")
     fun detectDeviceLocation(context: Context) {
+        if (!LiveLocationTracker.hasLocationPermission(context)) {
+            _gpsLocation.value = _gpsLocation.value.copy(
+                isDetecting = false,
+                error = "Location permission denied — pick a village or pin on the map manually."
+            )
+            return
+        }
         _gpsLocation.value = _gpsLocation.value.copy(isDetecting = true, error = null)
         try {
             val client = LocationServices.getFusedLocationProviderClient(context)
-            client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
+            client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                 .addOnSuccessListener { location ->
                     if (location != null) {
+                        val lat = location.latitude
+                        val lng = location.longitude
+                        val rawCoordLabel = "GPS (${String.format("%.4f", lat)}, ${String.format("%.4f", lng)})"
                         _gpsLocation.value = GpsLocationState(
-                            lat = location.latitude,
-                            lng = location.longitude,
-                            label = "GPS (${String.format("%.4f", location.latitude)}, ${String.format("%.4f", location.longitude)})",
+                            lat = lat,
+                            lng = lng,
+                            label = rawCoordLabel,
                             isDetecting = false
                         )
+                        viewModelScope.launch {
+                            val geocoder = GeocodingSearchAdapter(endpoints = MapProviderConfig.loadEndpoints(context))
+                            val resolved = geocoder.reverseGeocode(lat, lng, allowRemoteLookup = true)
+                            if (resolved.isNotBlank()) {
+                                _gpsLocation.value = _gpsLocation.value.copy(label = resolved)
+                            }
+                        }
                     } else {
                         _gpsLocation.value = _gpsLocation.value.copy(
                             isDetecting = false,
-                            error = "GPS fix unavailable — please pick your station or locality manually."
+                            error = "GPS fix unavailable — please tap or search on the map manually."
                         )
                     }
                 }

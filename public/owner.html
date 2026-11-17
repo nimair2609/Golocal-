@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Owner Admin Portal</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="./css/portal.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-mark">GL</div>
+      <div>
+        <h1>GoLocal Owner Admin Portal</h1>
+        <div class="subtitle">Service Boundaries, Fleet Telemetry, Demand &amp; Governance • Borai (721457) Ready</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="ownerBadge" class="badge badge-success hidden">OWNER ADMIN</span>
+      <a class="btn btn-light" href="./operations.html">Operations View</a>
+      <button id="ownerSignOutBtn" class="btn btn-light" type="button">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="accessGateAlert" class="alert alert-error hidden"></div>
+
+    <section id="ownerContent" class="hidden">
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Active Trips</div>
+          <div class="metric-value" id="mActiveBookings">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Unassigned</div>
+          <div class="metric-value" id="mSearchingBookings">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Live RTDB Partners</div>
+          <div class="metric-value" id="mLiveDrivers">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Active Service Zones</div>
+          <div class="metric-value" id="mActiveZones">0</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Completed Bookings</div>
+          <div class="metric-value" id="mCompletedBookings">0</div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="mapTab" type="button">Live Map &amp; Demand</button>
+        <button class="tab-btn" data-tab="zonesTab" type="button">Service Zones Configurator</button>
+        <button class="tab-btn" data-tab="opsAccessTab" type="button">Operations Staff &amp; Audit</button>
+      </div>
+
+      <!-- TAB 1: Interactive Map, Filters, Live Fleet & Demand Visualization -->
+      <section id="mapTab" class="portal-grid">
+        <div class="stack">
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Interactive OpenStreetMap Fleet &amp; Demand Map</h2>
+              <div class="row">
+                <button id="focusBoraiBtn" class="btn btn-secondary" type="button">Center Borai (721457)</button>
+                <button id="searchPlaceBtn" class="btn btn-secondary" type="button">Find Place</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <select id="filterStatus" style="max-width:190px;">
+                <option value="active">Active &amp; Unassigned</option>
+                <option value="searching">Unassigned Only</option>
+                <option value="completed">Completed</option>
+                <option value="all">All Bookings</option>
+              </select>
+              <select id="filterCategory" style="max-width:170px;">
+                <option value="all">All Vehicles</option>
+                <option value="toto">Toto</option>
+                <option value="auto">Auto</option>
+                <option value="bike">Bike</option>
+                <option value="cab">Cab</option>
+                <option value="outstation">Outstation</option>
+                <option value="scheduled">Scheduled</option>
+              </select>
+              <select id="filterDistrict" style="max-width:190px;">
+                <option value="all">All Districts</option>
+              </select>
+            </div>
+
+            <div id="placeSearchBar" class="row hidden">
+              <input id="placeQueryInput" type="text" placeholder="Search village/landmark in West Bengal (submit only)" style="flex:1;" />
+              <button id="runPlaceSearchBtn" class="btn btn-primary" type="button">Search OSM</button>
+            </div>
+            <div id="placeResultsBox" class="row hidden"></div>
+
+            <div class="map-shell">
+              <div id="ownerMap" class="map-canvas"></div>
+              <div class="map-attribution-bar">
+                <div class="legend">
+                  <span><span class="legend-dot" style="background:#f59e0b;"></span>Unassigned Pickup</span>
+                  <span><span class="legend-dot" style="background:#1565c0;"></span>Active Pickup</span>
+                  <span><span class="legend-dot" style="background:#15803d;"></span>Live RTDB Partner</span>
+                  <span><span class="legend-dot" style="background:#dc2626;"></span>SOS / Alert</span>
+                </div>
+                <div>Map data © OpenStreetMap contributors • Routing by OSRM adapter</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card">
+            <h3>Demand by Locality / Zone</h3>
+            <div id="demandList" class="list-scroll" style="max-height:190px;"></div>
+          </div>
+          <div class="card">
+            <h3>Filtered Bookings</h3>
+            <div id="ownerBookingsList" class="list-scroll" style="max-height:330px;"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: Owner Service-Area Configurator -->
+      <section id="zonesTab" class="portal-grid hidden">
+        <div class="card stack">
+          <div class="space-between">
+            <h2 style="margin:0;">Configure Service Boundaries &amp; Coverage</h2>
+            <button id="seedBoraiBtn" class="btn btn-secondary" type="button">Seed Borai (PIN 721457) Launch Zone</button>
+          </div>
+          <div class="alert alert-info">
+            Borai (PIN 721457, Mohanpur, Paschim Medinipur) is the default starting region, not a permanent restriction.
+            Click on the map to set the zone center or add boundary polygon vertices.
+          </div>
+
+          <div class="row">
+            <label class="checkbox-pill"><input type="radio" name="zoneClickMode" value="center" checked /> Click Map = Set Center</label>
+            <label class="checkbox-pill"><input type="radio" name="zoneClickMode" value="vertex" /> Click Map = Add Polygon Vertex</label>
+            <button id="clearPolygonBtn" class="btn btn-secondary" type="button">Clear Polygon Vertices</button>
+          </div>
+
+          <div class="map-shell">
+            <div id="zoneConfigMap" class="map-canvas" style="height:360px;"></div>
+            <div class="map-attribution-bar">
+              <span id="zonePolygonCount" class="mono">Polygon vertices: 0 (using radius boundary)</span>
+              <span>© OpenStreetMap contributors</span>
+            </div>
+          </div>
+
+          <form id="zoneForm" class="stack">
+            <input type="hidden" id="zId" />
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="zName">Zone Name *</label>
+                <input id="zName" type="text" required placeholder="Borai & Mohanpur Launch Zone" />
+              </div>
+              <div>
+                <label class="field-label" for="zType">Zone Type</label>
+                <select id="zType">
+                  <option value="village">Village Cluster</option>
+                  <option value="town">Town Hub</option>
+                  <option value="market">Market Stand</option>
+                  <option value="railway_station">Railway Station</option>
+                  <option value="bus_stand">Bus Stand</option>
+                  <option value="hospital">Hospital</option>
+                  <option value="airport">Airport</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="zDistrict">District *</label>
+                <input id="zDistrict" type="text" required value="Paschim Medinipur" />
+              </div>
+              <div>
+                <label class="field-label" for="zBlock">Block / Municipality</label>
+                <input id="zBlock" type="text" value="Mohanpur" />
+              </div>
+              <div>
+                <label class="field-label" for="zPincode">PIN Code</label>
+                <input id="zPincode" type="text" value="721457" />
+              </div>
+              <div>
+                <label class="field-label" for="zRadiusKm">Radius (km)</label>
+                <input id="zRadiusKm" type="number" step="0.5" min="0.5" max="200" value="12" />
+              </div>
+              <div>
+                <label class="field-label" for="zLat">Center Latitude *</label>
+                <input id="zLat" type="number" step="0.0001" required value="21.8160" />
+              </div>
+              <div>
+                <label class="field-label" for="zLng">Center Longitude *</label>
+                <input id="zLng" type="number" step="0.0001" required value="87.3703" />
+              </div>
+            </div>
+
+            <div>
+              <label class="field-label" for="zVillages">Villages &amp; Service Areas (comma-separated)</label>
+              <input id="zVillages" type="text" value="Borai, Mohanpur, Gholai, Paikbar, Agarara, Jaysankhapur, Nilda, Shialsai" />
+            </div>
+
+            <div>
+              <label class="field-label">Supported Vehicle Categories</label>
+              <div class="checkbox-row" id="zVehiclesBox">
+                <label class="checkbox-pill"><input type="checkbox" value="toto" checked /> Toto</label>
+                <label class="checkbox-pill"><input type="checkbox" value="auto" checked /> Auto</label>
+                <label class="checkbox-pill"><input type="checkbox" value="bike" checked /> Bike</label>
+                <label class="checkbox-pill"><input type="checkbox" value="cab" checked /> Cab</label>
+              </div>
+            </div>
+
+            <div class="checkbox-row">
+              <label class="checkbox-pill"><input id="zActive" type="checkbox" checked /> Service Active</label>
+              <label class="checkbox-pill"><input id="zPickup" type="checkbox" checked /> Pickup Coverage Enabled</label>
+              <label class="checkbox-pill"><input id="zDropoff" type="checkbox" checked /> Drop-off Coverage Enabled</label>
+            </div>
+
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="zHours">Operational Hours</label>
+                <input id="zHours" type="text" value="05:00 - 22:30" />
+              </div>
+              <div>
+                <label class="field-label" for="zNote">Availability Note</label>
+                <input id="zNote" type="text" placeholder="Optional notice for riders & customers" />
+              </div>
+            </div>
+
+            <div class="row">
+              <button class="btn btn-primary" type="submit">Save Service Zone</button>
+              <button id="resetZoneFormBtn" class="btn btn-secondary" type="button">Reset Form</button>
+            </div>
+            <div id="zoneFormStatus" class="alert alert-success hidden"></div>
+          </form>
+        </div>
+
+        <div class="card stack">
+          <h3>Configured Service Zones</h3>
+          <div id="zonesList" class="list-scroll" style="max-height:680px;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 3: Operations Staff Access Management & Owner Audit Logs -->
+      <section id="opsAccessTab" class="portal-grid hidden">
+        <div class="card stack">
+          <h2>Operations Staff Access (Owner-Managed)</h2>
+          <p class="list-item-muted" style="margin:0;">
+            Operations users receive access to live bookings, partner tracking, and complaint investigation,
+            but cannot alter pricing, settlements, admin roles, or service-area configuration.
+          </p>
+          <form id="opsForm" class="stack">
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="opsUid">Firebase Auth UID *</label>
+                <input id="opsUid" type="text" required placeholder="Exact Firebase UID" />
+              </div>
+              <div>
+                <label class="field-label" for="opsName">Display Name *</label>
+                <input id="opsName" type="text" required placeholder="Desk Operator Name" />
+              </div>
+              <div>
+                <label class="field-label" for="opsPhone">Phone / Email</label>
+                <input id="opsPhone" type="text" placeholder="+9198..." />
+              </div>
+              <div>
+                <label class="field-label" for="opsDistrict">Assigned District</label>
+                <input id="opsDistrict" type="text" value="Paschim Medinipur" />
+              </div>
+            </div>
+            <label class="checkbox-pill"><input id="opsActive" type="checkbox" checked /> Active Operations Access</label>
+            <button class="btn btn-primary" type="submit">Save Operations Staff</button>
+          </form>
+          <div id="opsStaffList" class="list-scroll"></div>
+        </div>
+
+        <div class="card stack">
+          <h2>Immutable Owner &amp; Ops Audit Trail</h2>
+          <div id="auditLogsList" class="list-scroll" style="max-height:540px;"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="./js/owner-portal.js"></script>
+</body>
+</html>

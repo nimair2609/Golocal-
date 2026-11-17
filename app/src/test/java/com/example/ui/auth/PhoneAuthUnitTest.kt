@@ -374,8 +374,8 @@ class PhoneAuthUnitTest {
         }
         composeTestRule.waitForIdle()
 
-        // Both Google Sign-In and Mobile OTP form render immediately
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        // Mobile OTP form renders immediately without Google Sign-In
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("country_code_selector").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("🇮🇳 +91").assertIsDisplayed()
 
@@ -404,7 +404,7 @@ class PhoneAuthUnitTest {
     }
 
     @Test
-    fun `rider and admin auth screens render Google and Mobile OTP login`() {
+    fun `rider and admin auth screens render Mobile OTP login only`() {
         val activeMode = androidx.compose.runtime.mutableStateOf(ExperienceMode.RIDER)
         composeTestRule.setContent {
             GolocalTheme {
@@ -412,12 +412,12 @@ class PhoneAuthUnitTest {
             }
         }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
 
         composeTestRule.runOnUiThread { activeMode.value = ExperienceMode.ADMIN }
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
     }
 }

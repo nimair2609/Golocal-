@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <resources>
     <string name="firestore_database_id" translatable="false">ai-studio-android-golocal-e1a2a68b-450b-4d1b-817a-6a38c9c578bb</string>
+    <string name="firebase_rtdb_url" translatable="false">https://gen-lang-client-0818250755-default-rtdb.firebaseio.com</string>
 </resources>

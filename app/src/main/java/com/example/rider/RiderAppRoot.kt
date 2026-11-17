@@ -203,11 +203,15 @@ fun RiderAuthenticatedShell(
                     val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
                     DriverViewModel(
                         repository = GolocalRepository(db),
-                        currentUserId = currentUserId
+                        currentUserId = currentUserId,
+                        realtimeTrackingRepository = com.example.data.tracking.RealtimeTrackingRepository(app)
                     )
                 }
             }
         )
+        LaunchedEffect(currentUserId, context) {
+            driverViewModel.attachContext(context)
+        }
         val governanceViewModel: GovernanceViewModel = viewModel(
             key = "rider_gov_$currentUserId",
             factory = viewModelFactory {
@@ -238,6 +242,7 @@ fun RiderAuthenticatedShell(
         )
 
         val profileState by driverViewModel.driverProfileState.collectAsStateWithLifecycle()
+        val currentActiveBooking by driverViewModel.currentActiveBooking.collectAsStateWithLifecycle()
         val openRequests by driverViewModel.openRequests.collectAsStateWithLifecycle()
         val assignedBookings by driverViewModel.assignedBookings.collectAsStateWithLifecycle()
         val commissions by driverViewModel.commissions.collectAsStateWithLifecycle()
@@ -245,6 +250,10 @@ fun RiderAuthenticatedShell(
         val govMsg by governanceViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by sessionViewModel.platformSettings.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
+
+        LaunchedEffect(profileState, currentActiveBooking, context) {
+            driverViewModel.syncLocationSharingLifecycle(context)
+        }
 
         Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { basePadding ->
             Box(modifier = Modifier.fillMaxSize().padding(basePadding)) {
@@ -383,6 +392,7 @@ fun RiderAuthenticatedShell(
                                                     "profile" -> RiderProfileTab(
                                                         profile = profile,
                                                         sessionViewModel = sessionViewModel,
+                                                        driverViewModel = driverViewModel,
                                                         onOpenNotifications = { selectedTab = "notifications" }
                                                     )
                                                 }

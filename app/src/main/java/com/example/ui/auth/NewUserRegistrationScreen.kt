@@ -236,7 +236,7 @@ fun NewUserRegistrationScreen(
                             }
                         }
                     } else {
-                        // Google Sign-In users enter their contact mobile number (and can link OTP later in Profile)
+                        // Legacy or unverified-phone sessions enter their contact mobile number (can link OTP later in Profile)
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
                                 text = "Contact Mobile Number *",

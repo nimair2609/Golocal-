@@ -427,6 +427,7 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
 fun RiderProfileTab(
     profile: DriverProfile,
     sessionViewModel: AppSessionViewModel,
+    driverViewModel: DriverViewModel? = null,
     onOpenNotifications: () -> Unit = {}
 ) {
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
@@ -477,15 +478,15 @@ fun RiderProfileTab(
         com.example.ui.auth.AccountSecurityLinkingCard(
             fallbackAccountPhone = profile.phone,
             fallbackAccountEmail = "",
-            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) },
-            onGoogleLinked = { sessionViewModel.onAccountCredentialLinked(null) }
+            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) }
         )
 
         SharedAppSettingsAndSignOutSection(
             prefs = prefs,
             sessionViewModel = sessionViewModel,
             supportHelpLabel = "Rider Partner Support",
-            onOpenSupportDialog = { showSupportDialog = true }
+            onOpenSupportDialog = { showSupportDialog = true },
+            onBeforeSignOut = { driverViewModel?.stopAllTrackingForSignOut() }
         )
     }
 

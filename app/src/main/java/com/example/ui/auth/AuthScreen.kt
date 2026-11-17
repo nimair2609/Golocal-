@@ -57,7 +57,6 @@ fun signOut(
                     if (uid.isNotBlank()) {
                         com.example.notifications.FcmTokenSyncManager.removeCurrentToken(context, uid)
                     }
-                    DefaultGoogleSignInGateway().clearCredentialState(context)
                 }
                 firebaseSignOutAction()
             } finally {

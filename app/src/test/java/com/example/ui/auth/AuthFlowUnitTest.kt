@@ -132,7 +132,7 @@ class AuthFlowUnitTest {
     }
 
     @Test
-    fun `all role auth screens expose both Google Sign-In and Mobile OTP controls`() {
+    fun `all role auth screens expose Mobile OTP controls without Google Sign-In`() {
         val activeMode = androidx.compose.runtime.mutableStateOf(ExperienceMode.CUSTOMER)
         composeTestRule.setContent {
             GolocalTheme {
@@ -143,11 +143,11 @@ class AuthFlowUnitTest {
             composeTestRule.runOnUiThread { activeMode.value = mode }
             composeTestRule.waitForIdle()
 
-            // Verify Google Sign-In button renders on all role auth screens
-            composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
-            composeTestRule.onNodeWithText("Continue with Google").performScrollTo().assertIsDisplayed()
+            // Google Sign-In must not be rendered on any role screen
+            assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+            assertTrue(composeTestRule.onAllNodesWithText("Continue with Google").fetchSemanticsNodes().isEmpty())
 
-            // Verify Mobile OTP form also renders directly without extra toggle step
+            // Verify Mobile OTP form renders directly without extra toggle step
             composeTestRule.onNodeWithTag("country_code_selector").performScrollTo().assertIsDisplayed()
             composeTestRule.onNodeWithTag("phone_number_input").performScrollTo().assertIsDisplayed()
             composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
@@ -249,7 +249,7 @@ class AuthFlowUnitTest {
     }
 
     @Test
-    fun `NewUserRegistrationScreen for Google Sign-In collects and validates contact mobile number`() {
+    fun `NewUserRegistrationScreen collects contact mobile number when verified phone is blank`() {
         var submittedMobile: String? = null
         var submittedName: String? = null
         var submittedEmail: String? = null
@@ -260,7 +260,7 @@ class AuthFlowUnitTest {
                 NewUserRegistrationScreen(
                     verifiedMobileNumber = "",
                     prefilledName = "Priya Bose",
-                    prefilledEmail = "priya@gmail.com",
+                    prefilledEmail = "priya@example.com",
                     isPhoneAuthVerified = false,
                     isSubmitting = false,
                     onSubmitRegistration = { _, _, _, _ -> },
@@ -286,7 +286,7 @@ class AuthFlowUnitTest {
 
         assertEquals("Priya Bose", submittedName)
         assertEquals("+919876501234", submittedMobile)
-        assertEquals("priya@gmail.com", submittedEmail)
+        assertEquals("priya@example.com", submittedEmail)
         assertEquals("+919830011223", submittedEmergency)
     }
 }

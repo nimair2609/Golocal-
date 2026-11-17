@@ -104,6 +104,7 @@ fun AdminReportsModule(adminViewModel: AdminViewModel) {
 fun AdminSettingsModule(adminViewModel: AdminViewModel) {
     val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
     val adminAllowlist by adminViewModel.adminAllowlist.collectAsStateWithLifecycle()
+    val operationsStaff by adminViewModel.operationsStaff.collectAsStateWithLifecycle()
     val auditLogs by adminViewModel.auditLogs.collectAsStateWithLifecycle()
 
     var helpline by remember(platformSettings.helplineNumber) { mutableStateOf(platformSettings.helplineNumber) }
@@ -128,6 +129,10 @@ fun AdminSettingsModule(adminViewModel: AdminViewModel) {
     var newAdminUid by remember { mutableStateOf("") }
     var newAdminEmail by remember { mutableStateOf("") }
     var newAdminName by remember { mutableStateOf("") }
+    var newOpsUid by remember { mutableStateOf("") }
+    var newOpsName by remember { mutableStateOf("") }
+    var newOpsContact by remember { mutableStateOf("") }
+    var newOpsDistrict by remember { mutableStateOf("Paschim Medinipur") }
 
     Column(
         modifier = Modifier
@@ -300,6 +305,49 @@ fun AdminSettingsModule(adminViewModel: AdminViewModel) {
                         }
                         TextButton(onClick = { adminViewModel.revokeAdminAccess(entry.uid) }) {
                             Text("Revoke", color = GolocalError)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Operations Staff Role Management (strictly scoped, NO Owner Admin permissions)
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Operations Staff Access (/operations_staff)", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Operations staff can view the Live Ops Map, assign available verified partners, and handle trip escalations/SOS location context. They do NOT receive Owner Admin pricing, payouts, or KYC permissions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(value = newOpsUid, onValueChange = { newOpsUid = it }, label = { Text("Staff Firebase UID") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = newOpsName, onValueChange = { newOpsName = it }, label = { Text("Staff Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = newOpsContact, onValueChange = { newOpsContact = it }, label = { Text("Staff Phone / Identifier") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = newOpsDistrict, onValueChange = { newOpsDistrict = it }, label = { Text("Assigned District") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                Button(
+                    onClick = {
+                        adminViewModel.grantOperationsAccess(newOpsUid, newOpsName, newOpsContact, newOpsDistrict)
+                        newOpsUid = ""
+                        newOpsName = ""
+                        newOpsContact = ""
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Grant Scoped Operations Access") }
+
+                operationsStaff.forEach { staff ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("${staff.displayName.ifBlank { "Ops Staff" }} (${staff.assignedDistrict})", style = MaterialTheme.typography.titleSmall)
+                            Text("UID: ${staff.userId} • Active: ${staff.isActive}", style = MaterialTheme.typography.labelSmall, fontFamily = JetBrainsMono)
+                        }
+                        if (staff.isActive) {
+                            TextButton(onClick = { adminViewModel.revokeOperationsAccess(staff.userId) }) {
+                                Text("Revoke", color = GolocalError)
+                            }
                         }
                     }
                 }

@@ -35,7 +35,7 @@ object FareCalculator {
 
     private const val EARTH_RADIUS_KM = 6371.0
 
-    fun haversineDistanceKm(
+    fun haversineKm(
         lat1: Double,
         lng1: Double,
         lat2: Double,
@@ -47,8 +47,17 @@ object FareCalculator {
             cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
             sin(dLng / 2).pow(2)
         val c = 2 * asin(sqrt(a.coerceIn(0.0, 1.0)))
+        return EARTH_RADIUS_KM * c
+    }
+
+    fun haversineDistanceKm(
+        lat1: Double,
+        lng1: Double,
+        lat2: Double,
+        lng2: Double
+    ): Double {
         // Road factor ~1.22x straight-line distance in Bengal semi-urban corridors
-        val rawKm = EARTH_RADIUS_KM * c * 1.22
+        val rawKm = haversineKm(lat1, lng1, lat2, lng2) * 1.22
         return round(max(1.2, rawKm) * 10.0) / 10.0
     }
 
@@ -65,6 +74,9 @@ object FareCalculator {
         val minutes = (distanceKm / avgSpeedKmh) * 60.0 + 4.0
         return max(5L, minutes.toLong())
     }
+
+    fun estimateDurationMinutes(distanceKm: Double, vehicleCategory: String): Long =
+        estimateDurationMin(distanceKm, vehicleCategory)
 
     fun calculateFareQuote(
         distanceKm: Double,

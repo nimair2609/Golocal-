@@ -28,8 +28,17 @@ service cloud.firestore {
              (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
+    function isOperationsStaff() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/operations_staff/$(request.auth.uid));
+    }
+
+    function isOpsOrOwner() {
+      return isAdmin() || isOperationsStaff();
+    }
+
     function isAuthorizedEmergencyPersonnel() {
-      return isAdmin() ||
+      return isOpsOrOwner() ||
              (isSignedIn() && exists(/databases/$(database)/documents/emergency_personnel/$(request.auth.uid)));
     }
 
@@ -151,9 +160,19 @@ service cloud.firestore {
              isOptionalString(data, 'nameBn', 120) &&
              data.district is string && data.district.size() >= 2 && data.district.size() <= 80 &&
              isOptionalString(data, 'block', 80) &&
+             isOptionalString(data, 'pincode', 16) &&
              data.zoneType in ['railway_station', 'bus_stand', 'airport', 'village', 'hospital', 'market', 'town'] &&
              (!('lat' in data) || data.lat is number) &&
              (!('lng' in data) || data.lng is number) &&
+             (!('centerLat' in data) || (data.centerLat is number && data.centerLat >= -90 && data.centerLat <= 90)) &&
+             (!('centerLng' in data) || (data.centerLng is number && data.centerLng >= -180 && data.centerLng <= 180)) &&
+             (!('radiusKm' in data) || (data.radiusKm is number && data.radiusKm >= 0.2 && data.radiusKm <= 500)) &&
+             (!('polygonPoints' in data) || (data.polygonPoints is list && data.polygonPoints.size() <= 50)) &&
+             (!('villages' in data) || (data.villages is list && data.villages.size() <= 100)) &&
+             (!('pickupEnabled' in data) || data.pickupEnabled is bool) &&
+             (!('dropoffEnabled' in data) || data.dropoffEnabled is bool) &&
+             (!('supportedVehicleCategories' in data) || (data.supportedVehicleCategories is list && data.supportedVehicleCategories.size() <= 10)) &&
+             isOptionalString(data, 'availabilityNote', 240) &&
              data.isActive is bool &&
              (!('parcelApproved' in data) || data.parcelApproved is bool) &&
              isOptionalString(data, 'operationalHours', 60) &&
@@ -227,6 +246,11 @@ service cloud.firestore {
              (!('statusHistory' in data) || data.statusHistory is list) &&
              isOptionalString(data, 'invoiceEmail', 150) &&
              (!('customerRating' in data) || (data.customerRating is int && data.customerRating >= 1 && data.customerRating <= 5)) &&
+             isOptionalString(data, 'routeProvider', 60) &&
+             isOptionalString(data, 'pickupZoneId', 128) &&
+             isOptionalString(data, 'dropoffZoneId', 128) &&
+             isOptionalString(data, 'assignedByOpsUid', 128) &&
+             isOptionalString(data, 'opsAssignmentNote', 300) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -352,6 +376,9 @@ service cloud.firestore {
              data.status in ['open', 'under_review', 'resolved_refund', 'resolved_closed'] &&
              isOptionalString(data, 'adminResolutionNote', 500) &&
              isOptionalString(data, 'resolvedBy', 128) &&
+             (!('lat' in data) || (data.lat is number && data.lat >= -90 && data.lat <= 90)) &&
+             (!('lng' in data) || (data.lng is number && data.lng >= -180 && data.lng <= 180)) &&
+             isOptionalString(data, 'locationLabel', 200) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -445,6 +472,19 @@ service cloud.firestore {
              data.description is string && data.description.size() >= 5 && data.description.size() <= 500 &&
              data.status in ['open', 'investigating', 'resolved'] &&
              isOptionalString(data, 'resolutionNote', 300) &&
+             (!('lat' in data) || (data.lat is number && data.lat >= -90 && data.lat <= 90)) &&
+             (!('lng' in data) || (data.lng is number && data.lng >= -180 && data.lng <= 180)) &&
+             isOptionalString(data, 'locationLabel', 200) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidOperationsStaff(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+             isOptionalString(data, 'phoneOrEmail', 150) &&
+             data.isActive is bool &&
+             isOptionalString(data, 'assignedDistrict', 80) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -620,14 +660,14 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 4. Public verified driver discovery directory (no PII)
+    // 4. Public verified driver discovery directory (no PII; Ops staff may monitor)
     match /driver_directory/{driverId} {
       allow get: if isSignedIn() && isValidId(driverId) &&
-                    (existing().verificationStatus == 'verified' || request.auth.uid == driverId || isAdmin());
+                    (existing().verificationStatus == 'verified' || request.auth.uid == driverId || isOpsOrOwner());
       allow list: if isSignedIn() &&
                      (resource.data.verificationStatus == 'verified' ||
                       resource.data.driverId == request.auth.uid ||
-                      isAdmin());
+                      isOpsOrOwner());
       allow create: if isSignedIn() &&
                        isValidId(driverId) &&
                        isValidDriverDirectory(incoming()) && (
@@ -670,18 +710,18 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(configId);
     }
 
-    // 7. Bookings (searching bookings readable only by verified drivers, owner, or admin; controlled lifecycle)
+    // 7. Bookings (searching bookings readable by verified drivers, owner, admin, or operations staff)
     match /bookings/{bookingId} {
       allow get: if isSignedIn() && isValidId(bookingId) &&
                     (existing().customerId == request.auth.uid ||
                      existing().assignedDriverId == request.auth.uid ||
                      (existing().status == 'searching' && isVerifiedDriver()) ||
-                     isAdmin());
+                     isOpsOrOwner());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.assignedDriverId == request.auth.uid ||
                       (resource.data.status == 'searching' && isVerifiedDriver()) ||
-                      isAdmin());
+                      isOpsOrOwner());
       allow create: if isSignedIn() &&
                        isValidId(bookingId) &&
                        incoming().customerId == request.auth.uid &&
@@ -693,6 +733,26 @@ service cloud.firestore {
                        incoming().customerId == existing().customerId &&
                        incoming().createdAt == existing().createdAt &&
                        isValidBooking(incoming());
+      allow update: if isOperationsStaff() &&
+                       isValidId(bookingId) &&
+                       incoming().customerId == existing().customerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTimestamp(incoming().updatedAt) &&
+                       existing().status in ['searching', 'assigned'] &&
+                       incoming().status in ['searching', 'assigned'] &&
+                       incoming().assignedDriverId is string &&
+                       incoming().assignedDriverId.size() >= 1 &&
+                       exists(/databases/$(database)/documents/driver_directory/$(incoming().assignedDriverId)) &&
+                       get(/databases/$(database)/documents/driver_directory/$(incoming().assignedDriverId)).data.verificationStatus == 'verified' &&
+                       (!('agreedFareInr' in incoming()) ||
+                        (incoming().agreedFareInr is number &&
+                         incoming().agreedFareInr >= existing().minPermittedFareInr &&
+                         incoming().agreedFareInr <= existing().maxPermittedFareInr)) &&
+                       incoming().assignedByOpsUid == request.auth.uid &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
+                         'agreedFareInr', 'tripPin', 'assignedByOpsUid', 'opsAssignmentNote', 'updatedAt'
+                       ]);
       allow update: if isSignedIn() &&
                        isValidId(bookingId) &&
                        request.auth.uid == existing().customerId &&
@@ -803,15 +863,15 @@ service cloud.firestore {
     // 9. Ride assignments (1 doc per bookingId prevents duplicate driver assignment)
     match /ride_assignments/{assignmentId} {
       allow get: if isSignedIn() && isValidId(assignmentId) &&
-                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isAdmin());
+                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isOpsOrOwner());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.driverId == request.auth.uid ||
-                      isAdmin());
+                      isOpsOrOwner());
       allow create: if isSignedIn() &&
                        isValidId(assignmentId) &&
                        assignmentId == incoming().bookingId &&
-                       incoming().customerId == request.auth.uid &&
+                       (incoming().customerId == request.auth.uid || isOpsOrOwner()) &&
                        incoming().status == 'active' &&
                        isValidRideAssignment(incoming());
       allow update: if isSignedIn() &&
@@ -830,14 +890,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 10. Live trip driver locations (strictly bound to assigned driver of the booking)
+    // 10. Live trip driver locations (strictly bound to assigned driver of the booking, Ops & Owner)
     match /trip_locations/{bookingId} {
       allow get: if isSignedIn() && isValidId(bookingId) &&
-                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isAdmin());
+                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isOpsOrOwner());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.driverId == request.auth.uid ||
-                      isAdmin());
+                      isOpsOrOwner());
       allow create, update: if isSignedIn() &&
                                isValidId(bookingId) &&
                                incoming().bookingId == bookingId &&
@@ -952,20 +1012,25 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 16. Complaints
+    // 16. Complaints (Ops staff can review/investigate; Owner Admin can resolve)
     match /complaints/{complaintId} {
       allow get: if isSignedIn() && isValidId(complaintId) &&
-                    (existing().reporterId == request.auth.uid || isAdmin());
+                    (existing().reporterId == request.auth.uid || isOpsOrOwner());
       allow list: if isSignedIn() &&
-                     (resource.data.reporterId == request.auth.uid || isAdmin());
+                     (resource.data.reporterId == request.auth.uid || isOpsOrOwner());
       allow create: if isSignedIn() &&
                        isValidId(complaintId) &&
                        incoming().reporterId == request.auth.uid &&
                        incoming().status == 'open' &&
                        isValidComplaintRecord(incoming());
-      allow update: if isAdmin() &&
-                       isValidId(complaintId) &&
-                       isValidComplaintRecord(incoming());
+      allow update: if isValidId(complaintId) && isValidComplaintRecord(incoming()) && (
+                       isAdmin() ||
+                       (isOperationsStaff() &&
+                        incoming().reporterId == existing().reporterId &&
+                        incoming().createdAt == existing().createdAt &&
+                        incoming().status in ['open', 'investigating'] &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'updatedAt']))
+                     );
       allow delete: if false;
     }
 
@@ -1021,19 +1086,33 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 20. Immutable admin audit logs
+    // 20. Immutable admin & operations audit logs
     match /audit_logs/{logId} {
       allow get: if isAdmin() && isValidId(logId);
       allow list: if isAdmin();
-      allow create: if isAdmin() && isValidId(logId) && isValidAuditLog(incoming());
+      allow create: if isOpsOrOwner() &&
+                       isValidId(logId) &&
+                       incoming().actorId == request.auth.uid &&
+                       isValidAuditLog(incoming());
       allow update, delete: if false;
     }
 
-    // 21. Admin role allowlist (Bootstrapped admin manages secondary admins)
+    // 21. Admin role allowlist (Bootstrapped owner manages secondary admins)
     match /admins/{adminUid} {
       allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
       allow list: if isAdmin();
       allow create, update, delete: if isBootstrappedAdmin();
+    }
+
+    // 21b. Operations staff allowlist (Owner Admin managed; strictly lower privilege than admins)
+    match /operations_staff/{staffUid} {
+      allow get: if isSignedIn() && isValidId(staffUid) && (request.auth.uid == staffUid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() &&
+                               isValidId(staffUid) &&
+                               incoming().userId == staffUid &&
+                               isValidOperationsStaff(incoming());
+      allow delete: if isAdmin() && isValidId(staffUid);
     }
 
     // 22. Global platform settings (signed-in read, admin-only write)
@@ -1062,26 +1141,30 @@ service cloud.firestore {
                        (existing().userId == request.auth.uid || isAdmin());
     }
 
-    // 24. Formal disputes (reporter/target/Admin read; Admin resolves)
+    // 24. Formal disputes (reporter/target/Ops/Admin read; Ops investigates; Admin resolves refunds)
     match /disputes/{disputeId} {
       allow get: if isSignedIn() && isValidId(disputeId) &&
                     (existing().reporterId == request.auth.uid ||
                      existing().targetUserId == request.auth.uid ||
-                     isAdmin());
+                     isOpsOrOwner());
       allow list: if isSignedIn() &&
                      (resource.data.reporterId == request.auth.uid ||
                       resource.data.targetUserId == request.auth.uid ||
-                      isAdmin());
+                      isOpsOrOwner());
       allow create: if isSignedIn() &&
                        isValidId(disputeId) &&
                        incoming().reporterId == request.auth.uid &&
                        incoming().status == 'open' &&
                        isValidDisputeRecord(incoming());
-      allow update: if isAdmin() &&
-                       isValidId(disputeId) &&
+      allow update: if isValidId(disputeId) &&
                        isValidDisputeRecord(incoming()) &&
                        incoming().reporterId == existing().reporterId &&
-                       incoming().createdAt == existing().createdAt;
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (isOperationsStaff() &&
+                          incoming().status in ['open', 'under_review'] &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminResolutionNote', 'updatedAt']))
+                       );
       allow delete: if false;
     }
 

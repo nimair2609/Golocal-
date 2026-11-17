@@ -26,15 +26,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.map.GeocodedPlace
+import com.example.data.map.RouteResult
 import com.example.data.model.Booking
-import com.example.domain.WestBengalCatalog
+import com.example.data.model.GeoPointDto
+import com.example.data.model.LiveDriverRtdbLocation
+import com.example.data.tracking.LiveLocationTracker
+import com.example.domain.BoraiLaunchConfig
 import com.example.ui.components.*
 import com.example.ui.theme.GolocalError
 import com.example.ui.theme.GolocalSuccess
+import com.example.ui.theme.GolocalWarning
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.CustomerViewModel
 import com.example.viewmodel.GovernanceViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun CustomerBookRideScreen(
@@ -44,19 +53,33 @@ fun CustomerBookRideScreen(
     onBackHome: () -> Unit
 ) {
     val context = LocalContext.current
+    LaunchedEffect(context) {
+        customerViewModel.attachContext(context)
+    }
+
     val draft by customerViewModel.draft.collectAsStateWithLifecycle()
     val quote by customerViewModel.currentQuote.collectAsStateWithLifecycle()
     val fareConfigs by customerViewModel.fareConfigs.collectAsStateWithLifecycle()
     val drivers by customerViewModel.verifiedDrivers.collectAsStateWithLifecycle()
     val activeBooking by customerViewModel.activeBooking.collectAsStateWithLifecycle()
     val activeOffers by customerViewModel.activeOffers.collectAsStateWithLifecycle()
-    val activeTripLocation by customerViewModel.activeTripLocation.collectAsStateWithLifecycle()
+    val activeLiveTracking by customerViewModel.activeLiveTracking.collectAsStateWithLifecycle()
+    val activeBookingRoute by customerViewModel.activeBookingRoute.collectAsStateWithLifecycle()
+    val routeResult by customerViewModel.routeResult.collectAsStateWithLifecycle()
+    val serviceAreas by customerViewModel.serviceAreas.collectAsStateWithLifecycle()
+    val coverageEvaluation by customerViewModel.coverageEvaluation.collectAsStateWithLifecycle()
+    val searchResults by customerViewModel.searchResults.collectAsStateWithLifecycle()
+    val isSearchingPlaces by customerViewModel.isSearchingPlaces.collectAsStateWithLifecycle()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     val accountState by sessionViewModel.userAccountState.collectAsStateWithLifecycle()
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
     val isSubmitting by customerViewModel.isSubmitting.collectAsStateWithLifecycle()
     val customerInvoiceEmail = (accountState as? com.example.data.model.UiState.Success)?.data?.email.orEmpty()
 
+    var hasLocationPermission by remember(context) {
+        mutableStateOf(LiveLocationTracker.hasLocationPermission(context))
+    }
+    var pinMode by remember { mutableStateOf("none") } // "none", "pickup", "destination"
     var showPickupPicker by remember { mutableStateOf(false) }
     var showDestPicker by remember { mutableStateOf(false) }
     var showSosDialog by remember { mutableStateOf(false) }
@@ -66,15 +89,30 @@ fun CustomerBookRideScreen(
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        if (perms.values.any { it }) {
+        val granted = perms.values.any { it }
+        hasLocationPermission = granted
+        if (granted) {
             sessionViewModel.detectDeviceLocation(context)
+        } else {
+            pinMode = "pickup"
         }
     }
 
-    LaunchedEffect(gps.label) {
-        if (gps.label.isNotBlank()) {
-            customerViewModel.setCustomLabels(gps.label, draft.customDestinationLabel)
+    LaunchedEffect(gps.lat, gps.lng, gps.label) {
+        val lat = gps.lat
+        val lng = gps.lng
+        if (lat != null && lng != null) {
+            customerViewModel.setPickupCoordinates(
+                lat = lat,
+                lng = lng,
+                explicitLabel = gps.label.takeIf { it.isNotBlank() },
+                confirmImmediately = true
+            )
         }
+    }
+
+    val zoneOverlays = remember(serviceAreas) {
+        serviceAreas.map { it.toMapZoneOverlay() }
     }
 
     Column(
@@ -93,7 +131,7 @@ fun CustomerBookRideScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Home")
             }
             Text(
-                text = if (activeBooking != null) "Live Ride & Fare Proposals" else "Book a Ride",
+                text = if (activeBooking != null) "Live Ride & OSM Tracking" else "Book a Ride",
                 style = MaterialTheme.typography.headlineSmall
             )
         }
@@ -109,7 +147,9 @@ fun CustomerBookRideScreen(
                 booking = currentBooking,
                 offers = activeOffers,
                 drivers = drivers,
-                tripLocation = activeTripLocation,
+                liveTracking = activeLiveTracking,
+                route = activeBookingRoute,
+                zones = zoneOverlays,
                 lowNetwork = prefs.lowNetworkMode,
                 onAcceptOffer = { offer -> customerViewModel.confirmOffer(currentBooking.id, offer) },
                 onShareTrip = {
@@ -127,19 +167,93 @@ fun CustomerBookRideScreen(
                 onOpenCancel = { showCancelDialog = true }
             )
         } else {
-            InteractiveBengalMapCanvas(
-                pickupLat = gps.lat ?: draft.pickupPlace.lat,
-                pickupLng = gps.lng ?: draft.pickupPlace.lng,
+            if (!hasLocationPermission || gps.error != null) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = gps.error ?: "Location permission not granted. Map defaults to ${BoraiLaunchConfig.DEFAULT_LOCALITY} (PIN ${BoraiLaunchConfig.DEFAULT_PINCODE}) — tap to pin or search any village.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    locationLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
+                            ) {
+                                Text("Enable GPS")
+                            }
+                            TextButton(onClick = { pinMode = "pickup" }) {
+                                Text("Pin Pickup Manually")
+                            }
+                        }
+                    }
+                }
+            }
+
+            GoLocalOsmMapCard(
+                centerLat = draft.pickupLat,
+                centerLng = draft.pickupLng,
+                pickupPoint = GeoPointDto(draft.pickupLat, draft.pickupLng),
                 pickupLabel = draft.customPickupLabel.ifBlank { draft.pickupPlace.nameEn },
-                destLat = draft.destinationPlace.lat,
-                destLng = draft.destinationPlace.lng,
-                destLabel = draft.customDestinationLabel.ifBlank { draft.destinationPlace.nameEn },
+                destinationPoint = GeoPointDto(draft.destLat, draft.destLng),
+                destinationLabel = draft.customDestinationLabel.ifBlank { draft.destinationPlace.nameEn },
                 onlineDrivers = drivers,
-                liveTripLocation = null,
-                lowNetworkMode = prefs.lowNetworkMode
+                routePoints = routeResult?.points.orEmpty(),
+                zones = zoneOverlays,
+                lowNetworkMode = prefs.lowNetworkMode,
+                interactivePinMode = pinMode,
+                onMapTap = { lat, lng ->
+                    when (pinMode) {
+                        "pickup" -> customerViewModel.setPickupCoordinates(lat, lng)
+                        "destination" -> customerViewModel.setDestinationCoordinates(lat, lng)
+                    }
+                },
+                onDragPickup = { lat, lng -> customerViewModel.setPickupCoordinates(lat, lng) },
+                onDragDestination = { lat, lng -> customerViewModel.setDestinationCoordinates(lat, lng) },
+                height = if (prefs.lowNetworkMode) 170.dp else 255.dp
             )
 
-            // Pickup & Destination Selector Card
+            // Interactive Map Pinning & Marker Drag Mode Controls
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = pinMode == "pickup",
+                    onClick = { pinMode = if (pinMode == "pickup") "none" else "pickup" },
+                    label = { Text("Drag / Pin Pickup") },
+                    leadingIcon = { Icon(Icons.Filled.TripOrigin, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                )
+                FilterChip(
+                    selected = pinMode == "destination",
+                    onClick = { pinMode = if (pinMode == "destination") "none" else "destination" },
+                    label = { Text("Drag / Pin Drop") },
+                    leadingIcon = { Icon(Icons.Filled.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                )
+                if (pinMode != "none") {
+                    AssistChip(
+                        onClick = { pinMode = "none" },
+                        label = { Text("Done Pinning") },
+                        leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    )
+                }
+            }
+
+            // Pickup & Destination Selector & Confirmation Card
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surface,
@@ -166,51 +280,129 @@ fun CustomerBookRideScreen(
                         ) {
                             Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (gps.isDetecting) "Detecting..." else "Use GPS")
+                            Text(if (gps.isDetecting) "Detecting..." else "Current GPS")
                         }
                     }
 
-                    gps.error?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = GolocalError)
-                    }
-
                     OutlinedCard(
-                        onClick = { showPickupPicker = true },
+                        onClick = {
+                            customerViewModel.searchPlaces("", allowRemote = false)
+                            showPickupPicker = true
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
                             Icon(Icons.Filled.TripOrigin, contentDescription = null, tint = GolocalSuccess)
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("Pickup Point", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text(
-                                    draft.customPickupLabel.ifBlank { "${draft.pickupPlace.nameEn} (${draft.pickupPlace.district})" },
+                                    draft.customPickupLabel.ifBlank { "${draft.pickupPlace.nameEn} (${draft.pickupDistrict})" },
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                Text(
+                                    text = String.format(Locale.US, "%.4f, %.4f", draft.pickupLat, draft.pickupLng),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMono,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            Icon(Icons.Filled.EditLocationAlt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            FilterChip(
+                                selected = draft.pickupConfirmed,
+                                onClick = { customerViewModel.confirmPickup(!draft.pickupConfirmed) },
+                                label = { Text(if (draft.pickupConfirmed) "Confirmed" else "Confirm") }
+                            )
                         }
                     }
 
                     OutlinedCard(
-                        onClick = { showDestPicker = true },
+                        onClick = {
+                            customerViewModel.searchPlaces("", allowRemote = false)
+                            showDestPicker = true
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
                             Icon(Icons.Filled.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("Destination", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text(
-                                    draft.customDestinationLabel.ifBlank { "${draft.destinationPlace.nameEn} (${draft.destinationPlace.district})" },
+                                    draft.customDestinationLabel.ifBlank { "${draft.destinationPlace.nameEn} (${draft.destinationDistrict})" },
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                Text(
+                                    text = String.format(Locale.US, "%.4f, %.4f", draft.destLat, draft.destLng),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMono,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            FilterChip(
+                                selected = draft.destinationConfirmed,
+                                onClick = { customerViewModel.confirmDestination(!draft.destinationConfirmed) },
+                                label = { Text(if (draft.destinationConfirmed) "Confirmed" else "Confirm") }
+                            )
                         }
                     }
+                }
+            }
+
+            // Road Route & Service Zone Coverage Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = if (coverageEvaluation.isAllowed) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                } else {
+                    GolocalError.copy(alpha = 0.12f)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        1.dp,
+                        if (coverageEvaluation.isAllowed) MaterialTheme.colorScheme.outline else GolocalError,
+                        RoundedCornerShape(16.dp)
+                    )
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (routeResult?.provider == "osrm") "OSRM Road Route" else "Route Estimate",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "${quote.distanceKm} km • ${quote.estimatedDurationMin} min",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontFamily = JetBrainsMono
+                        )
+                    }
+                    routeResult?.warningMessage?.let { warn ->
+                        Text(warn, style = MaterialTheme.typography.labelSmall, color = GolocalWarning)
+                    }
+                    Text(
+                        text = if (coverageEvaluation.isAllowed) {
+                            coverageEvaluation.summaryNote
+                        } else {
+                            coverageEvaluation.blockingReason
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (coverageEvaluation.isAllowed) MaterialTheme.colorScheme.onSurfaceVariant else GolocalError
+                    )
                 }
             }
 
@@ -346,7 +538,7 @@ fun CustomerBookRideScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Estimated Distance", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Road Distance & ETA", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("${quote.distanceKm} km (~${quote.estimatedDurationMin} min)", fontFamily = JetBrainsMono, fontWeight = FontWeight.SemiBold)
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -384,7 +576,7 @@ fun CustomerBookRideScreen(
 
                     Button(
                         onClick = { customerViewModel.submitBooking(invoiceEmail = customerInvoiceEmail) },
-                        enabled = !isSubmitting,
+                        enabled = !isSubmitting && coverageEvaluation.isAllowed,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(54.dp)
@@ -394,7 +586,7 @@ fun CustomerBookRideScreen(
                         if (isSubmitting) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
                         } else {
-                            Text("Request Ride & Receive Fare Proposals")
+                            Text("Confirm Route & Request Ride")
                         }
                     }
                 }
@@ -403,32 +595,42 @@ fun CustomerBookRideScreen(
     }
 
     if (showPickupPicker) {
-        WestBengalLocationPickerDialog(
-            title = "Select Pickup Location",
+        OsmPlaceSearchPickerDialog(
+            title = "Select Pickup Village or Stand",
             currentCustom = draft.customPickupLabel,
+            results = searchResults,
+            isSearching = isSearchingPlaces,
+            onQueryChanged = { customerViewModel.searchPlaces(it, allowRemote = false) },
+            onSubmitSearch = { customerViewModel.searchPlaces(it, allowRemote = true) },
             onDismiss = { showPickupPicker = false },
             onSelectPlace = {
-                customerViewModel.setPickupPlace(it)
+                customerViewModel.selectGeocodedPlace(it, isPickup = true)
                 showPickupPicker = false
             },
             onSaveCustom = { label ->
                 customerViewModel.setCustomLabels(label, draft.customDestinationLabel)
+                customerViewModel.confirmPickup(true)
                 showPickupPicker = false
             }
         )
     }
 
     if (showDestPicker) {
-        WestBengalLocationPickerDialog(
-            title = "Select Destination",
+        OsmPlaceSearchPickerDialog(
+            title = "Search Destination Village, Station, or Town",
             currentCustom = draft.customDestinationLabel,
+            results = searchResults,
+            isSearching = isSearchingPlaces,
+            onQueryChanged = { customerViewModel.searchPlaces(it, allowRemote = false) },
+            onSubmitSearch = { customerViewModel.searchPlaces(it, allowRemote = true) },
             onDismiss = { showDestPicker = false },
             onSelectPlace = {
-                customerViewModel.setDestinationPlace(it)
+                customerViewModel.selectGeocodedPlace(it, isPickup = false)
                 showDestPicker = false
             },
             onSaveCustom = { label ->
                 customerViewModel.setCustomLabels(draft.customPickupLabel, label)
+                customerViewModel.confirmDestination(true)
                 showDestPicker = false
             }
         )
@@ -453,8 +655,8 @@ fun CustomerBookRideScreen(
                     onClick = {
                         customerViewModel.triggerSos(
                             activeBooking!!.id,
-                            gps.lat ?: activeBooking!!.pickupLat,
-                            gps.lng ?: activeBooking!!.pickupLng,
+                            activeLiveTracking?.lat ?: gps.lat ?: activeBooking!!.pickupLat,
+                            activeLiveTracking?.lng ?: gps.lng ?: activeBooking!!.pickupLng,
                             notes
                         )
                         showSosDialog = false
@@ -545,7 +747,14 @@ fun CustomerBookRideScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            customerViewModel.submitComplaint(booking.id, "trip_issue", desc)
+                            customerViewModel.submitComplaint(
+                                bookingId = booking.id,
+                                category = "trip_issue",
+                                description = desc,
+                                lat = activeLiveTracking?.lat ?: booking.pickupLat,
+                                lng = activeLiveTracking?.lng ?: booking.pickupLng,
+                                locationLabel = "${booking.pickupLabel} -> ${booking.destinationLabel}"
+                            )
                             showComplaintDialog = false
                         }
                     ) { Text("Submit") }
@@ -561,7 +770,9 @@ private fun ActiveBookingView(
     booking: Booking,
     offers: List<com.example.data.model.RideOffer>,
     drivers: List<com.example.data.model.DriverDirectoryEntry>,
-    tripLocation: com.example.data.model.TripLocation?,
+    liveTracking: LiveDriverRtdbLocation?,
+    route: RouteResult?,
+    zones: List<MapZoneOverlay>,
     lowNetwork: Boolean,
     onAcceptOffer: (com.example.data.model.RideOffer) -> Unit,
     onShareTrip: () -> Unit,
@@ -569,16 +780,20 @@ private fun ActiveBookingView(
     onOpenComplaint: () -> Unit,
     onOpenCancel: () -> Unit
 ) {
-    InteractiveBengalMapCanvas(
-        pickupLat = booking.pickupLat,
-        pickupLng = booking.pickupLng,
+    GoLocalOsmMapCard(
+        centerLat = liveTracking?.lat ?: booking.pickupLat,
+        centerLng = liveTracking?.lng ?: booking.pickupLng,
+        pickupPoint = GeoPointDto(booking.pickupLat, booking.pickupLng),
         pickupLabel = booking.pickupLabel,
-        destLat = booking.destinationLat,
-        destLng = booking.destinationLng,
-        destLabel = booking.destinationLabel,
+        destinationPoint = GeoPointDto(booking.destinationLat, booking.destinationLng),
+        destinationLabel = booking.destinationLabel,
+        driverLivePoint = liveTracking?.let { GeoPointDto(it.lat, it.lng) },
         onlineDrivers = drivers,
-        liveTripLocation = tripLocation,
-        lowNetworkMode = lowNetwork
+        routePoints = route?.points.orEmpty(),
+        zones = zones,
+        lowNetworkMode = lowNetwork,
+        statusBadgeText = if (liveTracking?.trackingStatus == "active") "Live Partner GPS" else "Booking Route (OSM)",
+        height = if (lowNetwork) 170.dp else 245.dp
     )
 
     Surface(
@@ -594,7 +809,7 @@ private fun ActiveBookingView(
                     label = booking.status.uppercase(),
                     tone = if (booking.status == "searching") "warning" else "success"
                 )
-                Text("${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km", style = MaterialTheme.typography.labelMedium)
+                Text("${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km (~${booking.estimatedDurationMin} min)", style = MaterialTheme.typography.labelMedium)
             }
             Text("${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.titleMedium)
 
@@ -631,12 +846,27 @@ private fun ActiveBookingView(
                 )
             }
 
-            tripLocation?.let { loc ->
-                Text(
-                    text = "Live Driver GPS: ${String.format("%.4f", loc.lat)}, ${String.format("%.4f", loc.lng)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            liveTracking?.let { loc ->
+                val timeFmt = remember { SimpleDateFormat("hh:mm:ss a", Locale.US) }
+                val updatedAt = if (loc.updatedAtEpochMs > 0L) timeFmt.format(Date(loc.updatedAtEpochMs)) else "Live"
+                val (badgeLabel, badgeTone) = when (loc.trackingStatus) {
+                    "active" -> "LIVE PARTNER GPS ($updatedAt)" to "success"
+                    "paused_gps_lost" -> "PARTNER GPS SIGNAL LOST — LAST KNOWN" to "warning"
+                    else -> "LIVE SHARING STOPPED" to "info"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    GolocalStatusBadge(label = badgeLabel, tone = badgeTone)
+                    Text(
+                        text = String.format(Locale.US, "%.4f, %.4f", loc.lat, loc.lng),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = JetBrainsMono,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -709,16 +939,19 @@ private fun ActiveBookingView(
 }
 
 @Composable
-private fun WestBengalLocationPickerDialog(
+private fun OsmPlaceSearchPickerDialog(
     title: String,
     currentCustom: String,
+    results: List<GeocodedPlace>,
+    isSearching: Boolean,
+    onQueryChanged: (String) -> Unit,
+    onSubmitSearch: (String) -> Unit,
     onDismiss: () -> Unit,
-    onSelectPlace: (com.example.domain.WestBengalPlace) -> Unit,
+    onSelectPlace: (GeocodedPlace) -> Unit,
     onSaveCustom: (String) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var customText by remember { mutableStateOf(currentCustom) }
-    val filtered = remember(query) { WestBengalCatalog.search(query) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -727,16 +960,41 @@ private fun WestBengalLocationPickerDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp),
+                    .heightIn(max = 460.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedTextField(
                     value = query,
-                    onValueChange = { query = it },
-                    label = { Text("Search station, bus stand, airport, village...") },
+                    onValueChange = {
+                        query = it
+                        onQueryChanged(it)
+                    },
+                    label = { Text("Filter Borai, Mohanpur, villages, stations...") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Instant local search • Explicit OSM search",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilledTonalButton(
+                        enabled = query.trim().length >= 3 && !isSearching,
+                        onClick = { onSubmitSearch(query) }
+                    ) {
+                        if (isSearching) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Search OSM")
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = customText,
                     onValueChange = { customText = it },
@@ -750,7 +1008,7 @@ private fun WestBengalLocationPickerDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(filtered, key = { it.id }) { place ->
+                    items(results, key = { it.id }) { place ->
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -759,9 +1017,28 @@ private fun WestBengalLocationPickerDialog(
                                 .clickable { onSelectPlace(place) }
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                Text(place.nameEn, style = MaterialTheme.typography.titleSmall)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        place.displayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = when (place.source) {
+                                            "service_zone" -> "ZONE"
+                                            "osm_nominatim" -> "OSM"
+                                            else -> "LOCAL"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                                 Text(
-                                    "${place.nameBn} • ${place.district} • ${place.category.replace('_', ' ')}",
+                                    "${place.secondaryText} (${String.format(Locale.US, "%.4f, %.4f", place.lat, place.lng)})",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

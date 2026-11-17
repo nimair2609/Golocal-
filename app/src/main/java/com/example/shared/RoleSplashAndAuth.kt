@@ -34,8 +34,6 @@ import com.example.R
 import com.example.data.repository.ClientPreferences
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
-import com.example.ui.auth.GoogleAuthController
-import com.example.ui.auth.GoogleAuthUiState
 import com.example.ui.auth.PhoneAuthController
 import com.example.ui.auth.PhoneAuthFormContent
 import com.example.ui.auth.PhoneAuthStep
@@ -62,26 +60,26 @@ enum class ExperienceMode(
     CUSTOMER(
         appTitle = "GoLocal",
         roleLabel = "Customer Mobility & Local Services",
-        headline = "Sign In with Google or Mobile OTP",
-        description = "Book verified Totos, Autos, Bikes, Cabs, Railway Station, Airport & Private Bus rides across West Bengal using your Google account or verified mobile number.",
+        headline = "Sign In with Mobile OTP",
+        description = "Book verified Totos, Autos, Bikes, Cabs, Railway Station, Airport & Private Bus rides across West Bengal using your verified mobile number.",
         buttonLabel = "Send OTP",
-        footerNotice = "New users complete a one-time safety & invoice setup right after sign-in."
+        footerNotice = "New users complete a one-time safety & invoice setup right after OTP sign-in."
     ),
     RIDER(
         appTitle = "GoLocal Rider",
         roleLabel = "Verified Driver & Partner App",
-        headline = "Partner Login (Google or Mobile OTP)",
-        description = "Sign in or register as a GoLocal driver or bus operator partner using Google or Mobile OTP to accept rides, manage buses, and track earnings.",
+        headline = "Partner Login (Mobile OTP)",
+        description = "Sign in or register as a GoLocal driver or bus operator partner using Mobile OTP to accept rides, manage buses, and track earnings.",
         buttonLabel = "Send Partner OTP",
         footerNotice = "Admin document verification (Driving Licence, RC, Insurance & Permits) is mandatory before going online."
     ),
     ADMIN(
         appTitle = "GoLocal Admin Portal",
         roleLabel = "Operations & Governance",
-        headline = "Admin Sign-In (Google or Mobile OTP)",
-        description = "Restricted management portal for rider & bus KYC verification, fare & commission rules, fraud flags, disputes, SOS safety response, and audit logs.",
-        buttonLabel = "Send Admin OTP",
-        footerNotice = "Public self-registration is disabled. Access is enforced by Firebase Auth & Firestore /admins/{uid} rules."
+        headline = "Portal Sign-In (Mobile OTP)",
+        description = "Restricted management portal for Owner Admin & Operations Staff to oversee live tracking, zones, KYC verification, disputes, SOS safety response, and audit logs.",
+        buttonLabel = "Send Portal OTP",
+        footerNotice = "Public self-registration is disabled. Access is enforced by Firebase Auth & Firestore /admins/{uid} or /operations_staff/{uid} rules."
     )
 }
 
@@ -171,8 +169,7 @@ fun GolocalRoleSplashScreen(
 fun RoleAuthScreen(
     mode: ExperienceMode,
     onAuthSuccess: () -> Unit,
-    phoneControllerFactory: ((CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null,
-    googleControllerFactory: ((CoroutineScope, () -> Unit) -> GoogleAuthController)? = null
+    phoneControllerFactory: ((CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -183,18 +180,10 @@ fun RoleAuthScreen(
                 onSuccess = { _ -> onAuthSuccess() }
             )
     }
-    val googleController = remember(mode) {
-        googleControllerFactory?.invoke(scope) { onAuthSuccess() }
-            ?: GoogleAuthController(
-                scope = scope,
-                onSuccess = onAuthSuccess
-            )
-    }
     DisposableEffect(controller) {
         onDispose { controller.dispose() }
     }
     val phoneState by controller.uiState.collectAsStateWithLifecycle()
-    val googleState: GoogleAuthUiState by googleController.uiState.collectAsStateWithLifecycle()
     var showPolicyDialog by remember { mutableStateOf(false) }
 
     BackHandler(enabled = phoneState.step == PhoneAuthStep.VERIFY_OTP) {
@@ -351,80 +340,6 @@ fun RoleAuthScreen(
                         }
                     }
 
-                    if (phoneState.step == PhoneAuthStep.INPUT_PHONE) {
-                        if (!googleState.errorMessage.isNullOrBlank()) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("google_auth_error_banner")
-                            ) {
-                                Text(
-                                    text = googleState.errorMessage ?: "",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.padding(12.dp)
-                                )
-                            }
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                googleController.signInWithGoogle(context)
-                            },
-                            enabled = !googleState.isSigningIn && !phoneState.isBusy,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(54.dp)
-                                .testTag("google_sign_in_button")
-                        ) {
-                            if (googleState.isSigningIn) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text("Connecting to Google...")
-                            } else {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = GolocalPrimaryBlue.copy(alpha = 0.12f),
-                                    modifier = Modifier.size(26.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = "G",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            color = GolocalPrimaryBlue,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Continue with Google",
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            HorizontalDivider(modifier = Modifier.weight(1f))
-                            Text(
-                                text = "OR USE MOBILE OTP",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            HorizontalDivider(modifier = Modifier.weight(1f))
-                        }
-                    }
-
                     PhoneAuthFormContent(
                         controller = controller,
                         state = phoneState,
@@ -461,7 +376,7 @@ fun RoleAuthScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "GoLocal by NR Next processes your verified mobile number / Google identity, pickup/drop locations, and emergency SOS contact strictly to deliver rides, bus tickets, invoices, and safety support.",
+                        "GoLocal by NR Next processes your OTP-verified mobile number, pickup/drop locations, and emergency SOS contact strictly to deliver rides, bus tickets, invoices, and safety support.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
@@ -522,7 +437,8 @@ fun SharedAppSettingsAndSignOutSection(
     prefs: ClientPreferences,
     sessionViewModel: AppSessionViewModel,
     supportHelpLabel: String = "Help & Support",
-    onOpenSupportDialog: (() -> Unit)? = null
+    onOpenSupportDialog: (() -> Unit)? = null,
+    onBeforeSignOut: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -626,7 +542,10 @@ fun SharedAppSettingsAndSignOutSection(
                 }
             }
             Button(
-                onClick = { signOut(scope, context = context) },
+                onClick = {
+                    onBeforeSignOut?.invoke()
+                    signOut(scope, context = context)
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -682,7 +601,7 @@ fun SharedAppSettingsAndSignOutSection(
             title = { Text("Privacy Policy & Data Safety") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Data Collected: Phone/Google identity, trip pickup/drop coordinates (only while using ride/dispatch), driver KYC docs (DL, RC, Insurance), private SOS contact.", style = MaterialTheme.typography.bodySmall)
+                    Text("Data Collected: Verified mobile number, trip pickup/drop coordinates (only while using ride/dispatch), driver KYC docs (DL, RC, Insurance), private SOS contact.", style = MaterialTheme.typography.bodySmall)
                     Text("Encryption & Deletion: All data is transmitted over TLS and stored in Firebase Firestore/Storage with role-based access rules. Tap 'Delete Account & Data' to permanently remove your personal profile and auth credentials.", style = MaterialTheme.typography.bodySmall)
                 }
             },

@@ -47,7 +47,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `customer auth screen renders dual Google and Mobile OTP login without Admin entry points`() {
+    fun `customer auth screen renders Mobile OTP login without Google Sign-In or Admin entry points`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.CUSTOMER, onAuthSuccess = {})
@@ -57,7 +57,7 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithText("GoLocal").assertIsDisplayed()
         composeTestRule.onNodeWithText("Your Local. Our Priority.").assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("by NR Next").fetchSemanticsNodes().isEmpty())
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("phone_number_input").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("Admin Portal").fetchSemanticsNodes().isEmpty())
@@ -65,7 +65,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `rider auth screen renders dual Google and Partner Mobile OTP login without Admin options`() {
+    fun `rider auth screen renders Partner Mobile OTP login without Google Sign-In or Admin options`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.RIDER, onAuthSuccess = {})
@@ -73,13 +73,13 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("GoLocal Rider").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("Admin Portal").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
-    fun `admin auth screen renders strict Admin Google and Mobile OTP gate without public signup`() {
+    fun `admin auth screen renders strict Admin Mobile OTP gate without Google Sign-In or public signup`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.ADMIN, onAuthSuccess = {})
@@ -87,8 +87,8 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("GoLocal Admin Portal").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Admin Sign-In (Google or Mobile OTP)").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Portal Sign-In (Mobile OTP)").assertIsDisplayed()
+        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
     }
 
