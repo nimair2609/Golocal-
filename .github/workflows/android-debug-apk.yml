@@ -1,4 +1,3 @@
-
 name: GoLocal Android Debug APK
 
 on:
@@ -132,20 +131,20 @@ jobs:
           if not os.path.isfile(gs_path):
               b64_val = os.environ.get("GOOGLE_SERVICES_JSON_BASE64", "").strip()
               if not b64_val:
-                  print("::error::Firebase configuration missing.")
+                  print("::error::Firebase configuration missing (app/google-services.json and GOOGLE_SERVICES_JSON_BASE64 are absent).")
                   sys.exit(1)
 
               try:
                   decoded = base64.b64decode("".join(b64_val.split()), validate=True)
               except Exception:
-                  print("::error::Invalid Firebase base64 secret.")
+                  print("::error::Invalid GOOGLE_SERVICES_JSON_BASE64 secret.")
                   sys.exit(1)
 
               os.makedirs(os.path.dirname(gs_path), exist_ok=True)
               with open(gs_path, "wb") as f:
                   f.write(decoded)
 
-              print("Firebase configuration restored.")
+              print("Firebase configuration restored from secret.")
           else:
               print("Using Firebase configuration from repository.")
 
@@ -170,23 +169,16 @@ jobs:
           ]
 
           if not matching_clients:
-              print(f"::error::Package ID mismatch: {expected_pkg}")
+              print(f"::error::Package ID mismatch in google-services.json: expected {expected_pkg}")
               sys.exit(1)
-
-          oauth_clients = matching_clients[0].get("oauth_client", [])
-          has_web_client = any(oc.get("client_type") == 3 for oc in oauth_clients)
 
           print(f"Firebase project validated: {project_id}")
           print(f"Android package validated: {expected_pkg}")
-          print(f"Web OAuth client present: {has_web_client}")
-
-          if not has_web_client:
-              print("::warning::Web OAuth client missing. Google Sign-In may not work.")
           PY
 
-      # Restore the stable project debug keystore so SHA-1/SHA-256 remain consistent
-      # with Firebase Console & app/google-services.json for Google Sign-In.
-      - name: Restore & Verify Stable Debug Keystore
+      # Restore the permanent project debug keystore from GitHub repository secret
+      # so debug APK signing stays consistent across builds without generating ephemeral keys.
+      - name: Restore & Verify Permanent Debug Keystore
         shell: bash
         env:
           ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
@@ -196,44 +188,43 @@ jobs:
 
           ks_path = "debug.keystore"
           secret_b64 = os.environ.get("ANDROID_DEBUG_KEYSTORE_BASE64", "").strip()
-          repo_b64_path = "debug.keystore.base64"
 
-          if secret_b64:
-              try:
-                  raw = base64.b64decode("".join(secret_b64.split()), validate=True)
-              except Exception:
-                  print("::error::ANDROID_DEBUG_KEYSTORE_BASE64 secret is not valid Base64.")
-                  sys.exit(1)
-              with open(ks_path, "wb") as f:
-                  f.write(raw)
-              print("Restored debug.keystore from ANDROID_DEBUG_KEYSTORE_BASE64 secret.")
-          elif os.path.isfile(repo_b64_path):
-              with open(repo_b64_path, "r", encoding="utf-8") as f:
-                  repo_b64 = "".join(f.read().split())
-              try:
-                  raw = base64.b64decode(repo_b64, validate=True)
-              except Exception:
-                  print("::error::Committed debug.keystore.base64 is not valid Base64.")
-                  sys.exit(1)
-              with open(ks_path, "wb") as f:
-                  f.write(raw)
-              print("Restored debug.keystore from committed debug.keystore.base64.")
-          elif os.path.isfile(ks_path):
-              print("Using existing debug.keystore from repository.")
-          else:
-              print("::error::Neither ANDROID_DEBUG_KEYSTORE_BASE64 secret nor debug.keystore.base64 / debug.keystore is present.")
-              print("::error::Refusing to generate an ephemeral keystore because Google Sign-In requires a stable registered SHA-1.")
+          if not secret_b64:
+              print("::error::Missing GitHub repository secret: ANDROID_DEBUG_KEYSTORE_BASE64.")
+              print("::error::Refusing to generate a temporary debug keystore so signing remains stable across builds.")
+              print("::error::How to configure:")
+              print("::error::1. Go to GitHub -> Actions -> 'Generate GoLocal Debug Keystore' -> Run workflow.")
+              print("::error::2. Download the 'GoLocal-Permanent-Debug-Keystore' artifact and open debug.keystore.base64.txt.")
+              print("::error::3. Go to Repo Settings -> Secrets and variables -> Actions -> New repository secret.")
+              print("::error::4. Name the secret ANDROID_DEBUG_KEYSTORE_BASE64 and paste the Base64 text.")
               sys.exit(1)
 
-          if os.path.getsize(ks_path) == 0:
-              print("::error::Restored debug.keystore is empty.")
+          try:
+              raw = base64.b64decode("".join(secret_b64.split()), validate=True)
+          except Exception:
+              print("::error::ANDROID_DEBUG_KEYSTORE_BASE64 secret is not valid Base64.")
               sys.exit(1)
+
+          if not raw:
+              print("::error::Decoded debug.keystore is empty.")
+              sys.exit(1)
+
+          with open(ks_path, "wb") as f:
+              f.write(raw)
+
+          print("Restored debug.keystore from ANDROID_DEBUG_KEYSTORE_BASE64 secret.")
           PY
 
-          keytool -list \
+          if ! keytool -list \
             -keystore debug.keystore \
             -storepass android \
-            -alias androiddebugkey
+            -alias androiddebugkey; then
+            echo "::error::Restored debug.keystore failed verification for alias 'androiddebugkey' with debug storepass."
+            rm -f debug.keystore
+            exit 1
+          fi
+
+          echo "Verified debug.keystore and alias 'androiddebugkey' successfully."
 
       - name: Build Android Debug APK
         shell: bash
@@ -249,7 +240,7 @@ jobs:
 
           "$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify Debug APK & Extract Certificate Fingerprints
+      - name: Verify Debug APK & Signature
         shell: bash
         run: |
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
@@ -311,22 +302,8 @@ jobs:
           project_id = gs.get("project_info", {}).get("project_id", "unknown")
           pkg = "com.aistudio.golocal.wbmxrq"
 
-          registered_sha1s = [
-              oc.get("android_info", {}).get("certificate_hash", "").lower()
-              for c in gs.get("client", [])
-              if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == pkg
-              for oc in c.get("oauth_client", [])
-              if oc.get("client_type") == 1
-          ]
-
-          sha1_in_gs = sha1_raw in registered_sha1s
-
           print(f"Debug Certificate SHA-1: {sha1_colon}")
           print(f"Debug Certificate SHA-256: {sha256_colon}")
-          print(f"SHA-1 present in google-services.json: {sha1_in_gs}")
-
-          if not sha1_in_gs:
-              print("::warning::Built APK SHA-1 is NOT present in app/google-services.json; Google Sign-In will fail with DEVELOPER_ERROR (10) until registered in Firebase Console and google-services.json is updated.")
 
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
 
@@ -339,8 +316,7 @@ jobs:
                   s.write(f"| **Firebase Project ID** | `{project_id}` |\n")
                   s.write(f"| **Debug SHA-1** | `{sha1_colon}` |\n")
                   s.write(f"| **Debug SHA-256** | `{sha256_colon}` |\n")
-                  s.write(f"| **SHA-1 registered in Firebase config** | `{'Yes' if sha1_in_gs else 'No'}` |\n")
-                  s.write("\n> Debug signing key is not a production release key.\n")
+                  s.write("\n> Signed with the permanent repository debug keystore (`ANDROID_DEBUG_KEYSTORE_BASE64`).\n")
           PY
 
       - name: Upload Debug APK Artifact
@@ -350,3 +326,9 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
           if-no-files-found: error
+
+      - name: Clean Up Restored Debug Keystore
+        if: always()
+        shell: bash
+        run: |
+          rm -f debug.keystore
