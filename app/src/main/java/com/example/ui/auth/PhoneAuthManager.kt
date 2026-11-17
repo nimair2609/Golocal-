@@ -284,6 +284,13 @@ internal fun classifyPhoneAuthFailure(throwable: Throwable): Triple<String?, Str
     val firebaseErrorCode = (throwable as? FirebaseAuthException)?.errorCode
         ?: (throwable.cause as? FirebaseAuthException)?.errorCode
     val exceptionType = throwable::class.java.simpleName
+    val rawMessage = buildString {
+        append(throwable.message.orEmpty())
+        throwable.cause?.message?.let {
+            append(' ')
+            append(it)
+        }
+    }
 
     val userMessage = when {
         throwable is TimeoutCancellationException ->
@@ -310,15 +317,20 @@ internal fun classifyPhoneAuthFailure(throwable: Throwable): Triple<String?, Str
             "Invalid mobile number format. Check your country code and 10-digit number."
         firebaseErrorCode == "ERROR_MISSING_VERIFICATION_CODE" ->
             "Please enter the 6-digit OTP."
+        firebaseErrorCode == "ERROR_OPERATION_NOT_ALLOWED" &&
+            (rawMessage.contains("17006") || rawMessage.contains("region", ignoreCase = true)) ->
+            "SMS OTP for this country/region is not enabled yet in Firebase Authentication (Code 17006). Enable this region under Authentication -> Settings -> SMS region policy in Firebase Console, or sign in with Google."
         firebaseErrorCode == "ERROR_OPERATION_NOT_ALLOWED" ->
-            "Mobile Number (Phone) sign-in is not enabled in Firebase Authentication. Enable Phone provider in Firebase Console."
+            "Mobile Number (Phone) sign-in is not enabled in Firebase Authentication. Enable Phone provider in Firebase Console, or sign in with Google."
         firebaseErrorCode == "ERROR_USER_DISABLED" ->
             "This GoLocal account has been disabled. Please contact support."
         firebaseErrorCode == "ERROR_REQUIRES_RECENT_LOGIN" ->
             "Please sign out and verify your mobile number again."
         firebaseErrorCode == "ERROR_APP_NOT_AUTHORIZED" ||
             firebaseErrorCode == "ERROR_INVALID_APP_CREDENTIAL" ||
-            firebaseErrorCode == "ERROR_CAPTCHA_CHECK_FAILED" ->
+            firebaseErrorCode == "ERROR_CAPTCHA_CHECK_FAILED" ||
+            firebaseErrorCode == "ERROR_MISSING_CLIENT_IDENTIFIER" ||
+            rawMessage.contains("certificate hash", ignoreCase = true) ->
             "App verification for Phone OTP failed. Verify APK SHA-1/SHA-256 fingerprints and Play Integrity / reCAPTCHA in Firebase Console."
         throwable is FirebaseAuthInvalidCredentialsException ->
             "Invalid OTP or mobile number verification failed. Please check the code or request a new OTP."
@@ -347,6 +359,8 @@ interface FirebasePhoneAuthGateway {
     )
     fun createCredential(verificationId: String, smsCode: String): PhoneAuthCredential
     suspend fun signInWithCredential(credential: PhoneAuthCredential): String?
+    suspend fun linkPhoneCredential(credential: PhoneAuthCredential): String? =
+        signInWithCredential(credential)
 }
 
 class DefaultFirebasePhoneAuthGateway(
@@ -380,12 +394,20 @@ class DefaultFirebasePhoneAuthGateway(
         val result = authProvider().signInWithCredential(credential).await()
         return result.user?.phoneNumber ?: result.user?.uid
     }
+
+    override suspend fun linkPhoneCredential(credential: PhoneAuthCredential): String? {
+        val user = authProvider().currentUser
+            ?: throw IllegalStateException("No authenticated account found to link this mobile number.")
+        val result = user.linkWithCredential(credential).await()
+        return result.user?.phoneNumber ?: user.phoneNumber
+    }
 }
 
 class PhoneAuthController(
     private val scope: CoroutineScope,
     private val gateway: FirebasePhoneAuthGateway = DefaultFirebasePhoneAuthGateway(),
     private val rateLimiter: OtpRateLimiter = OtpRateLimiter(),
+    private val linkToExistingUser: Boolean = false,
     private val onSuccess: (verifiedPhoneE164: String) -> Unit
 ) {
     private val _uiState = MutableStateFlow(PhoneAuthUiState())
@@ -720,7 +742,11 @@ class PhoneAuthController(
         scope.launch {
             try {
                 val resolvedPhone = withTimeout(FIREBASE_SIGN_IN_TIMEOUT_MS) {
-                    gateway.signInWithCredential(credential)
+                    if (linkToExistingUser) {
+                        gateway.linkPhoneCredential(credential)
+                    } else {
+                        gateway.signInWithCredential(credential)
+                    }
                 }
                 if (resolvedPhone != null) {
                     if (markVerificationUsed) {
@@ -728,9 +754,9 @@ class PhoneAuthController(
                     }
                     countdownJob?.cancel()
                     AuthDiagnostics.logStage(
-                        stage = AuthStage.FIREBASE_SIGN_IN_SUCCESS,
+                        stage = if (linkToExistingUser) AuthStage.ACCOUNT_LINK_SUCCESS else AuthStage.FIREBASE_SIGN_IN_SUCCESS,
                         flow = flowName,
-                        detail = "Phone authentication completed"
+                        detail = if (linkToExistingUser) "Phone linked to account" else "Phone authentication completed"
                     )
                     _uiState.update {
                         it.copy(

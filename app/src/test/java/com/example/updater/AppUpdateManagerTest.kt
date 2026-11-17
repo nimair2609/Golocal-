@@ -165,4 +165,12 @@ class AppUpdateManagerTest {
         assertEquals(5L, manifest.versionCode)
         assertTrue(manifest.isMandatory)
     }
+
+    @Test
+    fun `Play Store manifest omits REQUEST_INSTALL_PACKAGES and disables in-app APK install`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val manager = AppUpdateManager(context)
+        assertFalse(manager.hasRequestInstallPackagesPermission())
+        assertFalse(manager.canRequestPackageInstalls())
+    }
 }

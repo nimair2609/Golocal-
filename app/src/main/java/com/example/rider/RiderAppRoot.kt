@@ -21,6 +21,8 @@ import com.example.authStateFlow
 import com.example.data.model.AppRole
 import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
+import com.example.data.repository.BusRepository
+import com.example.data.repository.GolocalGovernanceRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.shared.ExperienceMode
@@ -33,14 +35,19 @@ import com.example.ui.theme.GolocalTheme
 import com.example.updater.AppUpdateDialogHost
 import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AppSessionViewModel
+import com.example.viewmodel.BusBookingViewModel
 import com.example.viewmodel.DriverViewModel
+import com.example.viewmodel.GovernanceViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 
 @Composable
-fun RiderAppRoot(auth: FirebaseAuth = Firebase.auth) {
+fun RiderAppRoot(
+    auth: FirebaseAuth = Firebase.auth,
+    initialDeepLinkScreen: String? = null
+) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var splashDone by remember { mutableStateOf(false) }
 
@@ -66,7 +73,8 @@ fun RiderAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 displayName = user.displayName ?: "GoLocal Rider",
                 email = user.email ?: "",
                 photoUrl = user.photoUrl?.toString() ?: "",
-                phoneNumber = user.phoneNumber ?: ""
+                phoneNumber = user.phoneNumber ?: "",
+                initialDeepLinkScreen = initialDeepLinkScreen
             )
         }
     }
@@ -78,7 +86,8 @@ fun RiderAuthenticatedShell(
     displayName: String,
     email: String,
     photoUrl: String,
-    phoneNumber: String = ""
+    phoneNumber: String = "",
+    initialDeepLinkScreen: String? = null
 ) {
     val sessionViewModel: AppSessionViewModel = viewModel(
         key = "rider_session_$currentUserId",
@@ -99,8 +108,10 @@ fun RiderAuthenticatedShell(
         }
     )
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(currentUserId) {
         sessionViewModel.selectRole(AppRole.DRIVER)
+        com.example.notifications.FcmTokenSyncManager.syncCurrentToken(context, currentUserId, "driver")
     }
 
     val scope = rememberCoroutineScope()
@@ -150,6 +161,9 @@ fun RiderAuthenticatedShell(
                 NewUserRegistrationScreen(
                     verifiedMobileNumber = reg.verifiedMobileNumber.ifBlank { phoneNumber },
                     existingAccount = reg.existingAccount,
+                    prefilledName = reg.prefilledName.ifBlank { displayName },
+                    prefilledEmail = reg.prefilledEmail.ifBlank { email },
+                    isPhoneAuthVerified = reg.isPhoneAuthVerified || phoneNumber.isNotBlank(),
                     isSubmitting = isSubmittingRegistration,
                     serverErrorMessage = registrationError,
                     onSubmitRegistration = { fullName, invoiceEmail, emergencyContact, termsAccepted ->
@@ -160,7 +174,16 @@ fun RiderAuthenticatedShell(
                             termsAccepted = termsAccepted
                         )
                     },
-                    onSignOut = { signOut(scope) }
+                    onSubmitRegistrationWithPhone = { fullName, mobileE164, invoiceEmail, emergencyContact, termsAccepted ->
+                        sessionViewModel.completeRegistration(
+                            fullName = fullName,
+                            invoiceEmail = invoiceEmail,
+                            emergencyContactE164 = emergencyContact,
+                            termsAccepted = termsAccepted,
+                            enteredMobileE164 = mobileE164
+                        )
+                    },
+                    onSignOut = { signOut(scope, context = context) }
                 )
                 return@GolocalTheme
             }
@@ -185,12 +208,41 @@ fun RiderAuthenticatedShell(
                 }
             }
         )
+        val governanceViewModel: GovernanceViewModel = viewModel(
+            key = "rider_gov_$currentUserId",
+            factory = viewModelFactory {
+                initializer {
+                    val app = checkNotNull(this[APPLICATION_KEY])
+                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                    GovernanceViewModel(
+                        repository = GolocalGovernanceRepository(db),
+                        currentUserId = currentUserId,
+                        role = "driver"
+                    )
+                }
+            }
+        )
+        val busViewModel: BusBookingViewModel = viewModel(
+            key = "rider_bus_$currentUserId",
+            factory = viewModelFactory {
+                initializer {
+                    val app = checkNotNull(this[APPLICATION_KEY])
+                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                    BusBookingViewModel(
+                        repository = BusRepository(db),
+                        currentUserId = currentUserId,
+                        mode = "operator"
+                    )
+                }
+            }
+        )
 
         val profileState by driverViewModel.driverProfileState.collectAsStateWithLifecycle()
         val openRequests by driverViewModel.openRequests.collectAsStateWithLifecycle()
         val assignedBookings by driverViewModel.assignedBookings.collectAsStateWithLifecycle()
         val commissions by driverViewModel.commissions.collectAsStateWithLifecycle()
         val driverMsg by driverViewModel.message.collectAsStateWithLifecycle()
+        val govMsg by governanceViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by sessionViewModel.platformSettings.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
 
@@ -216,8 +268,9 @@ fun RiderAuthenticatedShell(
                         if (profile == null || profile.verificationStatus != "verified") {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 GolocalStatusMessageBanner(
-                                    message = driverMsg ?: sessionMsg,
+                                    message = govMsg ?: driverMsg ?: sessionMsg,
                                     onDismiss = {
+                                        governanceViewModel.clearMessage()
                                         driverViewModel.clearMessage()
                                         sessionViewModel.clearStatusMessage()
                                     },
@@ -226,19 +279,26 @@ fun RiderAuthenticatedShell(
                                 RiderRegistrationAndVerificationGate(
                                     existingProfile = profile,
                                     displayName = completedName,
-                                    verifiedPhone = completedPhone,
-                                    driverViewModel = driverViewModel
+                                    driverViewModel = driverViewModel,
+                                    governanceViewModel = governanceViewModel,
+                                    verifiedPhone = completedPhone
                                 )
                             }
                         } else {
                             var selectedTab by remember { mutableStateOf("home") }
+                            LaunchedEffect(initialDeepLinkScreen) {
+                                val validTabs = setOf("home", "requests", "bus", "earnings", "notifications", "profile")
+                                if (initialDeepLinkScreen != null && initialDeepLinkScreen in validTabs) {
+                                    selectedTab = initialDeepLinkScreen
+                                }
+                            }
                             BackHandler(enabled = selectedTab != "home") { selectedTab = "home" }
 
                             val navItems = listOf(
                                 Triple("home", "Home", Icons.Filled.Home),
                                 Triple("requests", "Requests", Icons.Filled.NotificationsActive),
+                                Triple("bus", "Bus Hub", Icons.Filled.DirectionsBus),
                                 Triple("earnings", "Earnings", Icons.Filled.AccountBalanceWallet),
-                                Triple("notifications", "Alerts", Icons.Filled.Notifications),
                                 Triple("profile", "Profile", Icons.Filled.Person)
                             )
 
@@ -282,12 +342,16 @@ fun RiderAuthenticatedShell(
 
                                         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                                             GolocalStatusMessageBanner(
-                                                message = driverMsg ?: sessionMsg,
+                                                message = govMsg ?: driverMsg ?: sessionMsg,
                                                 onDismiss = {
+                                                    governanceViewModel.clearMessage()
                                                     driverViewModel.clearMessage()
                                                     sessionViewModel.clearStatusMessage()
                                                 },
                                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                            )
+                                            com.example.notifications.NotificationPermissionBannerCard(
+                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                                             )
                                             Box(modifier = Modifier.weight(1f).widthIn(max = 920.dp)) {
                                                 when (selectedTab) {
@@ -298,13 +362,29 @@ fun RiderAuthenticatedShell(
                                                         commissions = commissions,
                                                         sessionViewModel = sessionViewModel,
                                                         driverViewModel = driverViewModel,
+                                                        governanceViewModel = governanceViewModel,
                                                         lowNetworkMode = prefs.lowNetworkMode,
-                                                        onOpenRequests = { selectedTab = "requests" }
+                                                        onOpenRequests = { selectedTab = "requests" },
+                                                        onOpenNotifications = { selectedTab = "notifications" }
                                                     )
                                                     "requests" -> RiderRequestsTab(profile = profile, driverViewModel = driverViewModel)
-                                                    "earnings" -> RiderEarningsHistoryTab(profile = profile, driverViewModel = driverViewModel)
+                                                    "bus" -> RiderBusOperatorPortalTab(
+                                                        defaultPhone = completedPhone,
+                                                        defaultDistrict = profile.district,
+                                                        busViewModel = busViewModel,
+                                                        governanceViewModel = governanceViewModel
+                                                    )
+                                                    "earnings" -> RiderEarningsHistoryTab(
+                                                        profile = profile,
+                                                        driverViewModel = driverViewModel,
+                                                        governanceViewModel = governanceViewModel
+                                                    )
                                                     "notifications" -> RiderNotificationsTab(sessionViewModel = sessionViewModel)
-                                                    "profile" -> RiderProfileTab(profile = profile, sessionViewModel = sessionViewModel)
+                                                    "profile" -> RiderProfileTab(
+                                                        profile = profile,
+                                                        sessionViewModel = sessionViewModel,
+                                                        onOpenNotifications = { selectedTab = "notifications" }
+                                                    )
                                                 }
                                             }
                                         }

@@ -27,15 +27,22 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.CustomerViewModel
+import com.example.viewmodel.GovernanceViewModel
 
 @Composable
 fun CustomerBookingsHistoryTab(
     customerViewModel: CustomerViewModel,
+    governanceViewModel: GovernanceViewModel? = null,
     onOpenBookRide: () -> Unit
 ) {
     val bookingsState by customerViewModel.myBookingsState.collectAsStateWithLifecycle()
     val payments by customerViewModel.myPayments.collectAsStateWithLifecycle()
     val ratings by customerViewModel.myRatings.collectAsStateWithLifecycle()
+    val disputes = if (governanceViewModel != null) {
+        governanceViewModel.myDisputes.collectAsStateWithLifecycle().value
+    } else {
+        emptyList()
+    }
 
     var subTab by remember { mutableIntStateOf(0) }
     var ratingTarget by remember { mutableStateOf<Booking?>(null) }
@@ -44,10 +51,11 @@ fun CustomerBookingsHistoryTab(
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Bookings & Transactions", style = MaterialTheme.typography.headlineSmall)
-        TabRow(selectedTabIndex = subTab) {
+        ScrollableTabRow(selectedTabIndex = subTab, edgePadding = 0.dp) {
             Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("History") })
             Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Payments") })
             Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Ratings") })
+            Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Disputes (${disputes.size})") })
         }
 
         when (subTab) {
@@ -158,6 +166,11 @@ fun CustomerBookingsHistoryTab(
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                    Text(
+                                        "Behaviour ${r.behaviourStars}★ • Cleanliness ${r.vehicleStars}★ • Punctuality ${r.punctualityStars}★ • Safety ${r.safetyStars}★",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     if (r.review.isNotBlank()) Text(r.review, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
@@ -165,33 +178,49 @@ fun CustomerBookingsHistoryTab(
                     }
                 }
             }
+            3 -> {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CustomerDisputesListSection(disputes = disputes)
+                }
+            }
         }
     }
 
     ratingTarget?.let { target ->
-        var stars by remember { mutableIntStateOf(5) }
-        var review by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { ratingTarget = null },
-            title = { Text("Rate Your Rider") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        (1..5).forEach { s ->
-                            FilterChip(selected = stars == s, onClick = { stars = s }, label = { Text("$s★") })
-                        }
-                    }
-                    OutlinedTextField(value = review, onValueChange = { review = it }, label = { Text("Review comment (optional)") }, modifier = Modifier.fillMaxWidth())
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    customerViewModel.submitRating(target, stars, review)
+        if (governanceViewModel != null) {
+            MultiCriteriaRatingDialog(
+                booking = target,
+                onDismiss = { ratingTarget = null },
+                onSubmit = { b, v, p, s, review ->
+                    governanceViewModel.submitMultiCriteriaRating(target, b, v, p, s, review)
                     ratingTarget = null
-                }) { Text("Submit Rating") }
-            },
-            dismissButton = { TextButton(onClick = { ratingTarget = null }) { Text("Cancel") } }
-        )
+                }
+            )
+        } else {
+            var stars by remember { mutableIntStateOf(5) }
+            var review by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { ratingTarget = null },
+                title = { Text("Rate Your Rider") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            (1..5).forEach { s ->
+                                FilterChip(selected = stars == s, onClick = { stars = s }, label = { Text("$s★") })
+                            }
+                        }
+                        OutlinedTextField(value = review, onValueChange = { review = it }, label = { Text("Review comment (optional)") }, modifier = Modifier.fillMaxWidth())
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        customerViewModel.submitRating(target, stars, review)
+                        ratingTarget = null
+                    }) { Text("Submit Rating") }
+                },
+                dismissButton = { TextButton(onClick = { ratingTarget = null }) { Text("Cancel") } }
+            )
+        }
     }
 
     refundTarget?.let { target ->
@@ -214,21 +243,39 @@ fun CustomerBookingsHistoryTab(
     }
 
     complaintTarget?.let { target ->
-        var desc by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { complaintTarget = null },
-            title = { Text("File Trip Complaint") },
-            text = {
-                OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Describe the issue") }, modifier = Modifier.fillMaxWidth())
-            },
-            confirmButton = {
-                Button(onClick = {
-                    customerViewModel.submitComplaint(target.id, "customer_dispute", desc)
+        if (governanceViewModel != null) {
+            SubmitDisputeDialog(
+                bookingId = target.id,
+                defaultRefundInr = if (target.agreedFareInr > 0) target.agreedFareInr else target.estimatedFareInr,
+                onDismiss = { complaintTarget = null },
+                onSubmit = { cat, desc, refund ->
+                    governanceViewModel.submitDispute(
+                        bookingId = target.id,
+                        targetUserId = target.assignedDriverId,
+                        category = cat,
+                        description = desc,
+                        requestedRefundInr = refund
+                    )
                     complaintTarget = null
-                }) { Text("Submit") }
-            },
-            dismissButton = { TextButton(onClick = { complaintTarget = null }) { Text("Cancel") } }
-        )
+                }
+            )
+        } else {
+            var desc by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { complaintTarget = null },
+                title = { Text("File Trip Complaint") },
+                text = {
+                    OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Describe the issue") }, modifier = Modifier.fillMaxWidth())
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        customerViewModel.submitComplaint(target.id, "customer_dispute", desc)
+                        complaintTarget = null
+                    }) { Text("Submit") }
+                },
+                dismissButton = { TextButton(onClick = { complaintTarget = null }) { Text("Cancel") } }
+            )
+        }
     }
 }
 
@@ -414,16 +461,21 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
                 Text("Personal & Invoice Info", style = MaterialTheme.typography.titleSmall)
 
                 OutlinedTextField(
-                    value = verifiedPhone.ifBlank { "Verified via Mobile OTP" },
+                    value = verifiedPhone.ifBlank { "No mobile number set" },
                     onValueChange = {},
                     readOnly = true,
                     enabled = false,
-                    label = { Text("Verified Mobile Number (Read-Only)") },
+                    label = {
+                        Text(
+                            if (account?.mobileVerified == true) "Verified Mobile Number (Read-Only)"
+                            else "Contact Mobile Number (Link OTP Below)"
+                        )
+                    },
                     trailingIcon = {
                         Icon(
                             imageVector = Icons.Filled.VerifiedUser,
-                            contentDescription = "Verified",
-                            tint = GolocalSuccess
+                            contentDescription = if (account?.mobileVerified == true) "Verified" else "Unverified",
+                            tint = if (account?.mobileVerified == true) GolocalSuccess else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
                     modifier = Modifier.fillMaxWidth().testTag("profile_verified_mobile_readonly"),
@@ -441,7 +493,7 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
                     value = invoiceEmail,
                     onValueChange = { invoiceEmail = it },
                     label = { Text("Email Address (for Ride Invoices) *") },
-                    supportingText = { Text("Used strictly for GST invoice delivery — never for login.") },
+                    supportingText = { Text("Used for GST invoice delivery.") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -468,6 +520,13 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
                 }
             }
         }
+
+        com.example.ui.auth.AccountSecurityLinkingCard(
+            fallbackAccountPhone = verifiedPhone,
+            fallbackAccountEmail = invoiceEmail,
+            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) },
+            onGoogleLinked = { sessionViewModel.onAccountCredentialLinked(null) }
+        )
 
         // Private Emergency Contact Card (Protected; never exposed to drivers or public profiles)
         Surface(

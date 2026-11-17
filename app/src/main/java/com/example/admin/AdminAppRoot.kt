@@ -26,6 +26,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.R
 import com.example.authStateFlow
 import com.example.data.model.AppRole
+import com.example.data.repository.BusRepository
+import com.example.data.repository.GolocalGovernanceRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.shared.ExperienceMode
@@ -39,6 +41,8 @@ import com.example.updater.AppUpdateDialogHost
 import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AdminViewModel
 import com.example.viewmodel.AppSessionViewModel
+import com.example.viewmodel.BusBookingViewModel
+import com.example.viewmodel.GovernanceViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -46,7 +50,10 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
 @Composable
-fun AdminAppRoot(auth: FirebaseAuth = Firebase.auth) {
+fun AdminAppRoot(
+    auth: FirebaseAuth = Firebase.auth,
+    initialDeepLinkModule: String? = null
+) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var splashDone by remember { mutableStateOf(false) }
 
@@ -72,7 +79,8 @@ fun AdminAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 displayName = user.displayName ?: "GoLocal Admin",
                 email = user.email ?: "",
                 phoneNumber = user.phoneNumber ?: "",
-                photoUrl = user.photoUrl?.toString() ?: ""
+                photoUrl = user.photoUrl?.toString() ?: "",
+                initialDeepLinkModule = initialDeepLinkModule
             )
         }
     }
@@ -85,8 +93,10 @@ fun AdminAuthenticatedShell(
     displayName: String,
     email: String,
     phoneNumber: String = "",
-    photoUrl: String
+    photoUrl: String,
+    initialDeepLinkModule: String? = null
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val adminIdentity = phoneNumber.ifBlank { email }.ifBlank { currentUserId }
 
@@ -102,7 +112,8 @@ fun AdminAuthenticatedShell(
                     currentUserId = currentUserId,
                     userDisplayName = displayName,
                     userEmail = email,
-                    userPhotoUrl = photoUrl
+                    userPhotoUrl = photoUrl,
+                    userPhoneNumber = phoneNumber
                 )
             }
         }
@@ -110,6 +121,7 @@ fun AdminAuthenticatedShell(
 
     LaunchedEffect(currentUserId) {
         sessionViewModel.selectRole(AppRole.ADMIN)
+        com.example.notifications.FcmTokenSyncManager.syncCurrentToken(context, currentUserId, "admin")
     }
 
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
@@ -180,11 +192,47 @@ fun AdminAuthenticatedShell(
                 }
             }
         )
+        val governanceViewModel: GovernanceViewModel = viewModel(
+            key = "admin_gov_$currentUserId",
+            factory = viewModelFactory {
+                initializer {
+                    val app = checkNotNull(this[APPLICATION_KEY])
+                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                    GovernanceViewModel(
+                        repository = GolocalGovernanceRepository(db),
+                        currentUserId = currentUserId,
+                        role = "admin"
+                    )
+                }
+            }
+        )
+        val busViewModel: BusBookingViewModel = viewModel(
+            key = "admin_bus_$currentUserId",
+            factory = viewModelFactory {
+                initializer {
+                    val app = checkNotNull(this[APPLICATION_KEY])
+                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                    BusBookingViewModel(
+                        repository = BusRepository(db),
+                        currentUserId = currentUserId,
+                        mode = "admin"
+                    )
+                }
+            }
+        )
 
         val adminMsg by adminViewModel.message.collectAsStateWithLifecycle()
+        val govMsg by governanceViewModel.message.collectAsStateWithLifecycle()
+        val busMsg by busViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
         var selectedModule by remember { mutableStateOf("dashboard") }
+        LaunchedEffect(initialDeepLinkModule) {
+            val validModules = setOf("dashboard", "customers", "riders", "bookings", "bus_admin", "services", "payments", "reports", "settings")
+            if (initialDeepLinkModule != null && initialDeepLinkModule in validModules) {
+                selectedModule = initialDeepLinkModule
+            }
+        }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
         BackHandler(enabled = selectedModule != "dashboard") { selectedModule = "dashboard" }
@@ -193,7 +241,8 @@ fun AdminAuthenticatedShell(
             Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
             Triple("customers", "Customers", Icons.Filled.People),
             Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi),
-            Triple("bookings", "Bookings", Icons.Filled.DirectionsCar),
+            Triple("bookings", "Bookings & Fraud", Icons.Filled.DirectionsCar),
+            Triple("bus_admin", "Bus & Tariffs", Icons.Filled.DirectionsBus),
             Triple("services", "Services & Fares", Icons.Filled.Tune),
             Triple("payments", "Payments", Icons.Filled.AccountBalance),
             Triple("reports", "Reports", Icons.Filled.Analytics),
@@ -212,7 +261,7 @@ fun AdminAuthenticatedShell(
                         selectedModule = it
                         scope.launch { drawerState.close() }
                     },
-                    onSignOut = { signOut(scope) }
+                    onSignOut = { signOut(scope, context = context) }
                 )
             }
 
@@ -224,11 +273,18 @@ fun AdminAuthenticatedShell(
                         }
                         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                             GolocalStatusMessageBanner(
-                                message = adminMsg,
-                                onDismiss = { adminViewModel.clearMessage() },
+                                message = busMsg ?: govMsg ?: adminMsg,
+                                onDismiss = {
+                                    busViewModel.clearMessage()
+                                    governanceViewModel.clearMessage()
+                                    adminViewModel.clearMessage()
+                                },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                             )
-                            AdminModuleContent(selectedModule, adminViewModel)
+                            com.example.notifications.NotificationPermissionBannerCard(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                            )
+                            AdminModuleContent(selectedModule, adminViewModel, governanceViewModel, busViewModel)
                         }
                     }
                 }
@@ -272,11 +328,18 @@ fun AdminAuthenticatedShell(
                     ) { padding ->
                         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                             GolocalStatusMessageBanner(
-                                message = adminMsg,
-                                onDismiss = { adminViewModel.clearMessage() },
+                                message = busMsg ?: govMsg ?: adminMsg,
+                                onDismiss = {
+                                    busViewModel.clearMessage()
+                                    governanceViewModel.clearMessage()
+                                    adminViewModel.clearMessage()
+                                },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
-                            AdminModuleContent(selectedModule, adminViewModel)
+                            com.example.notifications.NotificationPermissionBannerCard(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                            )
+                            AdminModuleContent(selectedModule, adminViewModel, governanceViewModel, busViewModel)
                         }
                     }
                 }
@@ -369,13 +432,16 @@ private fun AdminSidebar(
 @Composable
 private fun AdminModuleContent(
     selectedModule: String,
-    adminViewModel: AdminViewModel
+    adminViewModel: AdminViewModel,
+    governanceViewModel: GovernanceViewModel,
+    busViewModel: BusBookingViewModel
 ) {
     when (selectedModule) {
         "dashboard" -> AdminDashboardModule(adminViewModel)
         "customers" -> AdminCustomersModule(adminViewModel)
-        "riders" -> AdminRidersModule(adminViewModel)
-        "bookings" -> AdminBookingsModule(adminViewModel)
+        "riders" -> AdminRidersModule(adminViewModel, governanceViewModel)
+        "bookings" -> AdminBookingsModule(adminViewModel, governanceViewModel)
+        "bus_admin" -> AdminBusGovernanceModule(busViewModel)
         "services" -> AdminServicesModule(adminViewModel)
         "payments" -> AdminPaymentsModule(adminViewModel)
         "reports" -> AdminReportsModule(adminViewModel)

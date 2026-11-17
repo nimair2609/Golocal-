@@ -261,18 +261,26 @@ class GolocalRepository(
         val resolvedPhone = verifiedPhoneNumber.trim()
             .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
             .take(25)
+        val authUser = auth.currentUser
+        val currentProviders = authUser?.providerData?.map { it.providerId }?.filter { it != "firebase" } ?: emptyList()
 
         if (!userSnap.exists()) {
             return@runCatching RegistrationStatus.PendingRegistration(
                 verifiedMobileNumber = resolvedPhone,
-                existingAccount = null
+                existingAccount = null,
+                prefilledName = authUser?.displayName.orEmpty(),
+                prefilledEmail = authUser?.email.orEmpty(),
+                isPhoneAuthVerified = resolvedPhone.isNotBlank()
             )
         }
 
         val account = userSnap.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             ?: return@runCatching RegistrationStatus.PendingRegistration(
                 verifiedMobileNumber = resolvedPhone,
-                existingAccount = null
+                existingAccount = null,
+                prefilledName = authUser?.displayName.orEmpty(),
+                prefilledEmail = authUser?.email.orEmpty(),
+                isPhoneAuthVerified = resolvedPhone.isNotBlank()
             )
 
         val emergencyExists = try {
@@ -291,21 +299,31 @@ class GolocalRepository(
             account.privacyConsentAccepted &&
             (account.hasEmergencyContact || emergencyExists)
 
+        val isActuallyPhoneVerified = resolvedPhone.isNotBlank() || account.mobileVerified
+        val isActuallyEmailVerified = (authUser?.isEmailVerified == true) || account.emailVerified
+
         if (isComplete) {
-            // Backfill mobileVerified / phone if missing on returning account without creating a duplicate
-            if (resolvedPhone.isNotBlank() && (account.effectiveMobileNumber().isBlank() || !account.mobileVerified)) {
+            val needsSync = (resolvedPhone.isNotBlank() && (account.effectiveMobileNumber().isBlank() || !account.mobileVerified)) ||
+                (currentProviders.isNotEmpty() && currentProviders.toSet() != account.authProviders.toSet()) ||
+                (isActuallyEmailVerified && !account.emailVerified)
+            if (needsSync) {
                 try {
-                    userRef.update(
-                        mapOf(
-                            "uid" to uid,
-                            "phone" to resolvedPhone,
-                            "mobileNumber" to resolvedPhone,
-                            "mobileVerified" to true,
-                            "profileCompleted" to true,
-                            "hasEmergencyContact" to (account.hasEmergencyContact || emergencyExists),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    ).await()
+                    val patch = mutableMapOf<String, Any>(
+                        "uid" to uid,
+                        "profileCompleted" to true,
+                        "mobileVerified" to isActuallyPhoneVerified,
+                        "emailVerified" to isActuallyEmailVerified,
+                        "hasEmergencyContact" to (account.hasEmergencyContact || emergencyExists),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (effectivePhone.isNotBlank()) {
+                        patch["phone"] = effectivePhone
+                        patch["mobileNumber"] = effectivePhone
+                    }
+                    if (currentProviders.isNotEmpty()) {
+                        patch["authProviders"] = currentProviders
+                    }
+                    userRef.update(patch).await()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -322,15 +340,20 @@ class GolocalRepository(
                     uid = account.uid.ifBlank { uid },
                     mobileNumber = effectivePhone,
                     phone = effectivePhone,
-                    mobileVerified = true,
+                    mobileVerified = isActuallyPhoneVerified,
+                    emailVerified = isActuallyEmailVerified,
+                    authProviders = if (currentProviders.isNotEmpty()) currentProviders else account.authProviders,
                     profileCompleted = true,
                     hasEmergencyContact = account.hasEmergencyContact || emergencyExists
                 )
             )
         } else {
             RegistrationStatus.PendingRegistration(
-                verifiedMobileNumber = effectivePhone,
-                existingAccount = account
+                verifiedMobileNumber = resolvedPhone,
+                existingAccount = account,
+                prefilledName = account.fullName.ifBlank { authUser?.displayName.orEmpty() },
+                prefilledEmail = account.email.ifBlank { authUser?.email.orEmpty() },
+                isPhoneAuthVerified = resolvedPhone.isNotBlank()
             )
         }
     }
@@ -342,18 +365,22 @@ class GolocalRepository(
         emergencyContactNumber: String,
         privacyConsentAccepted: Boolean,
         role: String = "customer",
-        preferredLanguage: String = "en"
+        preferredLanguage: String = "en",
+        isMobileOtpVerified: Boolean = verifiedMobileNumber.isNotBlank()
     ): Result<UserAccount> = runCatching {
         val uid = requireUserId()
+        val authUser = auth.currentUser
+        val authVerifiedPhone = authUser?.phoneNumber.orEmpty().trim()
         val safeName = fullName.trim().take(100)
-        val safePhone = verifiedMobileNumber.trim()
-            .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
-            .take(25)
+        val safePhone = authVerifiedPhone.ifBlank { verifiedMobileNumber.trim() }.take(25)
         val safeEmail = invoiceEmail.trim().take(150)
         val safeEmergency = emergencyContactNumber.trim().take(25)
+        val phoneOtpVerified = authVerifiedPhone.isNotBlank() || isMobileOtpVerified
+        val emailVerified = authUser?.isEmailVerified == true && safeEmail.equals(authUser.email.orEmpty().trim(), ignoreCase = true)
+        val providers = authUser?.providerData?.map { it.providerId }?.filter { it != "firebase" } ?: emptyList()
 
         require(safeName.length >= 2) { "Full name is required." }
-        require(safePhone.isNotBlank()) { "Verified mobile number is missing. Please verify OTP again." }
+        require(safePhone.isNotBlank()) { "Mobile number is required for GoLocal bookings and coordination." }
         require(safeEmail.isNotBlank() && safeEmail.contains("@")) { "A valid email address is required for GST invoice delivery." }
         require(safeEmergency.length >= 8) { "A valid emergency contact number is required." }
         require(safeEmergency != safePhone) { "Emergency contact number must be different from your own mobile number." }
@@ -384,14 +411,15 @@ class GolocalRepository(
             email = safeEmail,
             phone = safePhone,
             mobileNumber = safePhone,
-            photoUrl = existingAccount?.photoUrl ?: "",
+            photoUrl = existingAccount?.photoUrl?.takeIf { it.isNotBlank() } ?: authUser?.photoUrl?.toString().orEmpty(),
             role = resolvedRole,
             preferredLanguage = resolvedLang,
             lowNetworkMode = existingAccount?.lowNetworkMode ?: false,
             privacyConsentAccepted = true,
             profileCompleted = true,
-            emailVerified = false,
-            mobileVerified = true,
+            emailVerified = emailVerified,
+            mobileVerified = phoneOtpVerified,
+            authProviders = providers,
             hasEmergencyContact = true,
             accountStatus = existingAccount?.accountStatus ?: "active",
             accountCreatedAt = existingAccount?.accountCreatedAt,
@@ -405,19 +433,20 @@ class GolocalRepository(
                 } else {
                     batch.update(
                         userRef,
-                        mapOf(
-                            "uid" to uid,
-                            "fullName" to safeName,
-                            "email" to safeEmail,
-                            "phone" to safePhone,
-                            "mobileNumber" to safePhone,
-                            "privacyConsentAccepted" to true,
-                            "profileCompleted" to true,
-                            "emailVerified" to false,
-                            "mobileVerified" to true,
-                            "hasEmergencyContact" to true,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
+                        buildMap<String, Any> {
+                            put("uid", uid)
+                            put("fullName", safeName)
+                            put("email", safeEmail)
+                            put("phone", safePhone)
+                            put("mobileNumber", safePhone)
+                            put("privacyConsentAccepted", true)
+                            put("profileCompleted", true)
+                            put("emailVerified", emailVerified)
+                            put("mobileVerified", phoneOtpVerified)
+                            put("hasEmergencyContact", true)
+                            if (providers.isNotEmpty()) put("authProviders", providers)
+                            put("updatedAt", FieldValue.serverTimestamp())
+                        }
                     )
                 }
 
@@ -476,16 +505,70 @@ class GolocalRepository(
         }
         return runCatching {
             val uid = requireUserId()
+            val providers = auth.currentUser?.providerData?.map { it.providerId }?.filter { it != "firebase" } ?: emptyList()
             val ref = db.collection("users").document(uid)
             ref.update(
+                buildMap<String, Any> {
+                    put("phone", safePhone)
+                    put("mobileNumber", safePhone)
+                    put("mobileVerified", true)
+                    if (providers.isNotEmpty()) put("authProviders", providers)
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+            ).await()
+        }
+    }
+
+    suspend fun syncLinkedAuthProviders(): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val authUser = auth.currentUser ?: return@runCatching
+        val providers = authUser.providerData.map { it.providerId }.filter { it != "firebase" }
+        val patch = buildMap<String, Any> {
+            put("authProviders", providers)
+            put("emailVerified", authUser.isEmailVerified)
+            authUser.phoneNumber?.takeIf { it.isNotBlank() }?.let { phone ->
+                put("phone", phone)
+                put("mobileNumber", phone)
+                put("mobileVerified", true)
+            }
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
+        db.collection("users").document(uid).update(patch).await()
+    }
+
+    suspend fun deleteMyAccountAndData(): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val user = auth.currentUser ?: error("No signed-in user")
+        AuthDiagnostics.logStage(AuthStage.ACCOUNT_DELETE_STARTED, flow = "account_delete")
+
+        // Delete active push notification tokens first while UID is still authenticated
+        val tokensSnap = runCatching {
+            db.collection("fcm_tokens").whereEqualTo("userId", uid).get().await()
+        }.getOrNull()
+        tokensSnap?.documents?.forEach { doc ->
+            runCatching { doc.reference.delete().await() }
+        }
+
+        // Clean user-owned private documents (Firestore rules allow owner write/delete or anonymization)
+        runCatching { db.collection("emergency_contacts").document(uid).delete().await() }
+        runCatching { db.collection("customer_profiles").document(uid).delete().await() }
+        runCatching {
+            db.collection("users").document(uid).update(
                 mapOf(
-                    "phone" to safePhone,
-                    "mobileNumber" to safePhone,
-                    "mobileVerified" to true,
+                    "fullName" to "Deleted GoLocal User",
+                    "email" to "",
+                    "phone" to "",
+                    "mobileNumber" to "",
+                    "photoUrl" to "",
+                    "accountStatus" to "deleted",
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
         }
+
+        // Delete Firebase Authentication identity (throws FirebaseAuthRecentLoginRequiredException if session stale)
+        user.delete().await()
+        AuthDiagnostics.logStage(AuthStage.ACCOUNT_DELETE_COMPLETED, flow = "account_delete")
     }
 
     suspend fun updateInvoiceEmail(invoiceEmail: String): Result<Unit> = runCatching {
@@ -656,20 +739,28 @@ class GolocalRepository(
     suspend fun saveCustomerProfile(profile: CustomerProfile): Result<Unit> = runCatching {
         val uid = requireUserId()
         val ref = db.collection("customer_profiles").document(uid)
-        val payload = buildMap<String, Any> {
-            put("userId", uid)
-            if (profile.homeAddress.isNotBlank()) put("homeAddress", profile.homeAddress.trim())
-            if (profile.workAddress.isNotBlank()) put("workAddress", profile.workAddress.trim())
-            if (profile.nativeVillage.isNotBlank()) put("nativeVillage", profile.nativeVillage.trim())
-            if (profile.nativeDistrict.isNotBlank()) put("nativeDistrict", profile.nativeDistrict.trim())
-            if (profile.createdAt == null) put("createdAt", FieldValue.serverTimestamp())
-            put("updatedAt", FieldValue.serverTimestamp())
-        }
         try {
-            if (profile.createdAt == null) {
-                ref.set(payload).await()
+            val existingSnap = ref.get().await()
+            if (existingSnap.exists()) {
+                val updates = mapOf(
+                    "homeAddress" to profile.homeAddress.trim(),
+                    "workAddress" to profile.workAddress.trim(),
+                    "nativeVillage" to profile.nativeVillage.trim(),
+                    "nativeDistrict" to profile.nativeDistrict.trim(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                ref.update(updates).await()
             } else {
-                ref.update(payload.filterKeys { it != "userId" && it != "createdAt" }).await()
+                val payload = buildMap<String, Any> {
+                    put("userId", uid)
+                    if (profile.homeAddress.isNotBlank()) put("homeAddress", profile.homeAddress.trim())
+                    if (profile.workAddress.isNotBlank()) put("workAddress", profile.workAddress.trim())
+                    if (profile.nativeVillage.isNotBlank()) put("nativeVillage", profile.nativeVillage.trim())
+                    if (profile.nativeDistrict.isNotBlank()) put("nativeDistrict", profile.nativeDistrict.trim())
+                    put("createdAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                ref.set(payload).await()
             }
         } catch (e: CancellationException) {
             throw e

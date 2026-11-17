@@ -502,3 +502,331 @@ test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{
     })
   );
 });
+
+test("FCM tokens: owner write/delete allowed, outsider read/write denied", async () => {
+  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
+  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+  const tokenId = `${CUSTOMER_UID}_abc123token`;
+
+  await assertSucceeds(
+    aliceDb.collection("fcm_tokens").doc(tokenId).set({
+      userId: CUSTOMER_UID,
+      role: "customer",
+      token: "fcm_valid_device_token_string_123456",
+      platform: "android",
+      appPackage: "com.aistudio.golocal.wbmxrq",
+      active: true,
+      updatedAt: nowTs(),
+    })
+  );
+
+  await assertFails(bobDb.collection("fcm_tokens").doc(tokenId).get());
+  await assertFails(
+    bobDb.collection("fcm_tokens").doc(tokenId).set({
+      userId: CUSTOMER_UID,
+      role: "customer",
+      token: "hijack_token_string_123456",
+      platform: "android",
+      active: true,
+      updatedAt: nowTs(),
+    })
+  );
+
+  await assertSucceeds(aliceDb.collection("fcm_tokens").doc(tokenId).delete());
+});
+
+test("Formal disputes & driver cancellation: assigned driver cancels trip; Admin resolves disputes", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("bookings").doc("booking_cancel_test").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice",
+      assignedDriverId: DRIVER_UID,
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Bandel Station",
+      destinationLabel: "Hooghly Imambara",
+      distanceKm: 3.5,
+      estimatedFareInr: 65,
+      minPermittedFareInr: 55,
+      maxPermittedFareInr: 90,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "assigned",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  // Unassigned user cannot cancel the booking
+  const outsiderDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+  await assertFails(
+    outsiderDb.collection("bookings").doc("booking_cancel_test").update({
+      status: "cancelled",
+      cancelledBy: OTHER_UID,
+      cancelledByRole: "driver",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Assigned driver CAN cancel before trip starts
+  const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
+  await assertSucceeds(
+    driverDb.collection("bookings").doc("booking_cancel_test").update({
+      status: "cancelled",
+      cancellationReason: "Vehicle issue / flat tyre",
+      cancelledBy: DRIVER_UID,
+      cancelledByRole: "driver",
+      cancellationFeeInr: 0,
+      refundAmountInr: 0,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Customer creates dispute (`open`); customer cannot self-resolve; Admin resolves
+  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  await assertSucceeds(
+    aliceDb.collection("disputes").doc("dispute_1").set({
+      bookingId: "booking_cancel_test",
+      reporterId: CUSTOMER_UID,
+      reporterRole: "customer",
+      targetUserId: DRIVER_UID,
+      category: "no_show_fee",
+      description: "Driver asked for extra money outside tariff.",
+      requestedRefundInr: 25,
+      status: "open",
+      adminResolutionNote: "",
+      resolvedBy: "",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  await assertFails(
+    aliceDb.collection("disputes").doc("dispute_1").update({
+      status: "resolved_refund",
+      adminResolutionNote: "Self approved",
+      updatedAt: nowTs(),
+    })
+  );
+
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  await assertSucceeds(
+    adminDb.collection("disputes").doc("dispute_1").update({
+      status: "resolved_refund",
+      adminResolutionNote: "Approved ₹25 goodwill refund",
+      resolvedBy: "admin_uid",
+      updatedAt: nowTs(),
+    })
+  );
+});
+
+test("Ratings: 1 per bookingId, assigned driver note allowed, customer blocked from moderation", async () => {
+  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+
+  await assertSucceeds(
+    aliceDb.collection("ratings").doc("booking_rate_1").set({
+      bookingId: "booking_rate_1",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      stars: 5,
+      behaviourStars: 5,
+      vehicleStars: 4,
+      punctualityStars: 5,
+      safetyStars: 5,
+      review: "Safe ride from Bandel station",
+      moderationStatus: "active",
+      createdAt: nowTs(),
+    })
+  );
+
+  // Customer cannot mutate moderationStatus
+  await assertFails(
+    aliceDb.collection("ratings").doc("booking_rate_1").update({
+      moderationStatus: "hidden",
+    })
+  );
+
+  // Assigned driver can add bidirectional customer rating
+  await assertSucceeds(
+    driverDb.collection("ratings").doc("booking_rate_1").update({
+      riderToCustomerStars: 5,
+      riderToCustomerNote: "Polite passenger, timely at pickup.",
+    })
+  );
+
+  // Admin can moderate rating
+  await assertSucceeds(
+    adminDb.collection("ratings").doc("booking_rate_1").update({
+      moderationStatus: "flagged",
+      flaggedReason: "Under review",
+    })
+  );
+});
+
+test("Private Bus Governance: unapproved tariff blocks customer booking; approved schedule allows atomic booking & operator QR check-in", async () => {
+  const OPERATOR_UID = "bus_op_1";
+  const opDb = testEnv.authenticatedContext(OPERATOR_UID).firestore();
+  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+
+  // Unverified operator cannot register bus vehicle
+  await assertFails(
+    opDb.collection("bus_vehicles").doc("bus_v1").set({
+      operatorId: OPERATOR_UID,
+      busName: "Chinsurah Express",
+      registrationNumber: "WB15B1234",
+      busType: "AC Seater",
+      totalSeats: 36,
+      verificationStatus: "pending",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Operator registers and Admin verifies
+  await assertSucceeds(
+    opDb.collection("bus_operators").doc(OPERATOR_UID).set({
+      operatorId: OPERATOR_UID,
+      ownerUid: OPERATOR_UID,
+      companyName: "Hooghly Stage Carriage",
+      contactPhone: "+919800011223",
+      operatorLicenseNumber: "WB-OP-881",
+      permitNumber: "WB15-SC-2026",
+      district: "Hooghly",
+      verificationStatus: "pending",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("bus_operators").doc(OPERATOR_UID).update({
+      verificationStatus: "verified",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Verified operator submits vehicle & route (`pending_fare_approval`)
+  await assertSucceeds(
+    opDb.collection("bus_vehicles").doc("bus_v1").set({
+      operatorId: OPERATOR_UID,
+      busName: "Chinsurah Express",
+      registrationNumber: "WB15B1234",
+      busType: "AC Seater",
+      totalSeats: 36,
+      verificationStatus: "pending",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    opDb.collection("bus_routes").doc("route_1").set({
+      operatorId: OPERATOR_UID,
+      routeName: "Chinsurah -> Kolkata Esplanade",
+      originTown: "Chinsurah",
+      destinationTown: "Kolkata",
+      stops: ["Chinsurah", "Bandel", "Esplanade"],
+      distanceKm: 42,
+      farePerSeatInr: 75,
+      fareSource: "government_gazette",
+      authorityRef: "WB-TD-2025-11",
+      effectiveDateIso: "2026-01-01",
+      fareApprovalStatus: "pending_fare_approval",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    opDb.collection("bus_schedules").doc("sched_1").set({
+      routeId: "route_1",
+      operatorId: OPERATOR_UID,
+      busId: "bus_v1",
+      busName: "Chinsurah Express (WB15B1234)",
+      originTown: "Chinsurah",
+      destinationTown: "Kolkata",
+      departureDateIso: "2026-12-01",
+      departureTimeLabel: "07:30 AM",
+      totalSeats: 36,
+      bookedSeatIds: [],
+      farePerSeatInr: 75,
+      fareApprovalStatus: "pending_fare_approval",
+      status: "scheduled",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Customer CANNOT book seats while fareApprovalStatus == pending_fare_approval
+  await assertFails(
+    aliceDb.collection("bus_bookings").doc("ticket_pending_fail").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice",
+      scheduleId: "sched_1",
+      routeId: "route_1",
+      operatorId: OPERATOR_UID,
+      seatIds: ["1A"],
+      seatCount: 1,
+      totalPaidInr: 78.75,
+      qrToken: "GLBUS-TICKET-1234",
+      qrValidated: false,
+      status: "confirmed",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Admin approves route & schedule
+  await assertSucceeds(
+    adminDb.collection("bus_schedules").doc("sched_1").update({
+      fareApprovalStatus: "approved",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Customer CAN lock seat & create confirmed bus ticket on approved schedule
+  await assertSucceeds(
+    aliceDb.collection("bus_seat_locks").doc("sched_1_1A").set({
+      scheduleId: "sched_1",
+      seatId: "1A",
+      lockedByUid: CUSTOMER_UID,
+      lockedUntilEpochMs: Date.now() + 60000,
+      status: "booked",
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("bus_bookings").doc("ticket_valid_1").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice",
+      scheduleId: "sched_1",
+      routeId: "route_1",
+      operatorId: OPERATOR_UID,
+      seatIds: ["1A"],
+      seatCount: 1,
+      totalPaidInr: 78.75,
+      qrToken: "GLBUS-VALID-112233",
+      qrValidated: false,
+      status: "confirmed",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Outsider CANNOT mark ticket boarded; verified operator CAN
+  await assertFails(
+    bobDb.collection("bus_bookings").doc("ticket_valid_1").update({
+      status: "boarded",
+      qrValidated: true,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    opDb.collection("bus_bookings").doc("ticket_valid_1").update({
+      status: "boarded",
+      qrValidated: true,
+      updatedAt: nowTs(),
+    })
+  );
+});
+

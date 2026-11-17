@@ -32,7 +32,10 @@ sealed interface RegistrationStatus {
     data object Checking : RegistrationStatus
     data class PendingRegistration(
         val verifiedMobileNumber: String,
-        val existingAccount: UserAccount? = null
+        val existingAccount: UserAccount? = null,
+        val prefilledName: String = "",
+        val prefilledEmail: String = "",
+        val isPhoneAuthVerified: Boolean = verifiedMobileNumber.isNotBlank()
     ) : RegistrationStatus
     data class Completed(val account: UserAccount) : RegistrationStatus
 }
@@ -43,7 +46,7 @@ data class UserAccount(
     val uid: String = "",
     val userId: String = "",
     val fullName: String = "",
-    val email: String = "", // Invoice delivery email only (never an authentication credential)
+    val email: String = "",
     val phone: String = "",
     val mobileNumber: String = "",
     val photoUrl: String = "",
@@ -54,6 +57,7 @@ data class UserAccount(
     val profileCompleted: Boolean = false,
     val emailVerified: Boolean = false,
     val mobileVerified: Boolean = false,
+    val authProviders: List<String> = emptyList(),
     val hasEmergencyContact: Boolean = false,
     val accountStatus: String = "active",
     @ServerTimestamp val accountCreatedAt: Timestamp? = null,
@@ -74,6 +78,7 @@ data class UserAccount(
             put("mobileNumber", resolvedPhone)
         }
         if (photoUrl.isNotBlank()) put("photoUrl", photoUrl)
+        if (authProviders.isNotEmpty()) put("authProviders", authProviders)
         put("role", role)
         put("preferredLanguage", preferredLanguage)
         put("lowNetworkMode", lowNetworkMode)
@@ -133,8 +138,13 @@ data class DriverProfile(
     val documentPhotoUri: String = "",
     val verificationStatus: String = "pending",
     val rejectionReason: String = "",
+    val documents: List<DriverDocumentItem> = emptyList(),
+    val verificationHistory: List<VerificationHistoryEntry> = emptyList(),
+    val earliestExpiryIso: String = "",
+    val expiryAlertLevel: String = "valid", // valid, expiring_soon, expired, missing
     val isOnline: Boolean = false,
     val ratingAvg: Double = 5.0,
+    val totalRatingCount: Long = 0L,
     val completedRides: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
@@ -236,6 +246,11 @@ data class Booking(
     val familyConsentConfirmed: Boolean = false,
     val isRoundTrip: Boolean = false,
     val cancellationReason: String = "",
+    val cancelledBy: String = "",
+    val cancelledByRole: String = "",
+    val cancellationFeeInr: Double = 0.0,
+    val refundAmountInr: Double = 0.0,
+    val statusHistory: List<StatusHistoryEntry> = emptyList(),
     val invoiceEmail: String = "",
     val customerRating: Long? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -333,7 +348,15 @@ data class RatingRecord(
     val customerId: String = "",
     val driverId: String = "",
     val stars: Long = 5L,
+    val behaviourStars: Long = 5L,
+    val vehicleStars: Long = 5L,
+    val punctualityStars: Long = 5L,
+    val safetyStars: Long = 5L,
     val review: String = "",
+    val riderToCustomerStars: Long? = null,
+    val riderToCustomerNote: String = "",
+    val moderationStatus: String = "active", // active, flagged, hidden
+    val flaggedReason: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
 )
 

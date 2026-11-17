@@ -15,6 +15,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.example.domain.DocumentExpiryStatus
+import com.example.domain.DocumentVerificationEngine
 import com.example.ui.components.BookingsOverviewChart
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalMetricCard
@@ -23,6 +26,7 @@ import com.example.ui.theme.GolocalError
 import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AdminViewModel
+import com.example.viewmodel.GovernanceViewModel
 
 @Composable
 fun AdminDashboardModule(adminViewModel: AdminViewModel) {
@@ -224,16 +228,22 @@ fun AdminCustomersModule(adminViewModel: AdminViewModel) {
 }
 
 @Composable
-fun AdminRidersModule(adminViewModel: AdminViewModel) {
+fun AdminRidersModule(
+    adminViewModel: AdminViewModel,
+    governanceViewModel: GovernanceViewModel? = null
+) {
     val drivers by adminViewModel.drivers.collectAsStateWithLifecycle()
     var subTab by remember { mutableIntStateOf(0) }
     var rejectTargetId by remember { mutableStateOf<String?>(null) }
+    var suspendTargetId by remember { mutableStateOf<String?>(null) }
+    var previewPhotoUrl by remember { mutableStateOf<String?>(null) }
 
     val filtered = remember(drivers, subTab) {
         when (subTab) {
             1 -> drivers.filter { it.verificationStatus == "pending" }
             2 -> drivers.filter { it.verificationStatus == "verified" }
             3 -> drivers.filter { it.verificationStatus in setOf("rejected", "suspended") }
+            4 -> drivers.filter { it.expiryAlertLevel in setOf("expiring_soon", "expired") }
             else -> drivers
         }
     }
@@ -251,6 +261,7 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
             Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Pending KYC (${drivers.count { it.verificationStatus == "pending" }})") })
             Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Verified (${drivers.count { it.verificationStatus == "verified" }})") })
             Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Blocked/Rejected") })
+            Tab(selected = subTab == 4, onClick = { subTab = 4 }, text = { Text("Expiring (${drivers.count { it.expiryAlertLevel in setOf("expiring_soon", "expired") }})") })
         }
 
         if (filtered.isEmpty()) {
@@ -276,16 +287,71 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
                         }
                         Text("${d.vehicleCategory.uppercase()} • ${d.vehicleModel} • Reg: ${d.vehicleRegNumber}", style = MaterialTheme.typography.bodyMedium)
                         Text("Phone: ${d.phone} • District: ${d.district} ${d.block}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("DL: ${d.drivingLicenceNumber} • RC: ${d.rcNumber.ifBlank { "N/A" }} • Ins: ${d.insuranceNumber.ifBlank { "N/A" }}", style = MaterialTheme.typography.bodySmall)
-                        Text("Doc Attachment: ${if (d.documentPhotoUri.isNotBlank()) "Attached (${d.documentPhotoUri.take(36)}...)" else "None attached"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        if (d.earliestExpiryIso.isNotBlank()) {
+                            Text(
+                                "Earliest Expiry: ${d.earliestExpiryIso} (${d.expiryAlertLevel.replace('_', ' ').uppercase()})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (d.expiryAlertLevel == "valid") GolocalSuccess else GolocalError
+                            )
+                        }
+
+                        if (d.documents.isNotEmpty()) {
+                            d.documents.forEach { doc ->
+                                val expStatus = DocumentVerificationEngine.evaluateExpiry(doc.expiryDateIso)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("${doc.label.ifBlank { doc.docType }}: ${doc.documentNumber} (Exp ${doc.expiryDateIso.ifBlank { "N/A" }})", style = MaterialTheme.typography.bodySmall)
+                                        if (doc.ocrMismatchWarning.isNotBlank()) {
+                                            Text("OCR Notice: ${doc.ocrMismatchWarning}", style = MaterialTheme.typography.labelSmall, color = GolocalError)
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        GolocalStatusBadge(
+                                            label = expStatus.name.replace('_', ' '),
+                                            tone = when (expStatus) {
+                                                DocumentExpiryStatus.VALID -> "success"
+                                                DocumentExpiryStatus.EXPIRING_SOON -> "warning"
+                                                else -> "error"
+                                            }
+                                        )
+                                        if (doc.storageUrl.isNotBlank()) {
+                                            TextButton(onClick = { previewPhotoUrl = doc.storageUrl }) { Text("View") }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Text("DL: ${d.drivingLicenceNumber} • RC: ${d.rcNumber.ifBlank { "N/A" }} • Ins: ${d.insuranceNumber.ifBlank { "N/A" }}", style = MaterialTheme.typography.bodySmall)
+                            if (d.documentPhotoUri.isNotBlank()) {
+                                TextButton(onClick = { previewPhotoUrl = d.documentPhotoUri }) { Text("View Attached Document") }
+                            }
+                        }
+
                         if (d.rejectionReason.isNotBlank()) {
-                            Text("Reason: ${d.rejectionReason}", style = MaterialTheme.typography.bodySmall, color = GolocalError)
+                            Text("Decision Note: ${d.rejectionReason}", style = MaterialTheme.typography.bodySmall, color = GolocalError)
+                        }
+                        if (d.verificationHistory.isNotEmpty()) {
+                            Text(
+                                "Audit Log (${d.verificationHistory.size}): Last ${d.verificationHistory.last().action.uppercase()} — ${d.verificationHistory.last().reason}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (d.verificationStatus != "verified") {
                                 Button(
-                                    onClick = { adminViewModel.verifyDriver(d.driverId, "verified") },
+                                    onClick = {
+                                        if (governanceViewModel != null) {
+                                            governanceViewModel.adminReviewDriverKyc(d.driverId, "verified", "All required documents verified")
+                                        } else {
+                                            adminViewModel.verifyDriver(d.driverId, "verified")
+                                        }
+                                    },
                                     colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess),
                                     modifier = Modifier.weight(1f).testTag("approve_driver_${d.driverId}")
                                 ) {
@@ -301,7 +367,7 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
                                 }
                             } else if (d.verificationStatus == "verified") {
                                 OutlinedButton(
-                                    onClick = { adminViewModel.verifyDriver(d.driverId, "suspended", "Suspended by Admin") },
+                                    onClick = { suspendTargetId = d.driverId },
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Text("Suspend", color = GolocalError)
@@ -320,18 +386,76 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
             onDismissRequest = { rejectTargetId = null },
             title = { Text("Reject Rider Verification") },
             text = {
-                OutlinedTextField(value = reason, onValueChange = { reason = it }, label = { Text("Rejection reason") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Mandatory rejection reason (min 5 chars) *") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             },
             confirmButton = {
                 Button(
+                    enabled = reason.trim().length >= 5,
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                     onClick = {
-                        adminViewModel.verifyDriver(id, "rejected", reason.ifBlank { "Document mismatch" })
+                        if (governanceViewModel != null) {
+                            governanceViewModel.adminReviewDriverKyc(id, "rejected", reason)
+                        } else {
+                            adminViewModel.verifyDriver(id, "rejected", reason)
+                        }
                         rejectTargetId = null
                     }
                 ) { Text("Reject") }
             },
             dismissButton = { TextButton(onClick = { rejectTargetId = null }) { Text("Cancel") } }
+        )
+    }
+
+    suspendTargetId?.let { id ->
+        var reason by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { suspendTargetId = null },
+            title = { Text("Suspend Rider Account") },
+            text = {
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Mandatory suspension reason (min 5 chars) *") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = reason.trim().length >= 5,
+                    colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                    onClick = {
+                        if (governanceViewModel != null) {
+                            governanceViewModel.adminReviewDriverKyc(id, "suspended", reason)
+                        } else {
+                            adminViewModel.verifyDriver(id, "suspended", reason)
+                        }
+                        suspendTargetId = null
+                    }
+                ) { Text("Suspend Rider") }
+            },
+            dismissButton = { TextButton(onClick = { suspendTargetId = null }) { Text("Cancel") } }
+        )
+    }
+
+    previewPhotoUrl?.let { url ->
+        AlertDialog(
+            onDismissRequest = { previewPhotoUrl = null },
+            title = { Text("KYC Document Preview") },
+            text = {
+                AsyncImage(
+                    model = url,
+                    contentDescription = "Driver KYC Document",
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 360.dp)
+                )
+            },
+            confirmButton = {
+                Button(onClick = { previewPhotoUrl = null }) { Text("Close") }
+            }
         )
     }
 }

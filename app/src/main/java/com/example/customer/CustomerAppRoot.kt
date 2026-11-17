@@ -21,6 +21,8 @@ import com.example.authStateFlow
 import com.example.data.model.AppRole
 import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
+import com.example.data.repository.BusRepository
+import com.example.data.repository.GolocalGovernanceRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.shared.ExperienceMode
@@ -33,14 +35,19 @@ import com.example.ui.theme.GolocalTheme
 import com.example.updater.AppUpdateDialogHost
 import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AppSessionViewModel
+import com.example.viewmodel.BusBookingViewModel
 import com.example.viewmodel.CustomerViewModel
+import com.example.viewmodel.GovernanceViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 
 @Composable
-fun CustomerAppRoot(auth: FirebaseAuth = Firebase.auth) {
+fun CustomerAppRoot(
+    auth: FirebaseAuth = Firebase.auth,
+    initialDeepLinkScreen: String? = null
+) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var splashDone by remember { mutableStateOf(false) }
 
@@ -66,7 +73,8 @@ fun CustomerAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 displayName = user.displayName ?: "GoLocal Passenger",
                 email = user.email ?: "",
                 photoUrl = user.photoUrl?.toString() ?: "",
-                phoneNumber = user.phoneNumber ?: ""
+                phoneNumber = user.phoneNumber ?: "",
+                initialDeepLinkScreen = initialDeepLinkScreen
             )
         }
     }
@@ -78,7 +86,8 @@ fun CustomerAuthenticatedShell(
     displayName: String,
     email: String,
     photoUrl: String,
-    phoneNumber: String = ""
+    phoneNumber: String = "",
+    initialDeepLinkScreen: String? = null
 ) {
     val sessionViewModel: AppSessionViewModel = viewModel(
         key = "cust_session_$currentUserId",
@@ -99,8 +108,10 @@ fun CustomerAuthenticatedShell(
         }
     )
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(currentUserId) {
         sessionViewModel.selectRole(AppRole.CUSTOMER)
+        com.example.notifications.FcmTokenSyncManager.syncCurrentToken(context, currentUserId, "customer")
     }
 
     val scope = rememberCoroutineScope()
@@ -153,6 +164,9 @@ fun CustomerAuthenticatedShell(
                 NewUserRegistrationScreen(
                     verifiedMobileNumber = reg.verifiedMobileNumber.ifBlank { phoneNumber },
                     existingAccount = reg.existingAccount,
+                    prefilledName = reg.prefilledName.ifBlank { displayName },
+                    prefilledEmail = reg.prefilledEmail.ifBlank { email },
+                    isPhoneAuthVerified = reg.isPhoneAuthVerified || phoneNumber.isNotBlank(),
                     isSubmitting = isSubmittingRegistration,
                     serverErrorMessage = registrationError,
                     onSubmitRegistration = { fullName, invoiceEmail, emergencyContact, termsAccepted ->
@@ -163,7 +177,16 @@ fun CustomerAuthenticatedShell(
                             termsAccepted = termsAccepted
                         )
                     },
-                    onSignOut = { signOut(scope) }
+                    onSubmitRegistrationWithPhone = { fullName, mobileE164, invoiceEmail, emergencyContact, termsAccepted ->
+                        sessionViewModel.completeRegistration(
+                            fullName = fullName,
+                            invoiceEmail = invoiceEmail,
+                            emergencyContactE164 = emergencyContact,
+                            termsAccepted = termsAccepted,
+                            enteredMobileE164 = mobileE164
+                        )
+                    },
+                    onSignOut = { signOut(scope, context = context) }
                 )
                 return@GolocalTheme
             }
@@ -196,9 +219,44 @@ fun CustomerAuthenticatedShell(
                 }
             }
         )
+        val governanceViewModel: GovernanceViewModel = viewModel(
+            key = "cust_gov_$currentUserId",
+            factory = viewModelFactory {
+                initializer {
+                    val app = checkNotNull(this[APPLICATION_KEY])
+                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                    GovernanceViewModel(
+                        repository = GolocalGovernanceRepository(db),
+                        currentUserId = currentUserId,
+                        role = "customer"
+                    )
+                }
+            }
+        )
+        val busViewModel: BusBookingViewModel = viewModel(
+            key = "cust_bus_$currentUserId",
+            factory = viewModelFactory {
+                initializer {
+                    val app = checkNotNull(this[APPLICATION_KEY])
+                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
+                    BusBookingViewModel(
+                        repository = BusRepository(db),
+                        currentUserId = currentUserId,
+                        mode = "customer"
+                    )
+                }
+            }
+        )
 
         var selectedTab by remember { mutableStateOf("home") }
         var isBookingFlowOpen by remember { mutableStateOf(false) }
+        LaunchedEffect(initialDeepLinkScreen) {
+            val validTabs = setOf("home", "bookings", "bus", "explore", "notifications", "profile")
+            if (initialDeepLinkScreen != null && initialDeepLinkScreen in validTabs) {
+                isBookingFlowOpen = false
+                selectedTab = initialDeepLinkScreen
+            }
+        }
 
         val accountState by sessionViewModel.userAccountState.collectAsStateWithLifecycle()
         val notifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
@@ -208,6 +266,7 @@ fun CustomerAuthenticatedShell(
         val verifiedDrivers by customerViewModel.verifiedDrivers.collectAsStateWithLifecycle()
         val statusMsg by sessionViewModel.statusMessage.collectAsStateWithLifecycle()
         val customerMsg by customerViewModel.actionMessage.collectAsStateWithLifecycle()
+        val govMsg by governanceViewModel.message.collectAsStateWithLifecycle()
         val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
 
@@ -227,8 +286,8 @@ fun CustomerAuthenticatedShell(
         val navItems = listOf(
             Triple("home", "Home", Icons.Filled.Home),
             Triple("bookings", "Bookings", Icons.Filled.ReceiptLong),
+            Triple("bus", "Bus", Icons.Filled.DirectionsBus),
             Triple("explore", "Explore", Icons.Filled.Explore),
-            Triple("notifications", "Alerts", Icons.Filled.Notifications),
             Triple("profile", "Profile", Icons.Filled.Person)
         )
 
@@ -277,12 +336,16 @@ fun CustomerAuthenticatedShell(
 
                     Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         GolocalStatusMessageBanner(
-                            message = customerMsg ?: statusMsg,
+                            message = govMsg ?: customerMsg ?: statusMsg,
                             onDismiss = {
+                                governanceViewModel.clearMessage()
                                 customerViewModel.clearMessage()
                                 sessionViewModel.clearStatusMessage()
                             },
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        )
+                        com.example.notifications.NotificationPermissionBannerCard(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                         )
 
                         Box(modifier = Modifier.weight(1f).widthIn(max = 920.dp)) {
@@ -290,6 +353,7 @@ fun CustomerAuthenticatedShell(
                                 CustomerBookRideScreen(
                                     sessionViewModel = sessionViewModel,
                                     customerViewModel = customerViewModel,
+                                    governanceViewModel = governanceViewModel,
                                     onBackHome = { isBookingFlowOpen = false }
                                 )
                             } else {
@@ -305,6 +369,7 @@ fun CustomerAuthenticatedShell(
                                             if (!preset.isNullOrBlank()) customerViewModel.setBookingType(preset)
                                             isBookingFlowOpen = true
                                         },
+                                        onOpenBus = { selectedTab = "bus" },
                                         onOpenExplore = { selectedTab = "explore" },
                                         onOpenBookings = { selectedTab = "bookings" },
                                         onOpenNotifications = { selectedTab = "notifications" },
@@ -320,7 +385,13 @@ fun CustomerAuthenticatedShell(
                                     )
                                     "bookings" -> CustomerBookingsHistoryTab(
                                         customerViewModel = customerViewModel,
+                                        governanceViewModel = governanceViewModel,
                                         onOpenBookRide = { isBookingFlowOpen = true }
+                                    )
+                                    "bus" -> CustomerBusBookingTab(
+                                        customerName = completedName,
+                                        busViewModel = busViewModel,
+                                        governanceViewModel = governanceViewModel
                                     )
                                     "explore" -> CustomerExploreTab(
                                         customerViewModel = customerViewModel,

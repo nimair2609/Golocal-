@@ -116,7 +116,15 @@ class AppUpdateController(
         }
     }
 
+    val supportsInAppApkInstall: Boolean
+        get() = manager.hasRequestInstallPackagesPermission()
+
     fun startDownload(manifest: AppUpdateManifest, isMandatory: Boolean) {
+        if (!manager.hasRequestInstallPackagesPermission()) {
+            // Play-Store build: omit REQUEST_INSTALL_PACKAGES and route update via HTTPS browser / store link
+            openUpdateInBrowser(manifest.apkDownloadUrl, isMandatory, manifest)
+            return
+        }
         scope.launch {
             uiState = AppUpdateUiState.Downloading(
                 manifest = manifest,
@@ -156,11 +164,29 @@ class AppUpdateController(
         }
     }
 
+    fun openUpdateInBrowser(url: String, isMandatory: Boolean, manifest: AppUpdateManifest? = null) {
+        manager.openDownloadUrlInBrowser(url)
+            .onSuccess {
+                if (!isMandatory) uiState = AppUpdateUiState.Idle
+            }
+            .onFailure { err ->
+                uiState = AppUpdateUiState.Error(
+                    message = err.localizedMessage ?: "Unable to open HTTPS update page.",
+                    isMandatory = isMandatory,
+                    manifest = manifest
+                )
+            }
+    }
+
     fun openInstallPermissionSettings() {
         manager.launchUnknownSourcesSettingsIntent()
     }
 
     fun triggerVerifiedInstall(manifest: AppUpdateManifest, isMandatory: Boolean, apkPath: String) {
+        if (!manager.hasRequestInstallPackagesPermission()) {
+            openUpdateInBrowser(manifest.apkDownloadUrl, isMandatory, manifest)
+            return
+        }
         if (!manager.canRequestPackageInstalls()) {
             uiState = AppUpdateUiState.PermissionRequired(manifest, isMandatory, apkPath)
             manager.launchUnknownSourcesSettingsIntent()
@@ -260,7 +286,7 @@ fun AppUpdateDialogHost(
                     ) {
                         Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Download Update")
+                        Text(if (controller.supportsInAppApkInstall) "Download Update" else "Open Update Page")
                     }
                 },
                 dismissButton = {
@@ -318,16 +344,33 @@ fun AppUpdateDialogHost(
                     dismissOnClickOutside = !state.isMandatory
                 ),
                 icon = { Icon(Icons.Filled.Security, contentDescription = null, tint = GolocalPrimaryBlue) },
-                title = { Text("Allow App Installation") },
+                title = {
+                    Text(
+                        if (controller.supportsInAppApkInstall) "Allow App Installation"
+                        else "Update via Browser / Play Store"
+                    )
+                },
                 text = {
                     Text(
-                        "The GoLocal APK passed SHA-256 and signing verification. Enable \"Allow from this source\" in Android Settings to review and install the update.",
+                        if (controller.supportsInAppApkInstall) {
+                            "The GoLocal APK passed SHA-256 and signing verification. Enable \"Allow from this source\" in Android Settings to review and install the update."
+                        } else {
+                            "This Play Store build omits self-install permissions. Tap Open Update in Browser to download or update securely over HTTPS."
+                        },
                         style = MaterialTheme.typography.bodySmall
                     )
                 },
                 confirmButton = {
-                    Button(onClick = { controller.openInstallPermissionSettings() }) {
-                        Text("Open Settings")
+                    if (controller.supportsInAppApkInstall) {
+                        Button(onClick = { controller.openInstallPermissionSettings() }) {
+                            Text("Open Settings")
+                        }
+                    } else {
+                        Button(onClick = {
+                            controller.openUpdateInBrowser(state.manifest.apkDownloadUrl, state.isMandatory, state.manifest)
+                        }) {
+                            Text("Open Update in Browser")
+                        }
                     }
                 },
                 dismissButton = {

@@ -431,3 +431,163 @@ fun VerifiedMobileBadgeCard(
         }
     }
 }
+
+@Composable
+fun AccountSecurityLinkingCard(
+    fallbackAccountPhone: String,
+    fallbackAccountEmail: String,
+    onPhoneLinked: (String) -> Unit,
+    onGoogleLinked: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val currentUser = remember(fallbackAccountPhone, fallbackAccountEmail) {
+        if (FirebaseApp.getApps(context).isNotEmpty()) Firebase.auth.currentUser else null
+    }
+    val providerIds = currentUser?.providerData?.map { it.providerId }?.toSet().orEmpty()
+    var hasGoogleLinked by remember(providerIds) { mutableStateOf("google.com" in providerIds) }
+    var linkedPhone by remember(currentUser?.phoneNumber, providerIds) {
+        mutableStateOf(currentUser?.phoneNumber?.takeIf { it.isNotBlank() } ?: "")
+    }
+    var showPhoneLinkDialog by remember { mutableStateOf(false) }
+
+    val googleLinker = remember {
+        GoogleAuthController(
+            scope = scope,
+            onSuccess = {
+                hasGoogleLinked = true
+                onGoogleLinked()
+            }
+        )
+    }
+    val googleState by googleLinker.uiState.collectAsState()
+
+    val phoneLinker = remember {
+        PhoneAuthController(
+            scope = scope,
+            linkToExistingUser = true,
+            onSuccess = { verifiedE164 ->
+                linkedPhone = verifiedE164
+                showPhoneLinkDialog = false
+                onPhoneLinked(verifiedE164)
+            }
+        )
+    }
+    DisposableEffect(phoneLinker) { onDispose { phoneLinker.dispose() } }
+    val phoneState by phoneLinker.uiState.collectAsState()
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+            .testTag("account_security_linking_card")
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Sign-In Methods & Linking", style = MaterialTheme.typography.titleSmall)
+                GolocalStatusBadge(
+                    label = if (hasGoogleLinked && linkedPhone.isNotBlank()) "DUAL LINKED" else "ACTIVE",
+                    tone = if (hasGoogleLinked && linkedPhone.isNotBlank()) "success" else "info"
+                )
+            }
+
+            if (!googleState.errorMessage.isNullOrBlank()) {
+                Text(
+                    text = googleState.errorMessage ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Mobile OTP Sign-In", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = if (linkedPhone.isNotBlank()) "Verified: $linkedPhone"
+                        else if (fallbackAccountPhone.isNotBlank()) "Contact: $fallbackAccountPhone (Not OTP linked)"
+                        else "Not linked yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (linkedPhone.isNotBlank()) {
+                    GolocalStatusBadge(label = "LINKED", tone = "success")
+                } else {
+                    OutlinedButton(
+                        onClick = { showPhoneLinkDialog = true },
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("link_phone_button")
+                    ) {
+                        Text("Verify & Link")
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Google Sign-In", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = if (hasGoogleLinked) {
+                            currentUser?.email?.takeIf { it.isNotBlank() } ?: fallbackAccountEmail.ifBlank { "Google account linked" }
+                        } else {
+                            "Link your Google account for one-tap login"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (hasGoogleLinked) {
+                    GolocalStatusBadge(label = "LINKED", tone = "success")
+                } else {
+                    OutlinedButton(
+                        onClick = { googleLinker.signInWithGoogle(context, linkToExistingUser = true) },
+                        enabled = !googleState.isSigningIn,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("link_google_button")
+                    ) {
+                        if (googleState.isSigningIn) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Link Google")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showPhoneLinkDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!phoneState.isBusy) showPhoneLinkDialog = false },
+            title = { Text("Verify & Link Mobile Number") },
+            text = {
+                PhoneAuthFormContent(
+                    controller = phoneLinker,
+                    state = phoneState,
+                    actionButtonLabel = "Send Verification OTP"
+                )
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = { showPhoneLinkDialog = false },
+                    enabled = !phoneState.isBusy
+                ) { Text("Close") }
+            }
+        )
+    }
+}

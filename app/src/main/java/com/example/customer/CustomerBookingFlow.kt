@@ -34,11 +34,13 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.CustomerViewModel
+import com.example.viewmodel.GovernanceViewModel
 
 @Composable
 fun CustomerBookRideScreen(
     sessionViewModel: AppSessionViewModel,
     customerViewModel: CustomerViewModel,
+    governanceViewModel: GovernanceViewModel? = null,
     onBackHome: () -> Unit
 ) {
     val context = LocalContext.current
@@ -464,54 +466,93 @@ fun CustomerBookRideScreen(
     }
 
     if (showCancelDialog && activeBooking != null) {
-        var reason by remember { mutableStateOf("Plan changed") }
-        AlertDialog(
-            onDismissRequest = { showCancelDialog = false },
-            title = { Text("Cancel Ride?") },
-            text = {
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it },
-                    label = { Text("Reason") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
-                    onClick = {
-                        customerViewModel.cancelBooking(activeBooking!!.id, reason)
-                        showCancelDialog = false
-                    }
-                ) { Text("Confirm Cancel") }
-            },
-            dismissButton = { TextButton(onClick = { showCancelDialog = false }) { Text("Keep Ride") } }
-        )
+        val booking = activeBooking!!
+        val cfg = fareConfigs.firstOrNull { it.vehicleCategory == booking.vehicleCategory }
+        if (governanceViewModel != null) {
+            StructuredCancellationDialog(
+                booking = booking,
+                actorRole = "customer",
+                fareConfig = cfg,
+                onDismiss = { showCancelDialog = false },
+                onConfirmCancel = { code, label ->
+                    governanceViewModel.cancelBookingStructured(
+                        bookingId = booking.id,
+                        actorRole = "customer",
+                        reasonCode = code,
+                        reasonLabel = label
+                    )
+                    showCancelDialog = false
+                }
+            )
+        } else {
+            var reason by remember { mutableStateOf("Plan changed") }
+            AlertDialog(
+                onDismissRequest = { showCancelDialog = false },
+                title = { Text("Cancel Ride?") },
+                text = {
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Reason") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                        onClick = {
+                            customerViewModel.cancelBooking(booking.id, reason)
+                            showCancelDialog = false
+                        }
+                    ) { Text("Confirm Cancel") }
+                },
+                dismissButton = { TextButton(onClick = { showCancelDialog = false }) { Text("Keep Ride") } }
+            )
+        }
     }
 
     if (showComplaintDialog && activeBooking != null) {
-        var desc by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showComplaintDialog = false },
-            title = { Text("Report Trip Issue") },
-            text = {
-                OutlinedTextField(
-                    value = desc,
-                    onValueChange = { desc = it },
-                    label = { Text("Describe issue") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        customerViewModel.submitComplaint(activeBooking!!.id, "trip_issue", desc)
-                        showComplaintDialog = false
-                    }
-                ) { Text("Submit") }
-            },
-            dismissButton = { TextButton(onClick = { showComplaintDialog = false }) { Text("Cancel") } }
-        )
+        val booking = activeBooking!!
+        if (governanceViewModel != null) {
+            SubmitDisputeDialog(
+                bookingId = booking.id,
+                defaultRefundInr = booking.agreedFareInr.takeIf { it > 0.0 } ?: booking.estimatedFareInr,
+                onDismiss = { showComplaintDialog = false },
+                onSubmit = { cat, desc, refund ->
+                    governanceViewModel.submitDispute(
+                        bookingId = booking.id,
+                        targetUserId = booking.assignedDriverId,
+                        category = cat,
+                        description = desc,
+                        requestedRefundInr = refund
+                    )
+                    showComplaintDialog = false
+                }
+            )
+        } else {
+            var desc by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showComplaintDialog = false },
+                title = { Text("Report Trip Issue") },
+                text = {
+                    OutlinedTextField(
+                        value = desc,
+                        onValueChange = { desc = it },
+                        label = { Text("Describe issue") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            customerViewModel.submitComplaint(booking.id, "trip_issue", desc)
+                            showComplaintDialog = false
+                        }
+                    ) { Text("Submit") }
+                },
+                dismissButton = { TextButton(onClick = { showComplaintDialog = false }) { Text("Cancel") } }
+            )
+        }
     }
 }
 

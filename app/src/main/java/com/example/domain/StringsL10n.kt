@@ -30,7 +30,12 @@ data class L10nStrings(
     val noRidesYet: String,
     val driverVerificationPending: String,
     val goOnline: String,
-    val goOffline: String
+    val goOffline: String,
+    val busTickets: String = "Bus Tickets",
+    val verifyKyc: String = "Verify KYC & Expiry",
+    val disputesTitle: String = "Formal Disputes",
+    val fraudAlerts: String = "Anomaly Alerts",
+    val rateTrip: String = "Rate Trip"
 )
 
 object StringsL10n {
@@ -63,7 +68,12 @@ object StringsL10n {
             noRidesYet = "No bookings recorded yet. Enter your pickup and destination to start your first GoLocal trip.",
             driverVerificationPending = "Document Verification Pending — Admin approval is required before going online.",
             goOnline = "Go Online",
-            goOffline = "Go Offline"
+            goOffline = "Go Offline",
+            busTickets = "Private Bus Tickets",
+            verifyKyc = "Verify KYC & Doc Expiry",
+            disputesTitle = "Formal Disputes & Refunds",
+            fraudAlerts = "Fraud & Anomaly Alerts",
+            rateTrip = "Rate Trip & Service"
         )
         AppLanguage.BN -> L10nStrings(
             brandTagline = "আপনার স্থানীয় যাত্রা। আমাদের অগ্রাধিকার।",
@@ -93,7 +103,12 @@ object StringsL10n {
             noRidesYet = "এখনও কোনো বুকিং নেই। শুরু করতে পিকআপ ও গন্তব্য নির্বাচন করুন।",
             driverVerificationPending = "নথি যাচাই বাকি — অনলাইন হওয়ার আগে অ্যাডমিন অনুমোদন প্রয়োজন।",
             goOnline = "অনলাইন হোন",
-            goOffline = "অফলাইন হোন"
+            goOffline = "অফলাইন হোন",
+            busTickets = "বেসরকারি বাস টিকিট",
+            verifyKyc = "কেওয়াইসি ও মেয়াদ যাচাই",
+            disputesTitle = "অভিযোগ ও রিফান্ড",
+            fraudAlerts = "অস্বাভাবিক কার্যকলাপ সতর্কতা",
+            rateTrip = "ভ্রমণের রেটিং দিন"
         )
         AppLanguage.HI -> L10nStrings(
             brandTagline = "आपकी स्थानीय यात्रा। हमारी प्राथमिकता।",
@@ -123,7 +138,12 @@ object StringsL10n {
             noRidesYet = "अभी तक कोई बुकिंग दर्ज नहीं है। शुरू करने के लिए पिकअप और गंतव्य चुनें।",
             driverVerificationPending = "दस्तावेज़ सत्यापन लंबित — ऑनलाइन आने से पहले एडमिन की मंजूरी आवश्यक है।",
             goOnline = "ऑनलाइन जाएँ",
-            goOffline = "ऑफलाइन जाएँ"
+            goOffline = "ऑफलाइन जाएँ",
+            busTickets = "प्राइवेट बस टिकट",
+            verifyKyc = "केवाईसी और दस्तावेज़ वैधता",
+            disputesTitle = "विवाद एवं रिफंड",
+            fraudAlerts = "असामान्य गतिविधि अलर्ट",
+            rateTrip = "यात्रा रेटिंग दें"
         )
     }
 }

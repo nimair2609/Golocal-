@@ -213,10 +213,24 @@ class PhoneAuthUnitTest {
         )
         assertTrue(notEnabled.contains("Enable Phone provider in Firebase Console"))
 
+        val (_, _, regionBlocked) = classifyPhoneAuthFailure(
+            FirebaseAuthException(
+                "ERROR_OPERATION_NOT_ALLOWED",
+                "SMS unable to be sent until this region enabled by the app developer. [ 17006 ]"
+            )
+        )
+        assertTrue(regionBlocked.contains("17006"))
+        assertTrue(regionBlocked.contains("SMS region policy"))
+
         val (_, _, appCheck) = classifyPhoneAuthFailure(
             FirebaseAuthException("ERROR_CAPTCHA_CHECK_FAILED", "Captcha failed")
         )
         assertTrue(appCheck.contains("SHA-1/SHA-256"))
+
+        val (_, _, certMismatch) = classifyPhoneAuthFailure(
+            FirebaseAuthException("ERROR_MISSING_CLIENT_IDENTIFIER", "missing SHA certificate hash")
+        )
+        assertTrue(certMismatch.contains("SHA-1/SHA-256"))
 
         val (_, _, network) = classifyPhoneAuthFailure(FirebaseNetworkException("Offline"))
         assertTrue(network.contains("Network unavailable"))
@@ -360,8 +374,8 @@ class PhoneAuthUnitTest {
         }
         composeTestRule.waitForIdle()
 
-        // Google Login is completely removed; Mobile OTP form renders immediately
-        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        // Both Google Sign-In and Mobile OTP form render immediately
+        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("country_code_selector").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("🇮🇳 +91").assertIsDisplayed()
 
@@ -390,7 +404,7 @@ class PhoneAuthUnitTest {
     }
 
     @Test
-    fun `rider and admin auth screens render Mobile OTP login exclusively`() {
+    fun `rider and admin auth screens render Google and Mobile OTP login`() {
         val activeMode = androidx.compose.runtime.mutableStateOf(ExperienceMode.RIDER)
         composeTestRule.setContent {
             GolocalTheme {
@@ -398,12 +412,12 @@ class PhoneAuthUnitTest {
             }
         }
         composeTestRule.waitForIdle()
-        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
 
         composeTestRule.runOnUiThread { activeMode.value = ExperienceMode.ADMIN }
         composeTestRule.waitForIdle()
-        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
     }
 }

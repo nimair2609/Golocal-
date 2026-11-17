@@ -177,6 +177,7 @@ fun CustomerHomeTab(
     verifiedDrivers: List<DriverDirectoryEntry>,
     platformSettings: PlatformSettings?,
     onOpenBookRide: (presetType: String?) -> Unit,
+    onOpenBus: () -> Unit = {},
     onOpenExplore: () -> Unit,
     onOpenBookings: () -> Unit,
     onOpenNotifications: () -> Unit,
@@ -409,10 +410,10 @@ fun CustomerHomeTab(
                 modifier = Modifier.weight(1f)
             )
             QuickTile(
-                icon = Icons.Filled.Train,
-                title = "Local Services",
-                subtitle = "Station & Bus",
-                onClick = { onOpenBookRide("station_pickup") },
+                icon = Icons.Filled.DirectionsBus,
+                title = "Bus Tickets",
+                subtitle = "Seats & QR Pass",
+                onClick = onOpenBus,
                 modifier = Modifier.weight(1f)
             )
             QuickTile(

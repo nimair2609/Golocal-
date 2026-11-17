@@ -28,6 +28,7 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.DriverViewModel
+import com.example.viewmodel.GovernanceViewModel
 import kotlin.math.roundToInt
 
 @Composable
@@ -186,7 +187,8 @@ fun RiderRequestsTab(
 @Composable
 fun RiderEarningsHistoryTab(
     profile: DriverProfile,
-    driverViewModel: DriverViewModel
+    driverViewModel: DriverViewModel,
+    governanceViewModel: GovernanceViewModel? = null
 ) {
     val commissions by driverViewModel.commissions.collectAsStateWithLifecycle()
     val settlements by driverViewModel.settlements.collectAsStateWithLifecycle()
@@ -195,6 +197,8 @@ fun RiderEarningsHistoryTab(
 
     var subTab by remember { mutableIntStateOf(0) }
     var showWithdrawDialog by remember { mutableStateOf(false) }
+    var passengerFeedbackTarget by remember { mutableStateOf<Booking?>(null) }
+    var disputeTarget by remember { mutableStateOf<Booking?>(null) }
 
     val totalGross = commissions.sumOf { it.grossFareInr }
     val totalComm = commissions.sumOf { it.commissionAmountInr }
@@ -274,6 +278,16 @@ fun RiderEarningsHistoryTab(
                                     }
                                     Text("${b.pickupLabel} → ${b.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                                     Text("Passenger: ${b.customerName} • ${b.distanceKm} km", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (b.status == "completed" && governanceViewModel != null) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(onClick = { passengerFeedbackTarget = b }) {
+                                                Text("Rate Passenger")
+                                            }
+                                            TextButton(onClick = { disputeTarget = b }) {
+                                                Text("Report Issue", color = GolocalError)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -293,6 +307,7 @@ fun RiderEarningsHistoryTab(
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                    Text("Behaviour ${r.behaviourStars}★ • Safety ${r.safetyStars}★", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     if (r.review.isNotBlank()) Text(r.review, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
@@ -323,6 +338,55 @@ fun RiderEarningsHistoryTab(
                 }) { Text("Submit") }
             },
             dismissButton = { TextButton(onClick = { showWithdrawDialog = false }) { Text("Cancel") } }
+        )
+    }
+
+    passengerFeedbackTarget?.let { target ->
+        var stars by remember { mutableIntStateOf(5) }
+        var note by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { passengerFeedbackTarget = null },
+            title = { Text("Rate Passenger Behaviour") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        (1..5).forEach { s ->
+                            FilterChip(selected = stars == s, onClick = { stars = s }, label = { Text("$s★") })
+                        }
+                    }
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it.take(300) },
+                        label = { Text("Passenger trip note (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    governanceViewModel?.submitRiderToCustomerFeedback(target, stars, note)
+                    passengerFeedbackTarget = null
+                }) { Text("Submit") }
+            },
+            dismissButton = { TextButton(onClick = { passengerFeedbackTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    disputeTarget?.let { target ->
+        com.example.customer.SubmitDisputeDialog(
+            bookingId = target.id,
+            defaultRefundInr = 0.0,
+            onDismiss = { disputeTarget = null },
+            onSubmit = { cat, desc, refund ->
+                governanceViewModel?.submitDispute(
+                    bookingId = target.id,
+                    targetUserId = target.customerId,
+                    category = cat,
+                    description = desc,
+                    requestedRefundInr = refund
+                )
+                disputeTarget = null
+            }
         )
     }
 }
@@ -362,7 +426,8 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
 @Composable
 fun RiderProfileTab(
     profile: DriverProfile,
-    sessionViewModel: AppSessionViewModel
+    sessionViewModel: AppSessionViewModel,
+    onOpenNotifications: () -> Unit = {}
 ) {
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     var showSupportDialog by remember { mutableStateOf(false) }
@@ -390,11 +455,30 @@ fun RiderProfileTab(
                 Text("District: ${profile.district} ${profile.block}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Driving Licence: ${profile.drivingLicenceNumber}", style = MaterialTheme.typography.bodySmall)
                 Text("Settlement UPI: ${profile.settlementUpiOrBank.ifBlank { "Not configured" }}", style = MaterialTheme.typography.bodySmall)
+                if (profile.earliestExpiryIso.isNotBlank()) {
+                    Text(
+                        "Earliest Doc Expiry: ${profile.earliestExpiryIso} (${profile.expiryAlertLevel.replace('_', ' ').uppercase()})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (profile.expiryAlertLevel == "valid") GolocalSuccess else GolocalError
+                    )
+                }
+                OutlinedButton(onClick = onOpenNotifications, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Notifications, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("View Rider Notifications & Alerts")
+                }
             }
         }
 
         com.example.ui.auth.VerifiedMobileBadgeCard(
             fallbackAccountPhone = profile.phone
+        )
+
+        com.example.ui.auth.AccountSecurityLinkingCard(
+            fallbackAccountPhone = profile.phone,
+            fallbackAccountEmail = "",
+            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) },
+            onGoogleLinked = { sessionViewModel.onAccountCredentialLinked(null) }
         )
 
         SharedAppSettingsAndSignOutSection(

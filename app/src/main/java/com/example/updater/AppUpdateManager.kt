@@ -224,12 +224,36 @@ class AppUpdateManager(
         }
     }
 
+    fun hasRequestInstallPackagesPermission(): Boolean {
+        return try {
+            val info = context.packageManager.getPackageInfo(
+                context.packageName,
+                PackageManager.GET_PERMISSIONS
+            )
+            val perms = info.requestedPermissions ?: emptyArray()
+            perms.any { it == "android.permission.REQUEST_INSTALL_PACKAGES" }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun canRequestPackageInstalls(): Boolean {
+        if (!hasRequestInstallPackagesPermission()) return false
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.packageManager.canRequestPackageInstalls()
         } else {
             true
         }
+    }
+
+    fun openDownloadUrlInBrowser(url: String): Result<Unit> = runCatching {
+        require(UpdateManifestEvaluator.isSecureUpdateUrl(url, allowLocalhostForTests)) {
+            "Update URL must use HTTPS."
+        }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(intent)
     }
 
     fun launchUnknownSourcesSettingsIntent() {

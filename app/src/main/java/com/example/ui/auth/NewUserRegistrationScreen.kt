@@ -43,6 +43,9 @@ import com.example.ui.theme.JetBrainsMono
 fun NewUserRegistrationScreen(
     verifiedMobileNumber: String,
     existingAccount: UserAccount? = null,
+    prefilledName: String = "",
+    prefilledEmail: String = "",
+    isPhoneAuthVerified: Boolean = verifiedMobileNumber.isNotBlank(),
     isSubmitting: Boolean,
     serverErrorMessage: String? = null,
     onSubmitRegistration: (
@@ -51,15 +54,37 @@ fun NewUserRegistrationScreen(
         emergencyContactE164: String,
         termsAccepted: Boolean
     ) -> Unit,
+    onSubmitRegistrationWithPhone: (
+        fullName: String,
+        mobileNumberE164: String,
+        invoiceEmail: String,
+        emergencyContactE164: String,
+        termsAccepted: Boolean
+    ) -> Unit = { name, _, email, emergency, accepted ->
+        onSubmitRegistration(name, email, emergency, accepted)
+    },
     onSignOut: () -> Unit
 ) {
-    var fullName by remember(existingAccount?.fullName) {
+    var fullName by remember(existingAccount?.fullName, prefilledName) {
         mutableStateOf(
-            existingAccount?.fullName?.takeIf { it.isNotBlank() && it != "GoLocal User" } ?: ""
+            existingAccount?.fullName?.takeIf { it.isNotBlank() && it != "GoLocal User" }
+                ?: prefilledName.takeIf { it.isNotBlank() && it != "GoLocal User" && it != "GoLocal Passenger" && it != "GoLocal Rider" }
+                ?: ""
         )
     }
-    var invoiceEmail by remember(existingAccount?.email) {
-        mutableStateOf(existingAccount?.email ?: "")
+    var invoiceEmail by remember(existingAccount?.email, prefilledEmail) {
+        mutableStateOf(
+            existingAccount?.email?.takeIf { it.isNotBlank() }
+                ?: prefilledEmail.takeIf { it.isNotBlank() }
+                ?: ""
+        )
+    }
+    var mobileCountry by remember { mutableStateOf(SupportedCountryCodes.INDIA) }
+    var mobileCountryExpanded by remember { mutableStateOf(false) }
+    var mobileInput by remember(verifiedMobileNumber, existingAccount?.phone) {
+        mutableStateOf(
+            verifiedMobileNumber.ifBlank { existingAccount?.effectiveMobileNumber().orEmpty() }
+        )
     }
     var emergencyCountry by remember { mutableStateOf(SupportedCountryCodes.INDIA) }
     var countryMenuExpanded by remember { mutableStateOf(false) }
@@ -168,45 +193,126 @@ fun NewUserRegistrationScreen(
                         }
                     }
 
-                    // 1. Verified Mobile Number (Read-only)
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, GolocalSuccess.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-                            .testTag("reg_verified_mobile_display")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                    if (isPhoneAuthVerified && verifiedMobileNumber.isNotBlank()) {
+                        // 1. Verified Mobile Number (Read-only for Phone OTP users)
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, GolocalSuccess.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                                .testTag("reg_verified_mobile_display")
                         ) {
                             Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.weight(1f)
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Icon(
-                                    imageVector = Icons.Filled.VerifiedUser,
-                                    contentDescription = "Verified mobile number",
-                                    tint = GolocalSuccess
-                                )
-                                Column {
-                                    Text(
-                                        text = "Mobile Number (Read-Only)",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.VerifiedUser,
+                                        contentDescription = "Verified mobile number",
+                                        tint = GolocalSuccess
                                     )
-                                    Text(
-                                        text = verifiedMobileNumber.ifBlank { "Verified via OTP" },
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontFamily = JetBrainsMono,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
+                                    Column {
+                                        Text(
+                                            text = "Mobile Number (OTP Verified)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = verifiedMobileNumber,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontFamily = JetBrainsMono,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
+                                GolocalStatusBadge(label = "VERIFIED", tone = "success")
                             }
-                            GolocalStatusBadge(label = "VERIFIED", tone = "success")
+                        }
+                    } else {
+                        // Google Sign-In users enter their contact mobile number (and can link OTP later in Profile)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "Contact Mobile Number *",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Box {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        modifier = Modifier
+                                            .height(56.dp)
+                                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable(enabled = !isSubmitting) { mobileCountryExpanded = true }
+                                            .testTag("reg_mobile_country_selector")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "${mobileCountry.flagEmoji} ${mobileCountry.dialCode}",
+                                                style = MaterialTheme.typography.titleSmall
+                                            )
+                                            Icon(
+                                                imageVector = Icons.Filled.ArrowDropDown,
+                                                contentDescription = "Select mobile country code"
+                                            )
+                                        }
+                                    }
+                                    DropdownMenu(
+                                        expanded = mobileCountryExpanded,
+                                        onDismissRequest = { mobileCountryExpanded = false }
+                                    ) {
+                                        SupportedCountryCodes.all.forEach { option ->
+                                            DropdownMenuItem(
+                                                text = { Text("${option.flagEmoji}  ${option.countryName} (${option.dialCode})") },
+                                                onClick = {
+                                                    mobileCountry = option
+                                                    mobileCountryExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = mobileInput,
+                                    onValueChange = { raw ->
+                                        mobileInput = raw.filter { it.isDigit() || it == '+' || it == ' ' || it == '-' }.take(18)
+                                        validationError = null
+                                    },
+                                    label = { Text("Your Mobile Number *") },
+                                    placeholder = { Text(mobileCountry.sampleHint) },
+                                    leadingIcon = { Icon(Icons.Filled.PhoneAndroid, contentDescription = null) },
+                                    singleLine = true,
+                                    enabled = !isSubmitting,
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Phone,
+                                        imeAction = ImeAction.Next
+                                    ),
+                                    supportingText = {
+                                        Text("Required for driver/customer coordination. You can OTP-link it in Profile.")
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("reg_mobile_input")
+                                )
+                            }
                         }
                     }
 
@@ -380,6 +486,17 @@ fun NewUserRegistrationScreen(
 
                     Button(
                         onClick = {
+                            val resolvedMobileE164 = if (isPhoneAuthVerified && verifiedMobileNumber.isNotBlank()) {
+                                verifiedMobileNumber
+                            } else {
+                                when (val mobileRes = PhoneNumberValidator.validateAndFormat(mobileCountry, mobileInput)) {
+                                    is PhoneValidationResult.Invalid -> {
+                                        validationError = mobileRes.message
+                                        return@Button
+                                    }
+                                    is PhoneValidationResult.Valid -> mobileRes.e164Phone
+                                }
+                            }
                             val nameErr = RegistrationValidator.validateFullName(fullName)
                             if (nameErr != null) {
                                 validationError = nameErr
@@ -393,7 +510,7 @@ fun NewUserRegistrationScreen(
                             val emergencyValidation = RegistrationValidator.validateEmergencyContact(
                                 country = emergencyCountry,
                                 rawEmergency = emergencyPhoneInput,
-                                ownVerifiedMobileE164 = verifiedMobileNumber
+                                ownVerifiedMobileE164 = resolvedMobileE164
                             )
                             val validEmergency = when (emergencyValidation) {
                                 is PhoneValidationResult.Invalid -> {
@@ -407,8 +524,9 @@ fun NewUserRegistrationScreen(
                                 return@Button
                             }
                             validationError = null
-                            onSubmitRegistration(
+                            onSubmitRegistrationWithPhone(
                                 fullName.trim(),
+                                resolvedMobileE164,
                                 invoiceEmail.trim(),
                                 validEmergency,
                                 true

@@ -42,6 +42,7 @@ internal object AuthFlowCoordinator {
 
 fun signOut(
     scope: CoroutineScope,
+    context: Context? = null,
     onSignOutComplete: () -> Unit = {},
     firebaseSignOutAction: () -> Unit = { Firebase.auth.signOut() }
 ) {
@@ -51,6 +52,13 @@ fun signOut(
     scope.launch {
         withContext(NonCancellable) {
             try {
+                if (context != null) {
+                    val uid = runCatching { Firebase.auth.currentUser?.uid }.getOrNull().orEmpty()
+                    if (uid.isNotBlank()) {
+                        com.example.notifications.FcmTokenSyncManager.removeCurrentToken(context, uid)
+                    }
+                    DefaultGoogleSignInGateway().clearCredentialState(context)
+                }
                 firebaseSignOutAction()
             } finally {
                 AuthDiagnostics.logStage(AuthStage.AUTH_SIGN_OUT_COMPLETED, flow = "sign_out")

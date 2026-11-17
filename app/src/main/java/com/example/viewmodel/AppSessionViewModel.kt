@@ -69,6 +69,9 @@ class AppSessionViewModel(
     private val _isSubmittingRegistration = MutableStateFlow(false)
     val isSubmittingRegistration: StateFlow<Boolean> = _isSubmittingRegistration.asStateFlow()
 
+    private val _isDeletingAccount = MutableStateFlow(false)
+    val isDeletingAccount: StateFlow<Boolean> = _isDeletingAccount.asStateFlow()
+
     private val _registrationError = MutableStateFlow<String?>(null)
     val registrationError: StateFlow<String?> = _registrationError.asStateFlow()
 
@@ -176,6 +179,10 @@ class AppSessionViewModel(
                                 }
                                 is RegistrationStatus.PendingRegistration -> {
                                     _isAccountReady.value = false
+                                    _registrationStatus.value = status.copy(
+                                        prefilledName = status.prefilledName.ifBlank { userDisplayName },
+                                        prefilledEmail = status.prefilledEmail.ifBlank { userEmail }
+                                    )
                                     AuthDiagnostics.logStage(
                                         stage = AuthStage.REGISTRATION_REQUIRED,
                                         flow = "session_init",
@@ -224,11 +231,14 @@ class AppSessionViewModel(
         fullName: String,
         invoiceEmail: String,
         emergencyContactE164: String,
-        termsAccepted: Boolean
+        termsAccepted: Boolean,
+        enteredMobileE164: String = ""
     ) {
         if (_isSubmittingRegistration.value) return
         val currentStatus = _registrationStatus.value as? RegistrationStatus.PendingRegistration
-        val verifiedPhone = currentStatus?.verifiedMobileNumber?.ifBlank { userPhoneNumber } ?: userPhoneNumber
+        val verifiedPhone = currentStatus?.verifiedMobileNumber?.ifBlank { userPhoneNumber }
+            ?.ifBlank { enteredMobileE164 }
+            ?: enteredMobileE164.ifBlank { userPhoneNumber }
 
         _isSubmittingRegistration.value = true
         _registrationError.value = null
@@ -240,7 +250,8 @@ class AppSessionViewModel(
                 emergencyContactNumber = emergencyContactE164,
                 privacyConsentAccepted = termsAccepted,
                 role = _selectedRole.value.wire,
-                preferredLanguage = clientPreferences.value.language.code
+                preferredLanguage = clientPreferences.value.language.code,
+                isMobileOtpVerified = currentStatus?.isPhoneAuthVerified ?: userPhoneNumber.isNotBlank()
             )
                 .onSuccess { account ->
                     _registrationStatus.value = RegistrationStatus.Completed(account)
@@ -256,6 +267,44 @@ class AppSessionViewModel(
                 .onFailure { err ->
                     _isSubmittingRegistration.value = false
                     _registrationError.value = err.localizedMessage ?: "Could not save registration details. Please retry."
+                }
+        }
+    }
+
+    fun onAccountCredentialLinked(linkedPhoneE164: String? = null) {
+        viewModelScope.launch {
+            if (!linkedPhoneE164.isNullOrBlank()) {
+                repository.syncVerifiedPhoneOnAccount(linkedPhoneE164)
+            } else {
+                repository.syncLinkedAuthProviders()
+            }
+                .onSuccess {
+                    _statusMessage.value = "Account security credentials linked cleanly."
+                }
+                .onFailure { err ->
+                    _statusMessage.value = err.localizedMessage ?: "Account link saved in Auth; Firestore sync will retry."
+                }
+        }
+    }
+
+    fun deleteMyAccountNow(context: Context) {
+        if (_isDeletingAccount.value) return
+        _isDeletingAccount.value = true
+        viewModelScope.launch {
+            repository.deleteMyAccountAndData()
+                .onSuccess {
+                    _isDeletingAccount.value = false
+                    com.example.ui.auth.signOut(viewModelScope, context = context)
+                }
+                .onFailure { err ->
+                    _isDeletingAccount.value = false
+                    val isRecentLogin = err is com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException ||
+                        err.message?.contains("REQUIRES_RECENT_LOGIN", ignoreCase = true) == true
+                    _statusMessage.value = if (isRecentLogin) {
+                        "Security check: Sign out and sign back in right before deleting your account."
+                    } else {
+                        err.localizedMessage ?: "Could not delete account right now. Please try again."
+                    }
                 }
         }
     }

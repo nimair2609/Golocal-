@@ -132,7 +132,7 @@ class AuthFlowUnitTest {
     }
 
     @Test
-    fun `all role auth screens use mobile OTP exclusively with zero Google sign-in affordances`() {
+    fun `all role auth screens expose both Google Sign-In and Mobile OTP controls`() {
         val activeMode = androidx.compose.runtime.mutableStateOf(ExperienceMode.CUSTOMER)
         composeTestRule.setContent {
             GolocalTheme {
@@ -143,11 +143,11 @@ class AuthFlowUnitTest {
             composeTestRule.runOnUiThread { activeMode.value = mode }
             composeTestRule.waitForIdle()
 
-            // Verify Google Sign-In is completely removed
-            assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
-            assertTrue(composeTestRule.onAllNodesWithText("Continue with Google").fetchSemanticsNodes().isEmpty())
+            // Verify Google Sign-In button renders on all role auth screens
+            composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
+            composeTestRule.onNodeWithText("Continue with Google").performScrollTo().assertIsDisplayed()
 
-            // Verify Mobile OTP form renders directly without extra toggle step
+            // Verify Mobile OTP form also renders directly without extra toggle step
             composeTestRule.onNodeWithTag("country_code_selector").performScrollTo().assertIsDisplayed()
             composeTestRule.onNodeWithTag("phone_number_input").performScrollTo().assertIsDisplayed()
             composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
@@ -246,5 +246,47 @@ class AuthFlowUnitTest {
         assertEquals("sohini.invoices@example.com", submittedEmail)
         assertEquals("+919830011223", submittedEmergency)
         assertTrue(submittedTerms)
+    }
+
+    @Test
+    fun `NewUserRegistrationScreen for Google Sign-In collects and validates contact mobile number`() {
+        var submittedMobile: String? = null
+        var submittedName: String? = null
+        var submittedEmail: String? = null
+        var submittedEmergency: String? = null
+
+        composeTestRule.setContent {
+            GolocalTheme {
+                NewUserRegistrationScreen(
+                    verifiedMobileNumber = "",
+                    prefilledName = "Priya Bose",
+                    prefilledEmail = "priya@gmail.com",
+                    isPhoneAuthVerified = false,
+                    isSubmitting = false,
+                    onSubmitRegistration = { _, _, _, _ -> },
+                    onSubmitRegistrationWithPhone = { name, mobile, email, emergency, _ ->
+                        submittedName = name
+                        submittedMobile = mobile
+                        submittedEmail = email
+                        submittedEmergency = emergency
+                    },
+                    onSignOut = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        assertTrue(composeTestRule.onAllNodesWithTag("reg_verified_mobile_display").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("reg_mobile_input").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("reg_mobile_input").performTextInput("9876501234")
+        composeTestRule.onNodeWithTag("reg_emergency_phone_input").performScrollTo().performTextInput("9830011223")
+        composeTestRule.onNodeWithTag("reg_terms_checkbox").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("reg_submit_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("Priya Bose", submittedName)
+        assertEquals("+919876501234", submittedMobile)
+        assertEquals("priya@gmail.com", submittedEmail)
+        assertEquals("+919830011223", submittedEmergency)
     }
 }

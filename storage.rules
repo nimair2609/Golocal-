@@ -1,0 +1,47 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() &&
+             request.auth.token.email_verified == true &&
+             request.auth.token.email == 'renukadas083@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() ||
+             (isSignedIn() &&
+              firestore.exists(/databases/ai-studio-android-golocal-e1a2a68b-450b-4d1b-817a-6a38c9c578bb/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidUpload() {
+      return request.resource != null &&
+             request.resource.size < 5 * 1024 * 1024 &&
+             (request.resource.contentType.matches('image/.*') ||
+              request.resource.contentType == 'application/pdf');
+    }
+
+    // Driver KYC documents (Driving Licence, RC, Insurance, Fitness, Permit, PUC)
+    match /kyc_docs/{uid}/{fileName} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isSignedIn() && request.auth.uid == uid && isValidUpload();
+      allow delete: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Private Bus Operator & Bus Vehicle permit/KYC documents
+    match /bus_docs/{uid}/{fileName} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isSignedIn() && request.auth.uid == uid && isValidUpload();
+      allow delete: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Deny all other storage paths by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

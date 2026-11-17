@@ -5,6 +5,12 @@
     <string name="brand_byline">by NR Next</string>
     <string name="brand_tagline">Your Local. Our Priority.</string>
     <string name="sign_in_mobile">Continue with Mobile OTP</string>
+    <string name="sign_in_google">Continue with Google</string>
     <string name="sign_out">Sign out</string>
     <string name="support_helpline">+91-1800-103-0000</string>
+    <string name="default_notification_channel_id" translatable="false">golocal_bookings</string>
+    <string name="channel_bookings_name">Ride &amp; Bus Updates</string>
+    <string name="channel_dispatch_name">Driver Requests &amp; Payouts</string>
+    <string name="channel_safety_name">Safety, KYC &amp; Admin Alerts</string>
+    <string name="privacy_policy_url" translatable="false">https://golocal.nrnext.in/privacy</string>
 </resources>
