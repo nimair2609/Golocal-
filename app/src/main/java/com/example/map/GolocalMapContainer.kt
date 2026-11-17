@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material3.Icon
@@ -90,12 +91,14 @@ private const val SRC_PICKUP = "golocal-pickup-src"
 private const val SRC_DROP = "golocal-drop-src"
 private const val SRC_FLEET = "golocal-fleet-src"
 private const val SRC_DRIVER = "golocal-driver-src"
+private const val SRC_USER_LOC = "golocal-user-loc-src"
 
 private const val LYR_ROUTE = "golocal-route-lyr"
 private const val LYR_PICKUP = "golocal-pickup-lyr"
 private const val LYR_DROP = "golocal-drop-lyr"
 private const val LYR_FLEET = "golocal-fleet-lyr"
 private const val LYR_DRIVER = "golocal-driver-lyr"
+private const val LYR_USER_LOC = "golocal-user-loc-lyr"
 
 internal fun isRobolectricEnvironment(): Boolean {
     val fp = Build.FINGERPRINT.orEmpty()
@@ -116,14 +119,34 @@ fun GolocalMapContainer(
     lowNetworkMode: Boolean,
     modifier: Modifier = Modifier,
     mapHeight: Dp = 260.dp,
+    fillContainer: Boolean = false,
+    cornerRadius: Dp = 22.dp,
+    showBorder: Boolean = true,
+    showTopRouteChip: Boolean = true,
+    showRecenterFab: Boolean = true,
+    recenterBottomPadding: Dp = 10.dp,
+    userLat: Double? = null,
+    userLng: Double? = null,
+    enableCenterPinSelection: Boolean = false,
+    onCenterCoordinateChanged: ((Double, Double) -> Unit)? = null,
     onRouteComputed: ((RouteUiState) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var routeState by remember { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
+    val latestCenterCallback by androidx.compose.runtime.rememberUpdatedState(onCenterCoordinateChanged)
+    val latestPinMode by androidx.compose.runtime.rememberUpdatedState(enableCenterPinSelection)
 
     // Debounced OSRM driving route fetch with cancellation when endpoints change
     LaunchedEffect(pickupLat, pickupLng, destLat, destLng, lowNetworkMode) {
         if (lowNetworkMode) {
+            routeState = RouteUiState.Idle
+            onRouteComputed?.invoke(routeState)
+            return@LaunchedEffect
+        }
+        if (!GpsBroadcastThrottle.isValidCoordinate(pickupLat, pickupLng) ||
+            !GpsBroadcastThrottle.isValidCoordinate(destLat, destLng) ||
+            (pickupLat == destLat && pickupLng == destLng)
+        ) {
             routeState = RouteUiState.Idle
             onRouteComputed?.invoke(routeState)
             return@LaunchedEffect
@@ -152,18 +175,35 @@ fun GolocalMapContainer(
     }
 
     if (!nativeReady) {
-        InteractiveBengalMapCanvas(
-            pickupLat = pickupLat,
-            pickupLng = pickupLng,
-            pickupLabel = pickupLabel,
-            destLat = destLat,
-            destLng = destLng,
-            destLabel = destLabel,
-            onlineDrivers = onlineDrivers,
-            liveTripLocation = liveTripLocation,
-            lowNetworkMode = lowNetworkMode,
-            modifier = modifier
-        )
+        Box(modifier = if (fillContainer) modifier.fillMaxSize() else modifier) {
+            InteractiveBengalMapCanvas(
+                pickupLat = pickupLat,
+                pickupLng = pickupLng,
+                pickupLabel = pickupLabel,
+                destLat = destLat,
+                destLng = destLng,
+                destLabel = destLabel,
+                onlineDrivers = onlineDrivers,
+                liveTripLocation = liveTripLocation,
+                lowNetworkMode = lowNetworkMode,
+                fillContainer = fillContainer,
+                cornerRadius = cornerRadius,
+                showBorder = showBorder,
+                showBottomRoutePill = showTopRouteChip,
+                modifier = if (fillContainer) Modifier.fillMaxSize() else Modifier
+            )
+            if (enableCenterPinSelection) {
+                Icon(
+                    imageVector = Icons.Filled.LocationOn,
+                    contentDescription = "Selected map pin",
+                    tint = Color(0xFF1769E0),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(bottom = 24.dp)
+                        .size(40.dp)
+                )
+            }
+        }
         return
     }
 
@@ -171,7 +211,7 @@ fun GolocalMapContainer(
     val mapView = remember { MapView(context) }
     var mapController by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember { mutableStateOf(false) }
-    var autoFollow by remember { mutableStateOf(true) }
+    var autoFollow by remember { mutableStateOf(!enableCenterPinSelection) }
     var lastCameraUpdateMs by remember { mutableLongStateOf(0L) }
     var lastDriverGeo by remember { mutableStateOf<GeoPoint?>(null) }
     var activeMarkerAnimator by remember { mutableStateOf<ValueAnimator?>(null) }
@@ -210,34 +250,46 @@ fun GolocalMapContainer(
             .filter { it.isOnline && GpsBroadcastThrottle.isValidCoordinate(it.currentLat, it.currentLng) }
             .map { GeoPoint(it.currentLat, it.currentLng) }
         style.getSourceAs<GeoJsonSource>(SRC_FLEET)?.setGeoJson(buildMultiPointGeoJson(fleetPoints))
+        if (userLat != null && userLng != null && GpsBroadcastThrottle.isValidCoordinate(userLat, userLng)) {
+            style.getSourceAs<GeoJsonSource>(SRC_USER_LOC)?.setGeoJson(buildSinglePointGeoJson(userLat, userLng))
+        } else {
+            style.getSourceAs<GeoJsonSource>(SRC_USER_LOC)?.setGeoJson(buildMultiPointGeoJson(emptyList()))
+        }
     }
 
     fun recenterCamera(map: MapLibreMap, animated: Boolean = true) {
         val points = buildList {
             if (GpsBroadcastThrottle.isValidCoordinate(pickupLat, pickupLng)) add(LatLng(pickupLat, pickupLng))
-            if (GpsBroadcastThrottle.isValidCoordinate(destLat, destLng)) add(LatLng(destLat, destLng))
+            if (GpsBroadcastThrottle.isValidCoordinate(destLat, destLng) &&
+                (destLat != pickupLat || destLng != pickupLng)
+            ) {
+                add(LatLng(destLat, destLng))
+            }
             liveTripLocation?.let {
                 if (GpsBroadcastThrottle.isValidCoordinate(it.lat, it.lng)) add(LatLng(it.lat, it.lng))
+            }
+            if (isEmpty() && userLat != null && userLng != null && GpsBroadcastThrottle.isValidCoordinate(userLat, userLng)) {
+                add(LatLng(userLat, userLng))
             }
         }
         if (points.size >= 2) {
             val bounds = LatLngBounds.Builder().includes(points).build()
-            val update = CameraUpdateFactory.newLatLngBounds(bounds, 96)
+            val update = CameraUpdateFactory.newLatLngBounds(bounds, 108)
             if (animated) map.animateCamera(update, 650) else map.moveCamera(update)
         } else if (points.size == 1) {
-            val update = CameraUpdateFactory.newLatLngZoom(points.first(), 13.5)
+            val update = CameraUpdateFactory.newLatLngZoom(points.first(), 14.5)
             if (animated) map.animateCamera(update, 500) else map.moveCamera(update)
         }
         lastCameraUpdateMs = System.currentTimeMillis()
     }
 
     // Update static endpoints & route GeoJson without re-creating style layers
-    LaunchedEffect(styleReady, routeState, pickupLat, pickupLng, destLat, destLng, onlineDrivers) {
+    LaunchedEffect(styleReady, routeState, pickupLat, pickupLng, destLat, destLng, onlineDrivers, userLat, userLng) {
         val map = mapController ?: return@LaunchedEffect
         val style = map.style ?: return@LaunchedEffect
         if (!styleReady || !style.isFullyLoaded) return@LaunchedEffect
         updateStyleSources(style)
-        if (autoFollow && System.currentTimeMillis() - lastCameraUpdateMs >= 1500L) {
+        if (autoFollow && !enableCenterPinSelection && System.currentTimeMillis() - lastCameraUpdateMs >= 1500L) {
             recenterCamera(map, animated = true)
         }
     }
@@ -273,19 +325,18 @@ fun GolocalMapContainer(
         }
 
         val now = System.currentTimeMillis()
-        if (autoFollow && now - lastCameraUpdateMs >= 1500L) {
+        if (autoFollow && !enableCenterPinSelection && now - lastCameraUpdateMs >= 1500L) {
             map.animateCamera(CameraUpdateFactory.newLatLng(LatLng(target.lat, target.lng)), 800)
             lastCameraUpdateMs = now
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(mapHeight)
-            .clip(RoundedCornerShape(22.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp))
-    ) {
+    val shape = RoundedCornerShape(cornerRadius)
+    val containerMod = (if (fillContainer) modifier.fillMaxSize() else modifier.fillMaxWidth().height(mapHeight))
+        .clip(shape)
+        .let { if (showBorder) it.border(1.dp, MaterialTheme.colorScheme.outline, shape) else it }
+
+    Box(modifier = containerMod) {
         AndroidView(
             factory = {
                 mapView.apply {
@@ -302,12 +353,21 @@ fun GolocalMapContainer(
                             override fun onMove(detector: MoveGestureDetector) = Unit
                             override fun onMoveEnd(detector: MoveGestureDetector) = Unit
                         })
+                        map.addOnCameraIdleListener {
+                            if (latestPinMode) {
+                                val target = map.cameraPosition.target
+                                if (target != null && GpsBroadcastThrottle.isValidCoordinate(target.latitude, target.longitude)) {
+                                    latestCenterCallback?.invoke(target.latitude, target.longitude)
+                                }
+                            }
+                        }
                         map.setStyle(Style.Builder().fromJson(OSM_STYLE_JSON)) { style ->
                             style.addSource(GeoJsonSource(SRC_ROUTE, buildLineGeoJson(emptyList())))
                             style.addSource(GeoJsonSource(SRC_PICKUP, buildSinglePointGeoJson(pickupLat, pickupLng)))
                             style.addSource(GeoJsonSource(SRC_DROP, buildSinglePointGeoJson(destLat, destLng)))
                             style.addSource(GeoJsonSource(SRC_FLEET, buildMultiPointGeoJson(emptyList())))
                             style.addSource(GeoJsonSource(SRC_DRIVER, buildMultiPointGeoJson(emptyList())))
+                            style.addSource(GeoJsonSource(SRC_USER_LOC, buildMultiPointGeoJson(emptyList())))
 
                             style.addLayer(
                                 LineLayer(LYR_ROUTE, SRC_ROUTE).withProperties(
@@ -315,6 +375,14 @@ fun GolocalMapContainer(
                                     PropertyFactory.lineWidth(4.5f),
                                     PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                                     PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+                                )
+                            )
+                            style.addLayer(
+                                CircleLayer(LYR_USER_LOC, SRC_USER_LOC).withProperties(
+                                    PropertyFactory.circleColor("#1769E0"),
+                                    PropertyFactory.circleRadius(7f),
+                                    PropertyFactory.circleStrokeWidth(3f),
+                                    PropertyFactory.circleStrokeColor("#FFFFFF")
                                 )
                             )
                             style.addLayer(
@@ -335,7 +403,7 @@ fun GolocalMapContainer(
                             )
                             style.addLayer(
                                 CircleLayer(LYR_DROP, SRC_DROP).withProperties(
-                                    PropertyFactory.circleColor("#1769E0"),
+                                    PropertyFactory.circleColor("#0D234A"),
                                     PropertyFactory.circleRadius(8f),
                                     PropertyFactory.circleStrokeWidth(2.5f),
                                     PropertyFactory.circleStrokeColor("#FFFFFF")
@@ -359,62 +427,76 @@ fun GolocalMapContainer(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Compact top status & route chip
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val statusLabel = when (val st = routeState) {
-                is RouteUiState.Loading -> "Calculating road route..."
-                is RouteUiState.Ready -> "${st.distanceKm} km · ${st.durationMin} min"
-                is RouteUiState.Fallback -> "${String.format(java.util.Locale.US, "%.1f", st.distanceKm)} km (direct)"
-                RouteUiState.Idle -> "OpenStreetMap Live"
-            }
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                shape = RoundedCornerShape(999.dp),
-                shadowElevation = 3.dp
+        if (enableCenterPinSelection) {
+            Icon(
+                imageVector = Icons.Filled.LocationOn,
+                contentDescription = "Selected map pin",
+                tint = Color(0xFF1769E0),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(bottom = 26.dp)
+                    .size(42.dp)
+            )
+        }
+
+        if (showTopRouteChip) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                val statusLabel = when (val st = routeState) {
+                    is RouteUiState.Loading -> "Calculating road route..."
+                    is RouteUiState.Ready -> "${st.distanceKm} km · ${st.durationMin} min"
+                    is RouteUiState.Fallback -> "${String.format(java.util.Locale.US, "%.1f", st.distanceKm)} km (direct)"
+                    RouteUiState.Idle -> "OpenStreetMap Live"
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                    shape = RoundedCornerShape(999.dp),
+                    shadowElevation = 3.dp
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Route,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Route,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
         }
 
-        // Recenter FAB (always min 48dp touch target)
-        SmallFloatingActionButton(
-            onClick = {
-                autoFollow = true
-                mapController?.let { recenterCamera(it, animated = true) }
-            },
-            containerColor = if (autoFollow) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primary,
-            contentColor = if (autoFollow) MaterialTheme.colorScheme.primary else Color.White,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(10.dp)
-                .testTag("map_recenter_button")
-        ) {
-            Icon(
-                imageVector = Icons.Filled.MyLocation,
-                contentDescription = "Recenter map",
-                modifier = Modifier.size(20.dp)
-            )
+        if (showRecenterFab) {
+            SmallFloatingActionButton(
+                onClick = {
+                    autoFollow = true
+                    mapController?.let { recenterCamera(it, animated = true) }
+                },
+                containerColor = if (autoFollow) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primary,
+                contentColor = if (autoFollow) MaterialTheme.colorScheme.primary else Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 12.dp, bottom = recenterBottomPadding)
+                    .testTag("map_recenter_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MyLocation,
+                    contentDescription = "Recenter map",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
     }
 }

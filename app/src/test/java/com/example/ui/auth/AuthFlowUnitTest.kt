@@ -47,7 +47,6 @@ class AuthFlowUnitTest {
     val composeTestRule = createComposeRule()
 
     private lateinit var appContext: Context
-    private lateinit var activity: ComponentActivity
 
     @Before
     fun setUp() {
@@ -64,7 +63,6 @@ class AuthFlowUnitTest {
         }
         AuthFlowCoordinator.resetForTesting()
         AuthDiagnostics.clearEvents()
-        activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
     }
 
     @After
@@ -75,9 +73,15 @@ class AuthFlowUnitTest {
 
     @Test
     fun `findActivity unwraps nested ContextWrapper to Activity`() {
-        val wrapped = ContextWrapper(ContextWrapper(activity))
-        assertEquals(activity, wrapped.findActivity())
-        assertNull(appContext.findActivity())
+        val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            val wrapped = ContextWrapper(ContextWrapper(activity))
+            assertEquals(activity, wrapped.findActivity())
+            assertNull(appContext.findActivity())
+        } finally {
+            controller.pause().stop().destroy()
+        }
     }
 
     @Test

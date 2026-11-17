@@ -342,6 +342,46 @@ class CustomerViewModel(
         persistDraft()
     }
 
+    fun setPickupCoordinates(label: String, lat: Double, lng: Double, district: String = "West Bengal") {
+        val cleanLabel = label.trim().ifBlank { "Selected Pickup" }
+        val customPlace = WestBengalPlace(
+            id = "custom_pickup_${(lat * 1000).toInt()}_${(lng * 1000).toInt()}",
+            nameEn = cleanLabel,
+            nameBn = cleanLabel,
+            district = district.ifBlank { "West Bengal" },
+            block = "",
+            category = "custom",
+            lat = lat,
+            lng = lng
+        )
+        _draft.value = _draft.value.copy(pickupPlace = customPlace, customPickupLabel = cleanLabel)
+    }
+
+    fun setDestinationCoordinates(label: String, lat: Double, lng: Double, district: String = "West Bengal") {
+        val cleanLabel = label.trim().ifBlank { "Selected Destination" }
+        val customPlace = WestBengalPlace(
+            id = "custom_dest_${(lat * 1000).toInt()}_${(lng * 1000).toInt()}",
+            nameEn = cleanLabel,
+            nameBn = cleanLabel,
+            district = district.ifBlank { "West Bengal" },
+            block = "",
+            category = "custom",
+            lat = lat,
+            lng = lng
+        )
+        _draft.value = _draft.value.copy(destinationPlace = customPlace, customDestinationLabel = cleanLabel)
+    }
+
+    fun swapLocations() {
+        val current = _draft.value
+        _draft.value = current.copy(
+            pickupPlace = current.destinationPlace,
+            destinationPlace = current.pickupPlace,
+            customPickupLabel = current.customDestinationLabel,
+            customDestinationLabel = current.customPickupLabel
+        )
+    }
+
     fun setCustomLabels(pickup: String, destination: String) {
         _draft.value = _draft.value.copy(
             customPickupLabel = pickup,

@@ -54,6 +54,7 @@ class PhoneAuthUnitTest {
     val composeTestRule = createComposeRule()
 
     private lateinit var appContext: Context
+    private lateinit var activityController: org.robolectric.android.controller.ActivityController<ComponentActivity>
     private lateinit var activity: ComponentActivity
     private lateinit var testScope: CoroutineScope
 
@@ -73,11 +74,13 @@ class PhoneAuthUnitTest {
         AuthFlowCoordinator.resetForTesting()
         AuthDiagnostics.clearEvents()
         testScope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
-        activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        activityController = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+        activity = activityController.get()
     }
 
     @After
     fun tearDown() {
+        activityController.pause().stop().destroy()
         testScope.cancel()
         AuthFlowCoordinator.resetForTesting()
         AuthDiagnostics.clearEvents()

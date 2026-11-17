@@ -1,37 +1,58 @@
 package com.example.rider
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.CurrencyRupee
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
 import com.example.data.model.DriverProfile
-import com.example.domain.ExpiryStatus
-import com.example.domain.RequiredDocumentsCatalog
 import com.example.shared.NotificationPermissionBannerCard
-import com.example.shared.SharedAppSettingsAndSignOutSection
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalMetricCard
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalError
+import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.DriverViewModel
-import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 @Composable
@@ -46,20 +67,25 @@ fun RiderRequestsTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("Incoming Ride Requests", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            text = "Incoming Ride Requests",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
 
         if (!profile.isOnline) {
             Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = "Tip: Toggle Online on the Home tab so nearby customers see your vehicle availability.",
+                    text = "Tip: Toggle Online on the Home map so nearby passengers see your vehicle availability.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(12.dp)
                 )
@@ -73,6 +99,7 @@ fun RiderRequestsTab(
             )
         } else {
             openRequests.forEach { booking ->
+                val passengerFirst = booking.customerName.trim().substringBefore(" ").ifBlank { "Passenger" }
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surface,
@@ -81,18 +108,22 @@ fun RiderRequestsTab(
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
                             Text(
                                 text = "Est. ₹${booking.estimatedFareInr.toInt()}",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontFamily = JetBrainsMono,
-                                color = MaterialTheme.colorScheme.primary
+                                color = GolocalPrimaryBlue
                             )
                         }
                         Text("${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            text = "Passenger: ${booking.customerName} • ${booking.distanceKm} km (~${booking.estimatedDurationMin} min) • ${booking.paymentMethod.uppercase()}",
+                            text = "Passenger: $passengerFirst • ${booking.distanceKm} km (~${booking.estimatedDurationMin} min) • ${booking.paymentMethod.uppercase()}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -106,7 +137,7 @@ fun RiderRequestsTab(
                                 onClick = { driverViewModel.rejectRequest(booking.id) },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Reject", color = GolocalError)
+                                Text("Decline", color = GolocalError)
                             }
                             Button(
                                 onClick = { proposalTarget = booking },
@@ -122,25 +153,42 @@ fun RiderRequestsTab(
 
         Text("My Submitted Fare Proposals (${myOffers.size})", style = MaterialTheme.typography.titleMedium)
         if (myOffers.isEmpty()) {
-            Text("No proposals submitted yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "No proposals submitted yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         } else {
             myOffers.forEach { offer ->
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                 ) {
-                    Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Booking #${offer.bookingId.take(8)} • ₹${offer.proposedFareInr.toInt()}", style = MaterialTheme.typography.titleSmall)
-                            Text("ETA: ${offer.etaMinutes} min • Status: ${offer.status.uppercase()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = "ETA: ${offer.etaMinutes} min • Status: ${offer.status.uppercase()}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         if (offer.status == "pending") {
                             TextButton(onClick = { driverViewModel.withdrawOffer(offer.id) }) {
                                 Text("Withdraw", color = GolocalError)
                             }
                         } else {
-                            GolocalStatusBadge(label = offer.status.uppercase(), tone = if (offer.status == "accepted") "success" else "info")
+                            GolocalStatusBadge(
+                                label = offer.status.uppercase(),
+                                tone = if (offer.status == "accepted") "success" else "info"
+                            )
                         }
                     }
                 }
@@ -160,13 +208,22 @@ fun RiderRequestsTab(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.bodySmall)
-                    Text("Proposed Fare: ₹${fare.roundToInt()}", style = MaterialTheme.typography.titleLarge, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        text = "Proposed Fare: ₹${fare.roundToInt()}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontFamily = JetBrainsMono,
+                        color = GolocalPrimaryBlue
+                    )
                     Slider(
                         value = fare,
                         onValueChange = { fare = it },
                         valueRange = minFare..maxFare
                     )
-                    Text("Regulated Range: ₹${minFare.toInt()} – ₹${maxFare.toInt()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = "Regulated Range: ₹${minFare.toInt()} – ₹${maxFare.toInt()}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     OutlinedTextField(
                         value = eta,
                         onValueChange = { eta = it.filter { ch -> ch.isDigit() } },
@@ -209,8 +266,18 @@ fun RiderEarningsHistoryTab(
     val withdrawnOrRequested = settlements.filter { it.status != "rejected" }.sumOf { it.amountInr }
     val availableBalance = (totalNet - withdrawnOrRequested).coerceAtLeast(0.0)
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Earnings & Trip Ledger", style = MaterialTheme.typography.headlineSmall)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Earnings & Trip Ledger",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
         TabRow(selectedTabIndex = subTab) {
             Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("Earnings") })
             Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Trips") })
@@ -229,10 +296,19 @@ fun RiderEarningsHistoryTab(
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Column {
                                 Text("Withdrawable Balance", style = MaterialTheme.typography.labelLarge)
-                                Text("₹${availableBalance.toInt()}", style = MaterialTheme.typography.headlineMedium, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    text = "₹${availableBalance.toInt()}",
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontFamily = JetBrainsMono,
+                                    color = GolocalPrimaryBlue
+                                )
                             }
                             Button(
                                 onClick = { showWithdrawDialog = true },
@@ -249,9 +325,15 @@ fun RiderEarningsHistoryTab(
                             Surface(
                                 shape = RoundedCornerShape(14.dp),
                                 color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
                             ) {
-                                Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Column {
                                         Text("₹${s.amountInr.toInt()} → ${s.upiOrBankRef}", style = MaterialTheme.typography.titleSmall)
                                         Text("Settlement #${s.id.take(8)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -269,18 +351,21 @@ fun RiderEarningsHistoryTab(
                 } else {
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(assignedBookings, key = { it.id }) { b ->
+                            val passengerFirst = b.customerName.trim().substringBefore(" ").ifBlank { "Passenger" }
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
                                 color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                         GolocalStatusBadge(label = b.status.uppercase(), tone = if (b.status == "completed") "success" else "info")
-                                        Text("₹${b.agreedFareInr.toInt()}", fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
+                                        Text("₹${b.agreedFareInr.toInt()}", fontFamily = JetBrainsMono, color = GolocalPrimaryBlue)
                                     }
                                     Text("${b.pickupLabel} → ${b.destinationLabel}", style = MaterialTheme.typography.titleSmall)
-                                    Text("Passenger: ${b.customerName} • ${b.distanceKm} km", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Passenger: $passengerFirst • ${b.distanceKm} km", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     if (b.status == "completed") {
                                         if (b.customerFeedbackRating == null) {
                                             OutlinedButton(onClick = { passengerRateTarget = b }) {
@@ -314,10 +399,12 @@ fun RiderEarningsHistoryTab(
                             Surface(
                                 shape = RoundedCornerShape(16.dp),
                                 color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                    Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = GolocalPrimaryBlue)
                                     if (r.review.isNotBlank()) Text(r.review, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
@@ -411,8 +498,18 @@ fun RiderEarningsHistoryTab(
 @Composable
 fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
     val notifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Rider Alerts & Updates", style = MaterialTheme.typography.headlineSmall)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Rider Alerts & Updates",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
         NotificationPermissionBannerCard()
         if (notifications.isEmpty()) {
             GolocalEmptyState(title = "No Alerts Yet", message = "KYC verification updates, ride confirmations, chat messages, and payout statuses appear here.")
@@ -444,104 +541,14 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
 @Composable
 fun RiderProfileTab(
     profile: DriverProfile,
-    sessionViewModel: AppSessionViewModel
+    sessionViewModel: AppSessionViewModel,
+    onOpenEarnings: () -> Unit = {},
+    onOpenNotifications: () -> Unit = {}
 ) {
-    val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
-    var showSupportDialog by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("Rider Profile & KYC", style = MaterialTheme.typography.headlineSmall)
-
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(profile.legalName, style = MaterialTheme.typography.titleMedium)
-                    GolocalStatusBadge(label = "VERIFIED PARTNER", tone = "success")
-                }
-                Text("Vehicle: ${profile.vehicleCategory.uppercase()} • ${profile.vehicleModel} (${profile.vehicleRegNumber})", style = MaterialTheme.typography.bodyMedium)
-                Text("District: ${profile.district} ${profile.block}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Driving Licence: ${profile.drivingLicenceNumber}", style = MaterialTheme.typography.bodySmall)
-                Text("Settlement UPI: ${profile.settlementUpiOrBank.ifBlank { "Not configured" }}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        val compliance = remember(profile) {
-            RequiredDocumentsCatalog.assessDriverCompliance(
-                profile = profile,
-                todayEpochDay = TimeUnit.MILLISECONDS.toDays(System.currentTimeMillis())
-            )
-        }
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Vehicle & KYC Document Expiry Status", style = MaterialTheme.typography.titleSmall)
-                compliance.forEach { item ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(item.docType.displayLabel, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                item.documentNumber.ifBlank { "Not entered" },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        GolocalStatusBadge(
-                            label = item.status.name.replace('_', ' '),
-                            tone = when (item.status) {
-                                ExpiryStatus.VALID -> "success"
-                                ExpiryStatus.EXPIRING_SOON, ExpiryStatus.NOT_PROVIDED -> "warning"
-                                ExpiryStatus.EXPIRED -> "error"
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
-        com.example.ui.auth.VerifiedMobileBadgeCard(
-            fallbackAccountPhone = profile.phone
-        )
-
-        SharedAppSettingsAndSignOutSection(
-            prefs = prefs,
-            sessionViewModel = sessionViewModel,
-            supportHelpLabel = "Rider Partner Support",
-            onOpenSupportDialog = { showSupportDialog = true }
-        )
-    }
-
-    if (showSupportDialog) {
-        var issue by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showSupportDialog = false },
-            title = { Text("Rider Partner Support") },
-            text = {
-                OutlinedTextField(value = issue, onValueChange = { issue = it }, label = { Text("Describe payout, KYC, or trip issue") }, modifier = Modifier.fillMaxWidth())
-            },
-            confirmButton = {
-                Button(onClick = {
-                    sessionViewModel.submitSupportOrDeletion("rider_support", issue)
-                    showSupportDialog = false
-                }) { Text("Submit") }
-            },
-            dismissButton = { TextButton(onClick = { showSupportDialog = false }) { Text("Cancel") } }
-        )
-    }
+    RiderProfileScreen(
+        profile = profile,
+        sessionViewModel = sessionViewModel,
+        onOpenEarnings = onOpenEarnings,
+        onOpenNotifications = onOpenNotifications
+    )
 }

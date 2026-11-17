@@ -243,7 +243,11 @@ fun InteractiveBengalMapCanvas(
     onlineDrivers: List<DriverDirectoryEntry>,
     liveTripLocation: TripLocation?,
     lowNetworkMode: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fillContainer: Boolean = false,
+    cornerRadius: androidx.compose.ui.unit.Dp = 22.dp,
+    showBorder: Boolean = true,
+    showBottomRoutePill: Boolean = true
 ) {
     val mapHeight = if (lowNetworkMode) 150.dp else 210.dp
     val validPickup = pickupLat in -85.0..85.0 && pickupLng in -180.0..180.0 && !(pickupLat == 0.0 && pickupLng == 0.0)
@@ -261,14 +265,15 @@ fun InteractiveBengalMapCanvas(
     val pickupColor = GolocalSuccess
     val driverColor = GolocalDeepNavy
     val fleetColor = GolocalPrimaryBlue.copy(alpha = 0.72f)
+    val shape = RoundedCornerShape(cornerRadius)
+    val sizeMod = if (fillContainer) modifier.fillMaxSize() else modifier.fillMaxWidth().height(mapHeight)
+    val styledMod = sizeMod
+        .clip(shape)
+        .let { if (showBorder) it.border(1.dp, MaterialTheme.colorScheme.outline, shape) else it }
 
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(mapHeight)
-            .clip(RoundedCornerShape(22.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp)),
-        shape = RoundedCornerShape(22.dp),
+        modifier = styledMod,
+        shape = shape,
         color = surfaceBg
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -362,43 +367,45 @@ fun InteractiveBengalMapCanvas(
                 }
             }
 
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            if (showBottomRoutePill) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text(
-                        text = pickupLabel.ifBlank { "Pickup" },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = pickupColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(horizontal = 6.dp)
-                            .size(14.dp)
-                    )
-                    Text(
-                        text = destLabel.ifBlank { "Destination" },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = routeColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = pickupLabel.ifBlank { "Pickup" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = pickupColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp)
+                                .size(14.dp)
+                        )
+                        Text(
+                            text = destLabel.ifBlank { "Destination" },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = routeColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }

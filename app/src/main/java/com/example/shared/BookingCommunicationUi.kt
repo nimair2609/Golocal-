@@ -236,23 +236,23 @@ fun BookingCommunicationBar(
 fun CallPeerConfirmDialog(
     peerLabel: String,
     phoneNumber: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onOpenChat: () -> Unit = {}
 ) {
-    val context = LocalContext.current
     val masked = remember(phoneNumber) { maskPhoneNumber(phoneNumber) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Call $peerLabel") },
+        title = { Text("Privacy-Protected Contact ($peerLabel)") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Contact: $masked",
+                    text = "Participant Line: ${masked.ifBlank { "••••••" }}",
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = JetBrainsMono
                 )
                 Text(
-                    text = "This opens your Android Phone Dialer directly. Carrier number masking is not active, so your caller ID will be visible to the other trip participant.",
+                    text = "To protect your personal mobile number, GoLocal never exposes raw passenger or driver phone numbers to the system phone dialer. Masked voice calling requires backend telephony relay; please coordinate privately using encrypted In-App Trip Chat.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -261,20 +261,19 @@ fun CallPeerConfirmDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
-                    runCatching { context.startActivity(intent) }
                     onDismiss()
+                    onOpenChat()
                 },
                 modifier = Modifier.testTag("confirm_dial_peer_button")
             ) {
-                Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Open Dialer")
+                Text("Open Private Chat")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("Close")
             }
         }
     )

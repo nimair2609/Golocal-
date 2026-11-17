@@ -2,13 +2,50 @@ package com.example.rider
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -19,14 +56,18 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.R
 import com.example.authStateFlow
 import com.example.data.model.AppRole
+import com.example.data.model.Booking
 import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.notifications.NotificationDeepLinkTarget
+import com.example.notifications.NotificationHelper
 import com.example.shared.ExperienceMode
 import com.example.shared.GolocalRoleSplashScreen
+import com.example.shared.LocationAccessState
+import com.example.shared.LocationCoordinator
 import com.example.shared.RoleAuthScreen
 import com.example.ui.auth.NewUserRegistrationScreen
 import com.example.ui.auth.signOut
@@ -40,6 +81,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.flow.catch
 
 @Composable
 fun RiderAppRoot(
@@ -48,7 +90,7 @@ fun RiderAppRoot(
     onDeepLinkHandled: () -> Unit = {}
 ) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
-    var splashDone by remember { mutableStateOf(false) }
+    var splashDone by remember { mutableStateOf(auth.currentUser != null) }
 
     if (!splashDone) {
         GolocalTheme {
@@ -113,7 +155,7 @@ fun RiderAuthenticatedShell(
         sessionViewModel.selectRole(AppRole.DRIVER)
     }
 
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     val registrationStatus by sessionViewModel.registrationStatus.collectAsStateWithLifecycle()
@@ -123,11 +165,14 @@ fun RiderAuthenticatedShell(
 
     LaunchedEffect(currentUserId, registrationStatus) {
         if (registrationStatus is RegistrationStatus.Completed) {
-            com.example.notifications.NotificationHelper.registerCurrentFcmToken(
+            NotificationHelper.registerCurrentFcmToken(
                 context = context,
                 userId = currentUserId,
                 appVariant = "rider"
             )
+            if (LocationCoordinator.resolveAccessState(context) == LocationAccessState.GRANTED_READY) {
+                sessionViewModel.detectDeviceLocation(context)
+            }
         }
     }
 
@@ -214,141 +259,212 @@ fun RiderAuthenticatedShell(
         val profileState by driverViewModel.driverProfileState.collectAsStateWithLifecycle()
         val openRequests by driverViewModel.openRequests.collectAsStateWithLifecycle()
         val assignedBookings by driverViewModel.assignedBookings.collectAsStateWithLifecycle()
+        val activeAssignedBooking by driverViewModel.activeAssignedBooking.collectAsStateWithLifecycle()
         val commissions by driverViewModel.commissions.collectAsStateWithLifecycle()
         val driverMsg by driverViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by sessionViewModel.platformSettings.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
 
-        Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { basePadding ->
-            Box(modifier = Modifier.fillMaxSize().padding(basePadding)) {
-                when (val state = profileState) {
-                    is UiState.Loading -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
+        var previousActiveAssignedId by remember { mutableStateOf<String?>(null) }
+        var completedTripSummary by remember { mutableStateOf<Booking?>(null) }
+
+        LaunchedEffect(activeAssignedBooking?.id, assignedBookings) {
+            val currentId = activeAssignedBooking?.id
+            if (currentId != null) {
+                previousActiveAssignedId = currentId
+            } else if (previousActiveAssignedId != null) {
+                val justDone = assignedBookings.firstOrNull {
+                    it.id == previousActiveAssignedId && it.status == "completed"
+                }
+                if (justDone != null) {
+                    completedTripSummary = justDone
+                }
+                previousActiveAssignedId = null
+            }
+        }
+
+        val loadedProfile = (profileState as? UiState.Success)?.data
+        LaunchedEffect(
+            currentUserId,
+            loadedProfile?.isOnline,
+            loadedProfile?.verificationStatus,
+            activeAssignedBooking?.id
+        ) {
+            val shouldTrackGps = loadedProfile != null && (
+                (loadedProfile.isOnline && loadedProfile.verificationStatus == "verified") ||
+                    activeAssignedBooking != null
+                )
+            if (shouldTrackGps && LocationCoordinator.resolveAccessState(context) == LocationAccessState.GRANTED_READY) {
+                LocationCoordinator.observeLocationUpdates(context)
+                    .catch { /* keep foreground UI resilient if GPS provider stops */ }
+                    .collect { fix ->
+                        driverViewModel.broadcastGpsSample(fix.lat, fix.lng, fix.accuracyMeters)
                     }
-                    is UiState.Error -> {
-                        Column(
-                            modifier = Modifier.fillMaxSize().padding(24.dp),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text("Unable to load Rider profile: ${state.message}")
-                        }
+            } else {
+                driverViewModel.stopLiveLocationBroadcast()
+            }
+        }
+
+        when (val state = profileState) {
+            is UiState.Loading -> {
+                Box(
+                    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
+
+            is UiState.Error -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Unable to load Rider profile: ${state.message}")
+                }
+            }
+
+            is UiState.Success -> {
+                val profile = state.data
+                if (profile == null || profile.verificationStatus != "verified") {
+                    Column(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                        GolocalStatusMessageBanner(
+                            message = driverMsg ?: sessionMsg,
+                            onDismiss = {
+                                driverViewModel.clearMessage()
+                                sessionViewModel.clearStatusMessage()
+                            },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        )
+                        RiderRegistrationAndVerificationGate(
+                            existingProfile = profile,
+                            displayName = completedName,
+                            verifiedPhone = completedPhone,
+                            driverViewModel = driverViewModel
+                        )
                     }
-                    is UiState.Success -> {
-                        val profile = state.data
-                        if (profile == null || profile.verificationStatus != "verified") {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                GolocalStatusMessageBanner(
-                                    message = driverMsg ?: sessionMsg,
-                                    onDismiss = {
-                                        driverViewModel.clearMessage()
-                                        sessionViewModel.clearStatusMessage()
-                                    },
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                                )
-                                RiderRegistrationAndVerificationGate(
-                                    existingProfile = profile,
-                                    displayName = completedName,
-                                    verifiedPhone = completedPhone,
-                                    driverViewModel = driverViewModel
-                                )
-                            }
-                        } else {
-                            var selectedTab by remember { mutableStateOf("home") }
-                            LaunchedEffect(deepLinkTarget) {
-                                val target = deepLinkTarget ?: return@LaunchedEffect
-                                selectedTab = when (target.type) {
-                                    "chat", "booking" -> "home"
-                                    "request" -> "requests"
-                                    else -> "notifications"
-                                }
-                                onDeepLinkHandled()
-                            }
-                            BackHandler(enabled = selectedTab != "home") { selectedTab = "home" }
+                } else {
+                    var selectedTab by remember { mutableStateOf("home") }
+                    LaunchedEffect(deepLinkTarget) {
+                        val target = deepLinkTarget ?: return@LaunchedEffect
+                        selectedTab = when (target.type) {
+                            "chat", "booking" -> "home"
+                            "request" -> "requests"
+                            else -> "notifications"
+                        }
+                        onDeepLinkHandled()
+                    }
+                    BackHandler(enabled = selectedTab != "home") { selectedTab = "home" }
 
-                            val navItems = listOf(
-                                Triple("home", "Home", Icons.Filled.Home),
-                                Triple("requests", "Requests", Icons.Filled.NotificationsActive),
-                                Triple("earnings", "Earnings", Icons.Filled.AccountBalanceWallet),
-                                Triple("notifications", "Alerts", Icons.Filled.Notifications),
-                                Triple("profile", "Profile", Icons.Filled.Person)
-                            )
+                    val navItems = listOf(
+                        Triple("home", "Home", Icons.Filled.Home),
+                        Triple("requests", "Requests", Icons.Filled.NotificationsActive),
+                        Triple("earnings", "Earnings", Icons.Filled.AccountBalanceWallet),
+                        Triple("notifications", "Alerts", Icons.Filled.Notifications),
+                        Triple("profile", "Profile", Icons.Filled.Person)
+                    )
 
-                            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                                val useRail = maxWidth >= 700.dp
-                                Scaffold(
-                                    bottomBar = {
-                                        if (!useRail) {
-                                            NavigationBar(
-                                                windowInsets = WindowInsets.navigationBars,
-                                                containerColor = MaterialTheme.colorScheme.surface
-                                            ) {
-                                                navItems.forEach { (route, label, icon) ->
-                                                    NavigationBarItem(
-                                                        selected = selectedTab == route,
-                                                        onClick = { selectedTab = route },
-                                                        icon = { Icon(icon, contentDescription = label) },
-                                                        label = { Text(label) },
-                                                        modifier = Modifier.testTag("rider_nav_$route")
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                ) { innerPadding ->
-                                    Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                                        if (useRail) {
-                                            NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
-                                                Spacer(modifier = Modifier.height(12.dp))
-                                                navItems.forEach { (route, label, icon) ->
-                                                    NavigationRailItem(
-                                                        selected = selectedTab == route,
-                                                        onClick = { selectedTab = route },
-                                                        icon = { Icon(icon, contentDescription = label) },
-                                                        label = { Text(label) },
-                                                        modifier = Modifier.testTag("rider_rail_$route")
-                                                    )
-                                                }
-                                            }
-                                        }
+                    val fullScreenMapActive = selectedTab == "home"
 
-                                        Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                                            GolocalStatusMessageBanner(
-                                                message = driverMsg ?: sessionMsg,
-                                                onDismiss = {
-                                                    driverViewModel.clearMessage()
-                                                    sessionViewModel.clearStatusMessage()
-                                                },
-                                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val useRail = maxWidth >= 700.dp
+                        Scaffold(
+                            contentWindowInsets = if (fullScreenMapActive) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
+                            bottomBar = {
+                                if (!useRail) {
+                                    NavigationBar(
+                                        windowInsets = WindowInsets.navigationBars,
+                                        containerColor = MaterialTheme.colorScheme.surface
+                                    ) {
+                                        navItems.forEach { (route, label, icon) ->
+                                            NavigationBarItem(
+                                                selected = selectedTab == route,
+                                                onClick = { selectedTab = route },
+                                                icon = { Icon(icon, contentDescription = label) },
+                                                label = { Text(label) },
+                                                modifier = Modifier.testTag("rider_nav_$route")
                                             )
-                                            Box(modifier = Modifier.weight(1f).widthIn(max = 920.dp)) {
-                                                when (selectedTab) {
-                                                    "home" -> RiderHomeDashboardTab(
-                                                        profile = profile,
-                                                        assignedBookings = assignedBookings,
-                                                        openRequestsCount = openRequests.size,
-                                                        commissions = commissions,
-                                                        sessionViewModel = sessionViewModel,
-                                                        driverViewModel = driverViewModel,
-                                                        lowNetworkMode = prefs.lowNetworkMode,
-                                                        onOpenRequests = { selectedTab = "requests" }
-                                                    )
-                                                    "requests" -> RiderRequestsTab(profile = profile, driverViewModel = driverViewModel)
-                                                    "earnings" -> RiderEarningsHistoryTab(profile = profile, driverViewModel = driverViewModel)
-                                                    "notifications" -> RiderNotificationsTab(sessionViewModel = sessionViewModel)
-                                                    "profile" -> RiderProfileTab(profile = profile, sessionViewModel = sessionViewModel)
-                                                }
-                                            }
                                         }
                                     }
+                                }
+                            }
+                        ) { innerPadding ->
+                            Row(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                                if (useRail) {
+                                    NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        navItems.forEach { (route, label, icon) ->
+                                            NavigationRailItem(
+                                                selected = selectedTab == route,
+                                                onClick = { selectedTab = route },
+                                                icon = { Icon(icon, contentDescription = label) },
+                                                label = { Text(label) },
+                                                modifier = Modifier.testTag("rider_rail_$route")
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                    Box(modifier = Modifier.fillMaxSize().widthIn(max = 960.dp)) {
+                                        when (selectedTab) {
+                                            "home" -> RiderHomeDashboardTab(
+                                                profile = profile,
+                                                assignedBookings = assignedBookings,
+                                                openRequestsCount = openRequests.size,
+                                                commissions = commissions,
+                                                sessionViewModel = sessionViewModel,
+                                                driverViewModel = driverViewModel,
+                                                lowNetworkMode = prefs.lowNetworkMode,
+                                                onOpenRequests = { selectedTab = "requests" },
+                                                onOpenNotifications = { selectedTab = "notifications" }
+                                            )
+                                            "requests" -> RiderRequestsTab(profile = profile, driverViewModel = driverViewModel)
+                                            "earnings" -> RiderEarningsHistoryTab(profile = profile, driverViewModel = driverViewModel)
+                                            "notifications" -> RiderNotificationsTab(sessionViewModel = sessionViewModel)
+                                            "profile" -> RiderProfileTab(
+                                                profile = profile,
+                                                sessionViewModel = sessionViewModel,
+                                                onOpenEarnings = { selectedTab = "earnings" },
+                                                onOpenNotifications = { selectedTab = "notifications" }
+                                            )
+                                        }
+                                    }
+
+                                    GolocalStatusMessageBanner(
+                                        message = driverMsg ?: sessionMsg,
+                                        onDismiss = {
+                                            driverViewModel.clearMessage()
+                                            sessionViewModel.clearStatusMessage()
+                                        },
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .statusBarsPadding()
+                                            .padding(horizontal = 16.dp, vertical = 70.dp)
+                                    )
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+
+        completedTripSummary?.let { completed ->
+            val matchingCommission = commissions.firstOrNull { it.bookingId == completed.id }
+            RiderCompletedSettlementDialog(
+                booking = completed,
+                commission = matchingCommission,
+                onSubmitFeedback = { stars, note ->
+                    driverViewModel.submitCustomerFeedback(completed.id, stars, note)
+                    completedTripSummary = null
+                },
+                onDismiss = { completedTripSummary = null }
+            )
         }
 
         AppUpdateDialogHost(controller = updateController)

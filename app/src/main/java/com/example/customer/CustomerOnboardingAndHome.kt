@@ -2,26 +2,45 @@ package com.example.customer
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.CurrencyRupee
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Booking
 import com.example.data.model.BookingCallContact
@@ -30,16 +49,12 @@ import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.PlatformSettings
 import com.example.data.model.TripLocation
 import com.example.data.model.UiState
-import com.example.domain.WestBengalCatalog
-import com.example.map.GolocalMapContainer
-import com.example.shared.BookingChatModalSheet
-import com.example.shared.BookingCommunicationBar
-import com.example.shared.CallPeerConfirmDialog
-import com.example.shared.NotificationPermissionBannerCard
 import com.example.ui.components.GoLocalLogoMark
-import com.example.ui.components.GolocalEmptyState
-import com.example.ui.components.GolocalStatusBadge
-import com.example.ui.theme.*
+import com.example.ui.theme.GolocalDeepNavy
+import com.example.ui.theme.GolocalLightBlue
+import com.example.ui.theme.GolocalSoftBlue
+import com.example.ui.theme.GolocalPrimaryBlue
+import com.example.ui.theme.GolocalPureWhite
 
 @Composable
 fun CustomerOnboardingScreen(
@@ -70,7 +85,7 @@ fun CustomerOnboardingScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(GolocalDeepNavy, GolocalPrimaryBlue, GolocalSoftBlue)
+                    colors = listOf(GolocalPureWhite, GolocalSoftBlue, GolocalLightBlue.copy(alpha = 0.65f))
                 )
             )
             .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -91,12 +106,12 @@ fun CustomerOnboardingScreen(
                 Text(
                     text = "GoLocal",
                     style = MaterialTheme.typography.titleMedium,
-                    color = GolocalPureWhite,
+                    color = GolocalDeepNavy,
                     fontWeight = FontWeight.Bold
                 )
             }
             TextButton(onClick = onComplete) {
-                Text("Skip", color = GolocalPureWhite)
+                Text("Skip", color = GolocalPrimaryBlue)
             }
         }
 
@@ -104,10 +119,11 @@ fun CustomerOnboardingScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 500.dp)
-                .align(Alignment.Center),
+                .align(Alignment.Center)
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 8.dp
+            shadowElevation = 6.dp
         ) {
             Column(
                 modifier = Modifier.padding(26.dp),
@@ -187,7 +203,6 @@ fun CustomerHomeTab(
     onOpenNotifications: () -> Unit,
     onOpenHelp: () -> Unit,
     onQuickSos: () -> Unit,
-    // Minimal optional additions with safe defaults so existing tests/callers remain source-compatible
     currentUserId: String = "",
     activeTripLocation: TripLocation? = null,
     lowNetworkMode: Boolean = false,
@@ -196,408 +211,37 @@ fun CustomerHomeTab(
     unreadChatCount: Int = 0,
     onSendChatMessage: (Booking, String) -> Unit = { _, _ -> },
     onMarkChatRead: () -> Unit = {},
-    onOpenBusBooking: () -> Unit = {}
+    onOpenBusBooking: () -> Unit = {},
+    userLat: Double? = null,
+    userLng: Double? = null,
+    gpsError: String? = null,
+    onRequestLocationDetect: () -> Unit = {}
 ) {
-    val scroll = rememberScrollState()
-    val onlineCount = verifiedDrivers.count { it.isOnline }
-    val allBookings = (bookingsState as? UiState.Success)?.data.orEmpty()
-    val defaultOrigin = WestBengalCatalog.places.first()
-    val defaultDest = WestBengalCatalog.places[1]
-
-    var showCallDialog by remember { mutableStateOf(false) }
-    var showChatSheet by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        // Minimalist Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                GoLocalLogoMark(modifier = Modifier.size(38.dp))
-                Column {
-                    Text(
-                        text = "Hello, $firstName",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Where are you heading today?",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            BadgedBox(
-                badge = {
-                    if (unreadNotifications > 0) {
-                        Badge { Text(unreadNotifications.toString()) }
-                    }
-                }
-            ) {
-                IconButton(
-                    onClick = onOpenNotifications,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surface)
-                        .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                        .testTag("home_notifications_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Notifications,
-                        contentDescription = "Notifications",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-        }
-
-        // Clean Edge-to-Edge Live Map Preview + Floating Search Bar Overlay
-        Box(modifier = Modifier.fillMaxWidth()) {
-            GolocalMapContainer(
-                pickupLat = activeBooking?.pickupLat ?: defaultOrigin.lat,
-                pickupLng = activeBooking?.pickupLng ?: defaultOrigin.lng,
-                pickupLabel = activeBooking?.pickupLabel ?: defaultOrigin.nameEn,
-                destLat = activeBooking?.destinationLat ?: defaultDest.lat,
-                destLng = activeBooking?.destinationLng ?: defaultDest.lng,
-                destLabel = activeBooking?.destinationLabel ?: defaultDest.nameEn,
-                onlineDrivers = verifiedDrivers,
-                liveTripLocation = activeTripLocation,
-                lowNetworkMode = lowNetworkMode,
-                mapHeight = 228.dp
-            )
-        }
-
-        // Clean Floating Destination Pill
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-                .clickable { onOpenBookRide("now") }
-                .testTag("home_search_destination"),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Search,
-                    contentDescription = "Search destination",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Enter pickup or destination",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = if (onlineCount > 0) "$onlineCount verified riders active nearby" else "Station, Bus Stand, Airport, Local Town",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-
-        // Active Trip Live Strip + Direct CALL & CHAT
-        if (activeBooking != null) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(20.dp))
-                    .clickable { onOpenBookRide(null) },
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        GolocalStatusBadge(
-                            label = "ACTIVE: ${activeBooking.status.uppercase()}",
-                            tone = if (activeBooking.status == "searching") "warning" else "success"
-                        )
-                        if (activeBooking.tripPin.isNotBlank()) {
-                            Text(
-                                text = "PIN ${activeBooking.tripPin}",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontFamily = JetBrainsMono,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                    Text(
-                        text = "${activeBooking.pickupLabel} -> ${activeBooking.destinationLabel}",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (activeBooking.assignedDriverId.isNotBlank()) {
-                        BookingCommunicationBar(
-                            booking = activeBooking,
-                            viewerRole = "customer",
-                            callContact = activeCallContact,
-                            unreadCount = unreadChatCount,
-                            onCallClick = { showCallDialog = true },
-                            onChatClick = {
-                                onMarkChatRead()
-                                showChatSheet = true
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
-        NotificationPermissionBannerCard()
-
-        // Clean Horizontal Quick-Service Strip
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            QuickServicePill(
-                icon = Icons.Filled.DirectionsCar,
-                title = "Book Ride",
-                subtitle = "Toto, Auto, Cab",
-                onClick = { onOpenBookRide("now") },
-                modifier = Modifier.testTag("home_hero_book_ride")
-            )
-            QuickServicePill(
-                icon = Icons.Filled.DirectionsBus,
-                title = "Private Bus",
-                subtitle = "Seat & QR Pass",
-                onClick = onOpenBusBooking,
-                modifier = Modifier.testTag("home_private_bus_button")
-            )
-            QuickServicePill(
-                icon = Icons.Filled.Train,
-                title = "Local Services",
-                subtitle = "Station & Stand",
-                onClick = { onOpenBookRide("station_pickup") }
-            )
-            QuickServicePill(
-                icon = Icons.Filled.Explore,
-                title = "Explore",
-                subtitle = "Verified Fleet",
-                onClick = onOpenExplore
-            )
-        }
-
-        // Recent Bookings Preview
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Recent Trips", style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = onOpenBookings) {
-                Text("See All")
-            }
-        }
-
-        if (allBookings.isEmpty()) {
-            GolocalEmptyState(
-                title = "No recent bookings",
-                message = "Tap Book Ride above to request verified local transport across West Bengal.",
-                actionLabel = "Book Your First Ride",
-                onAction = { onOpenBookRide("now") }
-            )
-        } else {
-            allBookings.take(3).forEach { booking ->
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                        .clickable { onOpenBookings() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                text = "${booking.pickupLabel} -> ${booking.destinationLabel}",
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            val fare = if (booking.agreedFareInr > 0) booking.agreedFareInr else booking.estimatedFareInr
-                            Text(
-                                text = "₹${fare.toInt()}",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontFamily = JetBrainsMono,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            GolocalStatusBadge(
-                                label = booking.status.uppercase(),
-                                tone = when (booking.status) {
-                                    "completed" -> "success"
-                                    "cancelled" -> "error"
-                                    "searching" -> "warning"
-                                    else -> "info"
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Compact Safety Bar
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-        ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("24x7 Safety Desk", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        text = "Helpline: ${platformSettings?.helplineNumber ?: "+91-1800-103-0000"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                OutlinedButton(
-                    onClick = onOpenHelp,
-                    modifier = Modifier.heightIn(min = 48.dp)
-                ) {
-                    Text("Support")
-                }
-                Button(
-                    onClick = onQuickSos,
-                    colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .testTag("home_sos_button")
-                ) {
-                    Text("SOS")
-                }
-            }
-        }
-    }
-
-    if (showCallDialog && activeBooking != null && activeCallContact != null && activeCallContact.driverPhone.isNotBlank()) {
-        CallPeerConfirmDialog(
-            peerLabel = activeBooking.assignedDriverName.ifBlank { "Driver" },
-            phoneNumber = activeCallContact.driverPhone,
-            onDismiss = { showCallDialog = false }
-        )
-    }
-
-    if (showChatSheet && activeBooking != null) {
-        BookingChatModalSheet(
-            booking = activeBooking,
-            viewerUid = currentUserId,
-            viewerRole = "customer",
-            messages = activeChatMessages,
-            onSendMessage = { txt -> onSendChatMessage(activeBooking, txt) },
-            onMarkRead = onMarkChatRead,
-            onDismiss = { showChatSheet = false }
-        )
-    }
-}
-
-@Composable
-private fun QuickServicePill(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier
-            .width(126.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = title,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
+    CustomerHomeMapScreen(
+        firstName = firstName,
+        unreadNotifications = unreadNotifications,
+        activeBooking = activeBooking,
+        bookingsState = bookingsState,
+        verifiedDrivers = verifiedDrivers,
+        platformSettings = platformSettings,
+        onOpenBookRide = onOpenBookRide,
+        onOpenExplore = onOpenExplore,
+        onOpenBookings = onOpenBookings,
+        onOpenNotifications = onOpenNotifications,
+        onOpenHelp = onOpenHelp,
+        onQuickSos = onQuickSos,
+        currentUserId = currentUserId,
+        activeTripLocation = activeTripLocation,
+        lowNetworkMode = lowNetworkMode,
+        activeCallContact = activeCallContact,
+        activeChatMessages = activeChatMessages,
+        unreadChatCount = unreadChatCount,
+        onSendChatMessage = onSendChatMessage,
+        onMarkChatRead = onMarkChatRead,
+        onOpenBusBooking = onOpenBusBooking,
+        userLat = userLat,
+        userLng = userLng,
+        gpsError = gpsError,
+        onRequestLocationDetect = onRequestLocationDetect
+    )
 }

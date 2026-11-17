@@ -90,8 +90,13 @@ fun GolocalRoleSplashScreen(
     var visible by remember { mutableStateOf(false) }
     val alpha by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(durationMillis = 450),
+        animationSpec = tween(durationMillis = 420),
         label = "splash_alpha"
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0.9f,
+        animationSpec = tween(durationMillis = 480),
+        label = "splash_scale"
     )
 
     LaunchedEffect(mode) {
@@ -100,16 +105,21 @@ fun GolocalRoleSplashScreen(
         onFinished()
     }
 
-    val gradientColors = when (mode) {
-        ExperienceMode.ADMIN -> listOf(Color(0xFF07152E), GolocalDeepNavy, GolocalPrimaryBlue)
-        ExperienceMode.RIDER -> listOf(GolocalDeepNavy, GolocalPrimaryBlue, GolocalSecondaryBlue)
-        ExperienceMode.CUSTOMER -> listOf(GolocalDeepNavy, GolocalPrimaryBlue, GolocalRoyalBlueBright)
+    val isAdmin = mode == ExperienceMode.ADMIN
+    val bgBrush = if (isAdmin) {
+        Brush.verticalGradient(colors = listOf(Color(0xFF07152E), GolocalDeepNavy, GolocalPrimaryBlue))
+    } else {
+        Brush.verticalGradient(colors = listOf(GolocalPureWhite, GolocalSoftBlue, GolocalLightBlue.copy(alpha = 0.45f)))
     }
+    val titleColor = if (isAdmin) GolocalPureWhite else GolocalDeepNavy
+    val subColor = if (isAdmin) GolocalLightBlue else GolocalPrimaryBlue
+    val pillBg = if (isAdmin) Color.White.copy(alpha = 0.14f) else GolocalLightBlue
+    val pillFg = if (isAdmin) GolocalPureWhite else GolocalPrimaryBlue
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(colors = gradientColors))
+            .background(bgBrush)
             .clickable { onFinished() }
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .testTag("splash_screen_${mode.name.lowercase()}"),
@@ -120,45 +130,55 @@ fun GolocalRoleSplashScreen(
                 .alpha(alpha)
                 .padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            GoLocalFullLogo(
-                modifier = Modifier.size(124.dp)
-            )
+            Surface(
+                shape = RoundedCornerShape(30.dp),
+                color = GolocalPureWhite,
+                shadowElevation = if (isAdmin) 0.dp else 8.dp,
+                modifier = Modifier.size((116 * scale).dp)
+            ) {
+                GoLocalFullLogo(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(10.dp)
+                )
+            }
             Text(
                 text = mode.appTitle,
                 style = MaterialTheme.typography.headlineLarge,
-                color = GolocalPureWhite,
-                fontWeight = FontWeight.Bold
+                color = titleColor,
+                fontWeight = FontWeight.ExtraBold
             )
             Text(
                 text = "by NR Next",
                 style = MaterialTheme.typography.titleMedium,
-                color = GolocalLightBlue
+                color = subColor,
+                fontWeight = FontWeight.SemiBold
             )
             Surface(
-                color = Color.White.copy(alpha = 0.14f),
+                color = pillBg,
                 shape = RoundedCornerShape(999.dp)
             ) {
                 Text(
                     text = mode.roleLabel,
                     style = MaterialTheme.typography.labelLarge,
-                    color = GolocalPureWhite,
+                    color = pillFg,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
             LinearProgressIndicator(
                 modifier = Modifier
-                    .width(120.dp)
+                    .width(132.dp)
                     .clip(RoundedCornerShape(999.dp)),
-                color = GolocalPureWhite,
-                trackColor = Color.White.copy(alpha = 0.2f)
+                color = if (isAdmin) GolocalPureWhite else GolocalPrimaryBlue,
+                trackColor = if (isAdmin) Color.White.copy(alpha = 0.2f) else GolocalLightBlue
             )
             Text(
                 text = "Your Local. Our Priority.",
                 style = MaterialTheme.typography.bodySmall,
-                color = GolocalLightBlue
+                color = if (isAdmin) GolocalLightBlue else GolocalSecondaryText
             )
         }
     }
@@ -191,10 +211,14 @@ fun RoleAuthScreen(
         controller.changeMobileNumber()
     }
 
-    val topGradient = when (mode) {
-        ExperienceMode.ADMIN -> listOf(Color(0xFF07152E), GolocalDeepNavy, Color(0xFF102A54))
-        else -> listOf(GolocalDeepNavy, GolocalPrimaryBlue, GolocalSoftBlue)
+    val isAdmin = mode == ExperienceMode.ADMIN
+    val topGradient = if (isAdmin) {
+        listOf(Color(0xFF07152E), GolocalDeepNavy, Color(0xFF102A54))
+    } else {
+        listOf(GolocalPureWhite, GolocalSoftBlue, GolocalLightBlue.copy(alpha = 0.65f))
     }
+    val headerTitleColor = if (isAdmin) GolocalPureWhite else GolocalDeepNavy
+    val headerSubColor = if (isAdmin) GolocalLightBlue else GolocalPrimaryBlue
 
     Box(
         modifier = Modifier
@@ -209,7 +233,7 @@ fun RoleAuthScreen(
                 .widthIn(max = 540.dp)
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 18.dp),
+                .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -217,21 +241,27 @@ fun RoleAuthScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    GoLocalLogoMark(
-                        modifier = Modifier.size(48.dp),
-                        onDarkBackground = false
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = GolocalPureWhite,
+                        shadowElevation = 3.dp
+                    ) {
+                        GoLocalLogoMark(
+                            modifier = Modifier.size(48.dp),
+                            onDarkBackground = false
+                        )
+                    }
                     Column {
                         Text(
                             text = mode.appTitle,
                             style = MaterialTheme.typography.headlineMedium,
-                            color = GolocalPureWhite,
+                            color = headerTitleColor,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = "Your Local. Our Priority.",
                             style = MaterialTheme.typography.labelLarge,
-                            color = GolocalLightBlue
+                            color = headerSubColor
                         )
                     }
                 }
@@ -239,7 +269,7 @@ fun RoleAuthScreen(
                 if (mode != ExperienceMode.ADMIN) {
                     Card(
                         shape = RoundedCornerShape(20.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
                         colors = CardDefaults.cardColors(containerColor = GolocalPureWhite)
                     ) {
                         Image(
@@ -247,7 +277,7 @@ fun RoleAuthScreen(
                             contentDescription = "${mode.appTitle} illustration",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(140.dp),
+                                .height(132.dp),
                             contentScale = ContentScale.Crop
                         )
                     }

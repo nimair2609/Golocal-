@@ -1316,6 +1316,55 @@ class GolocalRepository(
         }
     }
 
+    suspend fun updateDriverLiveLocation(
+        activeBooking: Booking?,
+        isOnline: Boolean,
+        isVerified: Boolean,
+        lat: Double,
+        lng: Double
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        if (!com.example.map.GpsBroadcastThrottle.isValidCoordinate(lat, lng)) return@runCatching
+        val dirRef = db.collection("driver_directory").document(uid)
+        val hasAssignedTrip = activeBooking != null &&
+            activeBooking.assignedDriverId == uid &&
+            activeBooking.status in setOf("assigned", "arriving", "arrived", "in_progress")
+
+        try {
+            db.runBatch { batch ->
+                if (isVerified && isOnline) {
+                    batch.update(
+                        dirRef,
+                        mapOf(
+                            "currentLat" to lat,
+                            "currentLng" to lng,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                if (hasAssignedTrip && activeBooking != null) {
+                    val locRef = db.collection("trip_locations").document(activeBooking.id)
+                    batch.set(
+                        locRef,
+                        mapOf(
+                            "bookingId" to activeBooking.id,
+                            "customerId" to activeBooking.customerId,
+                            "driverId" to uid,
+                            "lat" to lat,
+                            "lng" to lng,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, dirRef.path, auth)
+            throw e
+        }
+    }
+
     fun observeOpenBookingsForDrivers(): Flow<List<Booking>> =
         safeQueryFlow("bookings", db.collection("bookings").whereEqualTo("status", "searching")) {
             it.toObject(Booking::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)

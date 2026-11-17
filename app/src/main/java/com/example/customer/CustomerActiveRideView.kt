@@ -1,0 +1,735 @@
+package com.example.customer
+
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.example.data.model.Booking
+import com.example.data.model.BookingCallContact
+import com.example.data.model.DriverDirectoryEntry
+import com.example.data.model.RideOffer
+import com.example.data.model.TripLocation
+import com.example.domain.FareCalculator
+import com.example.map.GolocalMapContainer
+import com.example.shared.BookingCommunicationBar
+import com.example.shared.CircularBackButton
+import com.example.ui.components.GolocalStatusBadge
+import com.example.ui.theme.GolocalDeepNavy
+import com.example.ui.theme.GolocalError
+import com.example.ui.theme.GolocalLightBlue
+import com.example.ui.theme.GolocalPrimaryBlue
+import com.example.ui.theme.GolocalSuccess
+import com.example.ui.theme.JetBrainsMono
+import java.util.Locale
+
+@Composable
+fun CustomerActiveRideView(
+    booking: Booking,
+    offers: List<RideOffer>,
+    drivers: List<DriverDirectoryEntry>,
+    tripLocation: TripLocation?,
+    lowNetwork: Boolean,
+    callContact: BookingCallContact?,
+    unreadChatCount: Int,
+    onBackHome: () -> Unit,
+    onOpenCall: () -> Unit,
+    onOpenChat: () -> Unit,
+    onAcceptOffer: (RideOffer) -> Unit,
+    onShareTrip: () -> Unit,
+    onOpenSos: () -> Unit,
+    onOpenComplaint: () -> Unit,
+    onOpenCancel: () -> Unit
+) {
+    var declinedOfferIds by remember(booking.id) { mutableStateOf<Set<String>>(emptySet()) }
+    val visibleOffers = remember(offers, declinedOfferIds) {
+        offers.filter { it.id !in declinedOfferIds }
+    }
+
+    if (booking.status == "searching") {
+        // Radar Search + Incoming Offer Cards Modeled on Image 1 Panel 3
+        Box(modifier = Modifier.fillMaxSize()) {
+            GolocalMapContainer(
+                pickupLat = booking.pickupLat,
+                pickupLng = booking.pickupLng,
+                pickupLabel = booking.pickupLabel,
+                destLat = booking.destinationLat,
+                destLng = booking.destinationLng,
+                destLabel = booking.destinationLabel,
+                onlineDrivers = drivers,
+                liveTripLocation = null,
+                lowNetworkMode = lowNetwork,
+                fillContainer = true,
+                cornerRadius = 0.dp,
+                showBorder = false,
+                showTopRouteChip = false,
+                recenterBottomPadding = 228.dp
+            )
+
+            // Subtle concentric radar pulse animation (no fake driver cars)
+            RadarPulseOverlay(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(bottom = 110.dp)
+            )
+
+            // Non-overlapping Top Offers + Bottom Locating Sheet stack
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Top Floating Navigation + Incoming Fare Proposal Cards
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularBackButton(onClick = onBackHome, testTag = "searching_back_button")
+                        Surface(
+                            onClick = onOpenCancel,
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 4.dp,
+                            modifier = Modifier.testTag("searching_cancel_pill")
+                        ) {
+                            Text(
+                                text = "Cancel Ride",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = GolocalError,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+
+                    if (visibleOffers.isNotEmpty()) {
+                        LazyColumn(
+                            modifier = Modifier.weight(1f, fill = false),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(visibleOffers, key = { it.id }) { offer ->
+                                IncomingOfferCard(
+                                    offer = offer,
+                                    onDecline = { declinedOfferIds = declinedOfferIds + offer.id },
+                                    onAccept = { onAcceptOffer(offer) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Bottom Locating Sheet
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("customer_searching_sheet"),
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 16.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .windowInsetsPadding(WindowInsets.safeDrawing)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (visibleOffers.isEmpty()) "Locating rider nearby..." else "${visibleOffers.size} rider offer(s) ready",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
+                        }
+
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(999.dp)),
+                            color = GolocalPrimaryBlue,
+                            trackColor = GolocalLightBlue
+                        )
+
+                        Text(
+                            text = "${booking.pickupLabel} -> ${booking.destinationLabel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("Est. Fare", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    text = "₹${booking.estimatedFareInr.toInt()}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontFamily = JetBrainsMono,
+                                    color = GolocalDeepNavy,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = "Band ₹${booking.minPermittedFareInr.toInt()}–₹${booking.maxPermittedFareInr.toInt()}",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontFamily = JetBrainsMono,
+                                color = GolocalPrimaryBlue
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onOpenSos,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                            ) {
+                                Text("SOS Safety", color = GolocalError)
+                            }
+                            Button(
+                                onClick = onOpenCancel,
+                                colors = ButtonDefaults.buttonColors(containerColor = GolocalErrorContainerFallback, contentColor = GolocalError),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("searching_cancel_button")
+                            ) {
+                                Text("Cancel Request")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // Assigned / Arriving / Arrived / In Progress Live Ride View
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val sheetHeight = (maxHeight * 0.54f).coerceIn(320.dp, 490.dp)
+        GolocalMapContainer(
+            pickupLat = booking.pickupLat,
+            pickupLng = booking.pickupLng,
+            pickupLabel = booking.pickupLabel,
+            destLat = booking.destinationLat,
+            destLng = booking.destinationLng,
+            destLabel = booking.destinationLabel,
+            onlineDrivers = drivers,
+            liveTripLocation = tripLocation,
+            lowNetworkMode = lowNetwork,
+            fillContainer = true,
+            cornerRadius = 0.dp,
+            showBorder = false,
+            showTopRouteChip = false,
+            recenterBottomPadding = sheetHeight + 12.dp
+        )
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularBackButton(onClick = onBackHome, testTag = "active_ride_back_button")
+            val stageHeadline = when (booking.status) {
+                "assigned" -> "Rider Confirmed"
+                "arriving" -> "Rider On The Way"
+                "arrived" -> "Rider At Pickup"
+                "in_progress" -> "Trip In Progress"
+                else -> booking.status.uppercase()
+            }
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 6.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(GolocalSuccess)
+                    )
+                    Text(
+                        text = stageHeadline,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = GolocalDeepNavy
+                    )
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .heightIn(max = sheetHeight),
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 16.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (booking.tripPin.isNotBlank() && booking.status in setOf("assigned", "arriving", "arrived")) {
+                    Surface(
+                        color = GolocalLightBlue.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("customer_trip_pin_card")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Share 4-Digit Trip PIN", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    text = "Verify rider before sharing PIN at pickup",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = booking.tripPin,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontFamily = JetBrainsMono,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = GolocalPrimaryBlue
+                            )
+                        }
+                    }
+                }
+
+                if (booking.assignedDriverId.isNotBlank()) {
+                    BookingCommunicationBar(
+                        booking = booking,
+                        viewerRole = "customer",
+                        callContact = callContact,
+                        unreadCount = unreadChatCount,
+                        onCallClick = onOpenCall,
+                        onChatClick = onOpenChat
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "₹${(if (booking.agreedFareInr > 0) booking.agreedFareInr else booking.estimatedFareInr).toInt()} (${booking.paymentMethod.uppercase()})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontFamily = JetBrainsMono,
+                                fontWeight = FontWeight.Bold,
+                                color = GolocalSuccess
+                            )
+                        }
+                        Text(
+                            text = "${booking.pickupLabel} -> ${booking.destinationLabel}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        tripLocation?.let { loc ->
+                            Text(
+                                text = "Live Rider GPS: ${String.format(Locale.US, "%.4f, %.4f", loc.lat, loc.lng)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onShareTrip,
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Share")
+                    }
+                    Button(
+                        onClick = onOpenSos,
+                        colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Filled.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("SOS")
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = onOpenComplaint, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("Report Issue")
+                    }
+                    if (booking.status != "in_progress") {
+                        TextButton(onClick = onOpenCancel, modifier = Modifier.heightIn(min = 48.dp)) {
+                            Text("Cancel Ride", color = GolocalError)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val GolocalErrorContainerFallback = Color(0xFFFFEDEB)
+
+@Composable
+private fun IncomingOfferCard(
+    offer: RideOffer,
+    onDecline: () -> Unit,
+    onAccept: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(20.dp))
+            .testTag("incoming_offer_card_${offer.id}")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(GolocalLightBlue),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = offer.driverName.trim().take(2).uppercase().ifBlank { "DR" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = GolocalPrimaryBlue
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(offer.driverName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "${offer.vehicleLabel.ifBlank { offer.vehicleCategory.uppercase() }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Filled.Star, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(14.dp))
+                        Text(
+                            text = "${String.format(Locale.US, "%.1f", offer.driverRating)} • ${offer.etaMinutes} mins away • ${offer.driverCompletedRides} rides",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = GolocalDeepNavy
+                ) {
+                    Text(
+                        text = "₹${offer.proposedFareInr.toInt()}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = JetBrainsMono,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDecline,
+                    contentPadding = PaddingValues(vertical = 10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("decline_offer_button_${offer.id}"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Decline")
+                }
+                Button(
+                    onClick = onAccept,
+                    contentPadding = PaddingValues(vertical = 10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .testTag("accept_offer_button_${offer.id}"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Accept")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RadarPulseOverlay(modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "radar")
+    val pulse by transition.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "radar_pulse"
+    )
+    Box(modifier = modifier.size(180.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val maxR = size.minDimension / 2f
+            drawCircle(
+                color = Color(0xFF1769E0).copy(alpha = (1f - pulse) * 0.28f),
+                radius = maxR * pulse
+            )
+            drawCircle(
+                color = Color(0xFF1769E0).copy(alpha = 0.14f),
+                radius = maxR * 0.55f
+            )
+        }
+        Surface(
+            shape = CircleShape,
+            color = GolocalPrimaryBlue,
+            shadowElevation = 6.dp,
+            modifier = Modifier.size(38.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.LocationOn, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun RideCompletedReceiptDialog(
+    booking: Booking,
+    onSubmitRating: (stars: Int, behavior: Int, vehicle: Int, punctuality: Int, safety: Int, review: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val grossFare = if (booking.agreedFareInr > 0) booking.agreedFareInr else booking.estimatedFareInr
+    val settlement = remember(booking.id, grossFare) {
+        FareCalculator.calculateSettlement(grossFare, booking.gstPercent, booking.commissionPercent)
+    }
+    var stars by remember { mutableIntStateOf(5) }
+    var behavior by remember { mutableIntStateOf(5) }
+    var vehicle by remember { mutableIntStateOf(5) }
+    var punctuality by remember { mutableIntStateOf(5) }
+    var safety by remember { mutableIntStateOf(5) }
+    var review by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Trip Completed • Receipt") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("${booking.pickupLabel} -> ${booking.destinationLabel}", style = MaterialTheme.typography.titleSmall)
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = GolocalLightBlue.copy(alpha = 0.45f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Total Paid (${booking.paymentMethod.uppercase()})", style = MaterialTheme.typography.bodySmall)
+                            Text("₹${settlement.grossFareInr.toInt()}", fontFamily = JetBrainsMono, fontWeight = FontWeight.Bold)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Included GST (${booking.gstPercent.toInt()}%)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("₹${settlement.gstInr}", fontFamily = JetBrainsMono, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                HorizontalDivider()
+                Text("Rate ${booking.assignedDriverName.ifBlank { "your rider" }}", style = MaterialTheme.typography.titleSmall)
+                RatingChipSelector("Overall", stars) { stars = it }
+                RatingChipSelector("Behavior", behavior) { behavior = it }
+                RatingChipSelector("Vehicle", vehicle) { vehicle = it }
+                RatingChipSelector("Punctuality", punctuality) { punctuality = it }
+                RatingChipSelector("Safety", safety) { safety = it }
+                OutlinedTextField(
+                    value = review,
+                    onValueChange = { review = it },
+                    label = { Text("Feedback note (optional)") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmitRating(stars, behavior, vehicle, punctuality, safety, review) },
+                modifier = Modifier.testTag("submit_completed_rating_button")
+            ) {
+                Text("Submit Rating")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Skip") }
+        }
+    )
+}
+
+@Composable
+private fun RatingChipSelector(label: String, selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            (1..5).forEach { s ->
+                Surface(
+                    onClick = { onSelect(s) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (selected == s) GolocalPrimaryBlue else MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Text(
+                        text = "$s★",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected == s) Color.White else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}

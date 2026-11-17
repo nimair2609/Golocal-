@@ -311,8 +311,11 @@ class DriverViewModel(
         }
     }
 
+    private val gpsThrottle = com.example.map.GpsBroadcastThrottle()
+
     fun toggleOnline(online: Boolean, lat: Double, lng: Double) {
         viewModelScope.launch {
+            if (!online) gpsThrottle.reset()
             repository.setDriverOnlineStatus(online, lat, lng)
                 .onSuccess {
                     _message.value = if (online) "You are now Online and visible to riders." else "You are now Offline."
@@ -321,6 +324,30 @@ class DriverViewModel(
                     _message.value = it.localizedMessage ?: "Unable to update online status"
                 }
         }
+    }
+
+    fun broadcastGpsSample(lat: Double, lng: Double, accuracyMeters: Float = 15f, force: Boolean = false) {
+        val profile = (driverProfileState.value as? UiState.Success)?.data ?: return
+        val booking = activeAssignedBooking.value
+        val shouldEmit = (profile.isOnline && profile.verificationStatus == "verified") || booking != null
+        if (!shouldEmit) return
+
+        val sample = com.example.map.LocationSample(lat = lat, lng = lng, accuracyMeters = accuracyMeters)
+        if (!gpsThrottle.acceptIfQualified(sample, force = force)) return
+
+        viewModelScope.launch {
+            repository.updateDriverLiveLocation(
+                activeBooking = booking,
+                isOnline = profile.isOnline,
+                isVerified = profile.verificationStatus == "verified",
+                lat = lat,
+                lng = lng
+            )
+        }
+    }
+
+    fun stopLiveLocationBroadcast() {
+        gpsThrottle.reset()
     }
 
     fun submitOffer(booking: Booking, proposedFareInr: Double, etaMinutes: Long) {
@@ -424,6 +451,18 @@ class DriverViewModel(
             repository.requestDriverSettlement(profile.legalName, amountInr, upiOrBank)
                 .onSuccess { _message.value = "Withdrawal request for ₹${amountInr.toInt()} submitted." }
                 .onFailure { _message.value = it.localizedMessage ?: "Withdrawal request failed" }
+        }
+    }
+
+    fun triggerSos(bookingId: String, lat: Double, lng: Double, notes: String) {
+        viewModelScope.launch {
+            repository.triggerEmergencySos(bookingId, lat, lng, notes)
+                .onSuccess { eventId ->
+                    _message.value = "SOS Alert #$eventId escalated to GoLocal Safety Desk."
+                }
+                .onFailure {
+                    _message.value = it.localizedMessage ?: "Failed to send SOS alert"
+                }
         }
     }
 

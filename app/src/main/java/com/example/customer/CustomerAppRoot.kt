@@ -49,7 +49,7 @@ fun CustomerAppRoot(
     onDeepLinkHandled: () -> Unit = {}
 ) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
-    var splashDone by remember { mutableStateOf(false) }
+    var splashDone by remember { mutableStateOf(auth.currentUser != null) }
 
     if (!splashDone) {
         GolocalTheme {
@@ -129,6 +129,11 @@ fun CustomerAuthenticatedShell(
                 userId = currentUserId,
                 appVariant = "customer"
             )
+            if (com.example.shared.LocationCoordinator.resolveAccessState(context) ==
+                com.example.shared.LocationAccessState.GRANTED_READY
+            ) {
+                sessionViewModel.detectDeviceLocation(context)
+            }
         }
     }
 
@@ -237,14 +242,33 @@ fun CustomerAuthenticatedShell(
         val activeChatMessages by customerViewModel.activeChatMessages.collectAsStateWithLifecycle()
         val unreadChatCount by customerViewModel.unreadChatCount.collectAsStateWithLifecycle()
         val bookingsState by customerViewModel.myBookingsState.collectAsStateWithLifecycle()
+        val ratingsGiven by customerViewModel.myRatings.collectAsStateWithLifecycle()
         val verifiedDrivers by customerViewModel.verifiedDrivers.collectAsStateWithLifecycle()
         val statusMsg by sessionViewModel.statusMessage.collectAsStateWithLifecycle()
         val customerMsg by customerViewModel.actionMessage.collectAsStateWithLifecycle()
         val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
         val verifiedPhone = (accountState as? UiState.Success)?.data?.effectiveMobileNumber().orEmpty()
+        val allBookings = (bookingsState as? UiState.Success)?.data.orEmpty()
 
         var showHelpDialog by remember { mutableStateOf(false) }
+        var previousActiveId by remember { mutableStateOf<String?>(null) }
+        var completedReceiptTarget by remember { mutableStateOf<com.example.data.model.Booking?>(null) }
+
+        LaunchedEffect(activeBooking?.id, allBookings) {
+            val curId = activeBooking?.id
+            if (curId != null) {
+                previousActiveId = curId
+            } else if (previousActiveId != null) {
+                val justCompleted = allBookings.firstOrNull {
+                    it.id == previousActiveId && it.status == "completed" && it.customerRating == null
+                }
+                if (justCompleted != null) {
+                    completedReceiptTarget = justCompleted
+                }
+                previousActiveId = null
+            }
+        }
 
         LaunchedEffect(activeBooking?.id, verifiedPhone) {
             if (activeBooking != null && verifiedPhone.isNotBlank()) {
@@ -294,10 +318,12 @@ fun CustomerAuthenticatedShell(
             Triple("profile", "Profile", Icons.Filled.Person)
         )
 
+        val fullScreenMapActive = isBookingFlowOpen || (!isBusFlowOpen && selectedTab == "home")
+
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val useRail = maxWidth >= 700.dp
             Scaffold(
-                contentWindowInsets = WindowInsets.safeDrawing,
+                contentWindowInsets = if (fullScreenMapActive) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
                 bottomBar = {
                     if (!useRail && !isBookingFlowOpen && !isBusFlowOpen) {
                         NavigationBar(
@@ -337,17 +363,8 @@ fun CustomerAuthenticatedShell(
                         }
                     }
 
-                    Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                        GolocalStatusMessageBanner(
-                            message = customerMsg ?: statusMsg,
-                            onDismiss = {
-                                customerViewModel.clearMessage()
-                                sessionViewModel.clearStatusMessage()
-                            },
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                        )
-
-                        Box(modifier = Modifier.weight(1f).widthIn(max = 920.dp)) {
+                    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        Box(modifier = Modifier.fillMaxSize().widthIn(max = 960.dp)) {
                             if (isBookingFlowOpen) {
                                 CustomerBookRideScreen(
                                     sessionViewModel = sessionViewModel,
@@ -392,7 +409,11 @@ fun CustomerAuthenticatedShell(
                                         unreadChatCount = unreadChatCount,
                                         onSendChatMessage = { booking, msg -> customerViewModel.sendChatMessage(booking, msg) },
                                         onMarkChatRead = { customerViewModel.markActiveChatRead() },
-                                        onOpenBusBooking = { isBusFlowOpen = true }
+                                        onOpenBusBooking = { isBusFlowOpen = true },
+                                        userLat = gps.lat,
+                                        userLng = gps.lng,
+                                        gpsError = gps.error,
+                                        onRequestLocationDetect = { sessionViewModel.detectDeviceLocation(context) }
                                     )
                                     "bookings" -> CustomerBookingsHistoryTab(
                                         customerViewModel = customerViewModel,
@@ -409,13 +430,50 @@ fun CustomerAuthenticatedShell(
                                         onOpenBusBooking = { isBusFlowOpen = true }
                                     )
                                     "notifications" -> CustomerNotificationsTab(sessionViewModel = sessionViewModel)
-                                    "profile" -> CustomerProfileTab(sessionViewModel = sessionViewModel)
+                                    "profile" -> CustomerProfileTab(
+                                        sessionViewModel = sessionViewModel,
+                                        bookings = allBookings,
+                                        ratingsGiven = ratingsGiven,
+                                        onOpenBookings = { selectedTab = "bookings" },
+                                        onOpenNotifications = { selectedTab = "notifications" }
+                                    )
                                 }
                             }
                         }
+
+                        GolocalStatusMessageBanner(
+                            message = customerMsg ?: statusMsg,
+                            onDismiss = {
+                                customerViewModel.clearMessage()
+                                sessionViewModel.clearStatusMessage()
+                            },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .statusBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 68.dp)
+                        )
                     }
                 }
             }
+        }
+
+        completedReceiptTarget?.let { target ->
+            RideCompletedReceiptDialog(
+                booking = target,
+                onSubmitRating = { stars, behavior, vehicle, punctuality, safety, review ->
+                    customerViewModel.submitRating(
+                        booking = target,
+                        stars = stars,
+                        review = review,
+                        driverBehaviorRating = behavior,
+                        vehicleConditionRating = vehicle,
+                        punctualityRating = punctuality,
+                        safetyRating = safety
+                    )
+                    completedReceiptTarget = null
+                },
+                onDismiss = { completedReceiptTarget = null }
+            )
         }
 
         if (showHelpDialog) {

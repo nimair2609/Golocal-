@@ -6,26 +6,49 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
-import com.example.data.model.BookingCallContact
 import com.example.data.model.CommissionRecord
 import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.DriverProfile
@@ -33,17 +56,14 @@ import com.example.domain.AbuseDetectionEngine
 import com.example.domain.ExpiryStatus
 import com.example.domain.KycDocType
 import com.example.domain.RequiredDocumentsCatalog
-import com.example.map.GolocalMapContainer
 import com.example.shared.BookingChatModalSheet
-import com.example.shared.BookingCommunicationBar
 import com.example.shared.CallPeerConfirmDialog
-import com.example.shared.NotificationPermissionBannerCard
 import com.example.ui.auth.signOut
 import com.example.ui.components.GoLocalLogoMark
-import com.example.ui.components.GolocalEmptyState
-import com.example.ui.components.GolocalMetricCard
 import com.example.ui.components.GolocalStatusBadge
-import com.example.ui.theme.*
+import com.example.ui.theme.GolocalError
+import com.example.ui.theme.GolocalPrimaryBlue
+import com.example.ui.theme.GolocalWarning
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.DriverViewModel
 import java.text.SimpleDateFormat
@@ -150,8 +170,9 @@ fun RiderRegistrationAndVerificationGate(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Row(
@@ -164,10 +185,18 @@ fun RiderRegistrationAndVerificationGate(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.weight(1f)
             ) {
-                GoLocalLogoMark(modifier = Modifier.size(36.dp))
+                GoLocalLogoMark(modifier = Modifier.size(38.dp))
                 Column {
-                    Text("Rider Partner Verification", style = MaterialTheme.typography.headlineSmall)
-                    Text("GoLocal Rider", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = "Partner Verification",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "GoLocal Rider • KYV Check",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             OutlinedButton(onClick = { signOut(scope = scope, context = context) }) {
@@ -184,7 +213,11 @@ fun RiderRegistrationAndVerificationGate(
                 color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.5.dp, if (status == "rejected" || status == "suspended") GolocalError else GolocalWarning, RoundedCornerShape(20.dp))
+                    .border(
+                        1.5.dp,
+                        if (status == "rejected" || status == "suspended") GolocalError else GolocalWarning,
+                        RoundedCornerShape(20.dp)
+                    )
             ) {
                 Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     GolocalStatusBadge(
@@ -199,7 +232,11 @@ fun RiderRegistrationAndVerificationGate(
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Text("Vehicle: ${existingProfile.vehicleCategory.uppercase()} • ${existingProfile.vehicleRegNumber}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = "Vehicle: ${existingProfile.vehicleCategory.uppercase()} • ${existingProfile.vehicleRegNumber}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     if (status == "rejected") {
                         Button(onClick = { showForm = !showForm }) {
                             Text(if (showForm) "Hide Form" else "Update & Resubmit KYC")
@@ -265,7 +302,7 @@ fun RiderRegistrationAndVerificationGate(
                     Text(
                         text = "Required for ${vehicleCategory.uppercase()}: ${requiredDocs.joinToString { it.displayLabel }}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = GolocalPrimaryBlue
                     )
 
                     KycDocumentInputRow(
@@ -388,7 +425,7 @@ fun RiderRegistrationAndVerificationGate(
                             .testTag("rider_submit_kyc_button"),
                         shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text("Submit Rider Verification")
+                        Text("Submit Rider Verification", fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -440,10 +477,13 @@ fun RiderHomeDashboardTab(
     sessionViewModel: AppSessionViewModel,
     driverViewModel: DriverViewModel,
     lowNetworkMode: Boolean,
-    onOpenRequests: () -> Unit
+    onOpenRequests: () -> Unit,
+    onOpenNotifications: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
+    val openRequests by driverViewModel.openRequests.collectAsStateWithLifecycle()
+    val myOffers by driverViewModel.myOffers.collectAsStateWithLifecycle()
     val activeChatMessages by driverViewModel.activeChatMessages.collectAsStateWithLifecycle()
     val unreadChatCount by driverViewModel.unreadChatCount.collectAsStateWithLifecycle()
     val activeCallContact by driverViewModel.activeCallContact.collectAsStateWithLifecycle()
@@ -485,417 +525,154 @@ fun RiderHomeDashboardTab(
     val currentLat = gps.lat ?: 22.9041
     val currentLng = gps.lng ?: 88.3976
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        // Header + Online/Offline Switch
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                GoLocalLogoMark(modifier = Modifier.size(38.dp))
-                Column {
-                    Text("Rider Mode", style = MaterialTheme.typography.headlineSmall)
-                    Text("${profile.legalName} • ${profile.vehicleCategory.uppercase()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            Switch(
-                checked = profile.isOnline,
-                onCheckedChange = { online ->
-                    driverViewModel.toggleOnline(online, currentLat, currentLng)
-                },
-                modifier = Modifier.testTag("rider_online_switch")
-            )
-        }
-
-        // Online Status Banner
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = if (profile.isOnline) GolocalSuccessContainer else MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-        ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (profile.isOnline) Icons.Filled.Check else Icons.Filled.Pause,
-                            contentDescription = null,
-                            tint = GolocalPureWhite
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = if (profile.isOnline) "You're Online!" else "You're Offline",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = if (profile.isOnline) "Ready to receive local ride requests" else "Toggle switch to start receiving rides",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                TextButton(
-                    onClick = {
-                        locationLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION
-                            )
-                        )
-                    }
-                ) {
-                    Text(if (gps.isDetecting) "GPS..." else "Sync GPS")
-                }
-            }
-        }
-
-        // KPI Row (Real Firestore numbers only)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            GolocalMetricCard(
-                title = "Today's Rides",
-                value = todaysCompletedRides.toString(),
-                subtitle = "${profile.completedRides} lifetime",
-                icon = Icons.Filled.DirectionsCar,
-                modifier = Modifier.weight(1f)
-            )
-            GolocalMetricCard(
-                title = "Today's Earnings",
-                value = "₹${todaysEarningsInr.toInt()}",
-                subtitle = "Net after fee",
-                icon = Icons.Filled.CurrencyRupee,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            GolocalMetricCard(
-                title = "Open Requests",
-                value = openRequestsCount.toString(),
-                subtitle = "Tap Requests tab",
-                icon = Icons.Filled.NotificationsActive,
-                modifier = Modifier.weight(1f)
-            )
-            GolocalMetricCard(
-                title = "Rating",
-                value = String.format("%.1f ★", profile.ratingAvg),
-                subtitle = "Verified Partner",
-                icon = Icons.Filled.Star,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        NotificationPermissionBannerCard()
-
-        if (expiryAlerts.isNotEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = GolocalErrorContainer,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, GolocalError, RoundedCornerShape(16.dp))
-            ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Document Expiry Notice", style = MaterialTheme.typography.titleSmall, color = GolocalError)
-                    expiryAlerts.forEach { item ->
-                        Text(
-                            text = "${item.docType.displayLabel}: ${item.status.name.replace('_', ' ')}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-        }
-
-        // Active Trip Execution Card (if driver has an assigned trip)
-        if (activeTrip != null) {
-            ActiveRiderTripExecutionCard(
-                booking = activeTrip,
+    if (activeTrip != null) {
+        RiderActiveTripSheet(
+            booking = activeTrip,
+            currentLat = currentLat,
+            currentLng = currentLng,
+            onlineSelf = DriverDirectoryEntry(
+                driverId = profile.driverId,
+                displayName = profile.legalName,
+                vehicleCategory = profile.vehicleCategory,
+                isOnline = profile.isOnline,
                 currentLat = currentLat,
-                currentLng = currentLng,
-                onlineSelf = DriverDirectoryEntry(
-                    driverId = profile.driverId,
-                    displayName = profile.legalName,
-                    isOnline = profile.isOnline,
-                    currentLat = currentLat,
-                    currentLng = currentLng
-                ),
-                lowNetworkMode = lowNetworkMode,
-                callContact = activeCallContact,
-                unreadChatCount = unreadChatCount,
-                onCallCustomer = { showCallDialog = true },
-                onChatCustomer = {
-                    driverViewModel.markActiveChatRead()
-                    showChatSheet = true
-                },
-                onCancelTrip = { showDriverCancelDialog = true },
-                onAdvanceState = { next, pin ->
-                    driverViewModel.advanceTripState(activeTrip, next, pin, currentLat, currentLng)
-                }
-            )
-        } else {
-            GolocalMapContainer(
-                pickupLat = currentLat,
-                pickupLng = currentLng,
-                pickupLabel = gps.label.ifBlank { "${profile.district} Stand" },
-                destLat = currentLat + 0.015,
-                destLng = currentLng + 0.015,
-                destLabel = "Nearby Zone",
-                onlineDrivers = if (profile.isOnline) listOf(
-                    DriverDirectoryEntry(
-                        driverId = profile.driverId,
-                        displayName = profile.legalName,
-                        isOnline = true,
-                        currentLat = currentLat,
-                        currentLng = currentLng
-                    )
-                ) else emptyList(),
-                liveTripLocation = null,
-                lowNetworkMode = lowNetworkMode,
-                mapHeight = 225.dp
-            )
-
-            Button(
-                onClick = {
-                    if (openRequestsCount > 0) onOpenRequests()
-                    else driverViewModel.toggleOnline(!profile.isOnline, currentLat, currentLng)
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Text(
-                    if (openRequestsCount > 0) "View $openRequestsCount Incoming Request(s)"
-                    else if (profile.isOnline) "Go Offline"
-                    else "Go Online"
+                currentLng = currentLng
+            ),
+            lowNetworkMode = lowNetworkMode,
+            callContact = activeCallContact,
+            unreadChatCount = unreadChatCount,
+            onCallCustomer = { showCallDialog = true },
+            onChatCustomer = {
+                driverViewModel.markActiveChatRead()
+                showChatSheet = true
+            },
+            onTriggerSos = {
+                driverViewModel.triggerSos(
+                    bookingId = activeTrip.id,
+                    lat = currentLat,
+                    lng = currentLng,
+                    notes = "Emergency SOS triggered during active Rider trip"
                 )
+            },
+            onCancelTrip = { showDriverCancelDialog = true },
+            onAdvanceState = { next, pin ->
+                driverViewModel.advanceTripState(activeTrip, next, pin, currentLat, currentLng)
             }
-        }
-
-        // Recent Activity
-        Text("Recent Activity", style = MaterialTheme.typography.titleMedium)
-        if (assignedBookings.isEmpty()) {
-            GolocalEmptyState(
-                title = "No Assigned Trips Yet",
-                message = "Send fare proposals in the Requests tab. Accepted trips and customer pickup details appear here."
-            )
-        } else {
-            assignedBookings.take(4).forEach { b ->
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                ) {
-                    Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("${b.pickupLabel} → ${b.destinationLabel}", style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("Passenger: ${b.customerName} • ${b.distanceKm} km", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("₹${b.agreedFareInr.toInt()}", fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
-                            GolocalStatusBadge(label = b.status.uppercase(), tone = if (b.status == "completed") "success" else "info")
-                        }
-                    }
-                }
-            }
-        }
-        if (showCallDialog && activeTrip != null && activeCallContact != null && activeCallContact!!.customerPhone.isNotBlank()) {
-            CallPeerConfirmDialog(
-                peerLabel = activeTrip.customerName.trim().substringBefore(" ").ifBlank { "Passenger" },
-                phoneNumber = activeCallContact!!.customerPhone,
-                onDismiss = { showCallDialog = false }
-            )
-        }
-
-        if (showChatSheet && activeTrip != null) {
-            BookingChatModalSheet(
-                booking = activeTrip,
-                viewerUid = profile.driverId,
-                viewerRole = "driver",
-                messages = activeChatMessages,
-                onSendMessage = { txt -> driverViewModel.sendChatMessage(activeTrip, txt) },
-                onMarkRead = { driverViewModel.markActiveChatRead() },
-                onDismiss = { showChatSheet = false }
-            )
-        }
-
-        if (showDriverCancelDialog && activeTrip != null) {
-            var category by remember { mutableStateOf(AbuseDetectionEngine.driverCancellationReasons.first()) }
-            var note by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { showDriverCancelDialog = false },
-                title = { Text("Cancel Assigned Trip?") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            "Frequent post-assignment cancellations affect reliability standing.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        AbuseDetectionEngine.driverCancellationReasons.forEach { reasonOpt ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                RadioButton(selected = category == reasonOpt, onClick = { category = reasonOpt })
-                                Text(reasonOpt, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        OutlinedTextField(
-                            value = note,
-                            onValueChange = { note = it },
-                            label = { Text("Note (optional)") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
-                        onClick = {
-                            val combined = if (note.isBlank()) category else "$category: ${note.trim()}"
-                            driverViewModel.cancelActiveBookingByDriver(activeTrip, category, combined)
-                            showDriverCancelDialog = false
-                        },
-                        modifier = Modifier.testTag("confirm_driver_cancel_button")
-                    ) { Text("Confirm Cancel") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDriverCancelDialog = false }) { Text("Keep Trip") }
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ActiveRiderTripExecutionCard(
-    booking: Booking,
-    currentLat: Double,
-    currentLng: Double,
-    onlineSelf: DriverDirectoryEntry,
-    lowNetworkMode: Boolean,
-    callContact: BookingCallContact?,
-    unreadChatCount: Int,
-    onCallCustomer: () -> Unit,
-    onChatCustomer: () -> Unit,
-    onCancelTrip: () -> Unit,
-    onAdvanceState: (nextStatus: String, pin: String) -> Unit
-) {
-    var enteredPin by remember(booking.id) { mutableStateOf("") }
-
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(20.dp))
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Active Customer Pickup & Trip", style = MaterialTheme.typography.titleMedium)
-                GolocalStatusBadge(label = booking.status.uppercase(), tone = "success")
-            }
-
-            GolocalMapContainer(
-                pickupLat = booking.pickupLat,
-                pickupLng = booking.pickupLng,
-                pickupLabel = booking.pickupLabel,
-                destLat = booking.destinationLat,
-                destLng = booking.destinationLng,
-                destLabel = booking.destinationLabel,
-                onlineDrivers = listOf(onlineSelf),
-                liveTripLocation = null,
-                lowNetworkMode = lowNetworkMode,
-                mapHeight = 225.dp
-            )
-
-            BookingCommunicationBar(
-                booking = booking,
-                viewerRole = "driver",
-                callContact = callContact,
-                unreadCount = unreadChatCount,
-                onCallClick = onCallCustomer,
-                onChatClick = onChatCustomer
-            )
-
-            Text("Passenger: ${booking.customerName.trim().substringBefore(" ")}", style = MaterialTheme.typography.titleSmall)
-            Text("Route: ${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.bodyMedium)
-            Text("Agreed Fare: ₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${booking.distanceKm} km", fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
-
-            when (booking.status) {
-                "assigned" -> {
-                    Button(
-                        onClick = { onAdvanceState("arriving", "") },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Navigate to Pickup (Mark Arriving)")
-                    }
-                }
-                "arriving" -> {
-                    Button(
-                        onClick = { onAdvanceState("arrived", "") },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Mark Arrived at Pickup")
-                    }
-                }
-                "arrived" -> {
-                    OutlinedTextField(
-                        value = enteredPin,
-                        onValueChange = { if (it.length <= 4) enteredPin = it },
-                        label = { Text("Enter 4-Digit Passenger Trip PIN") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("rider_trip_pin_input")
+        )
+    } else {
+        RiderMapHomeScreen(
+            profile = profile,
+            currentLat = currentLat,
+            currentLng = currentLng,
+            gpsIsDetecting = gps.isDetecting,
+            locationLabel = gps.label,
+            openRequests = openRequests,
+            myOffers = myOffers,
+            todaysCompletedRides = todaysCompletedRides,
+            todaysEarningsInr = todaysEarningsInr,
+            expiryAlerts = expiryAlerts,
+            lowNetworkMode = lowNetworkMode,
+            onToggleOnline = { online ->
+                driverViewModel.toggleOnline(online, currentLat, currentLng)
+            },
+            onRequestLocationSync = {
+                locationLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
                     )
-                    Button(
-                        onClick = { onAdvanceState("in_progress", enteredPin) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Verify PIN & Start Ride")
-                    }
-                }
-                "in_progress" -> {
-                    Text("Live GPS coordinate broadcast active (${String.format("%.4f", currentLat)}, ${String.format("%.4f", currentLng)})", style = MaterialTheme.typography.bodySmall, color = GolocalSuccess)
-                    Button(
-                        onClick = { onAdvanceState("completed", "") },
-                        colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess),
-                        modifier = Modifier.fillMaxWidth().testTag("rider_complete_ride_button")
-                    ) {
-                        Text("Complete Ride & Settle Fare")
-                    }
-                }
+                )
+            },
+            onOpenNotifications = onOpenNotifications,
+            onOpenRequests = onOpenRequests,
+            onTriggerSos = {
+                driverViewModel.triggerSos(
+                    bookingId = "",
+                    lat = currentLat,
+                    lng = currentLng,
+                    notes = "Emergency SOS triggered from Rider Home"
+                )
+            },
+            onAcceptRequestWithFare = { booking, proposedFare, etaMins ->
+                driverViewModel.submitOffer(booking, proposedFare, etaMins)
+            },
+            onDeclineRequest = { bookingId ->
+                driverViewModel.rejectRequest(bookingId)
+            },
+            onWithdrawOffer = { offerId ->
+                driverViewModel.withdrawOffer(offerId)
             }
+        )
+    }
 
-            if (booking.status != "in_progress") {
-                TextButton(
-                    onClick = onCancelTrip,
-                    modifier = Modifier.align(Alignment.End).testTag("rider_cancel_trip_button")
-                ) {
-                    Text("Cancel Assigned Trip", color = GolocalError)
-                }
+    if (showCallDialog && activeTrip != null && activeCallContact != null && activeCallContact!!.customerPhone.isNotBlank()) {
+        CallPeerConfirmDialog(
+            peerLabel = activeTrip.customerName.trim().substringBefore(" ").ifBlank { "Passenger" },
+            phoneNumber = activeCallContact!!.customerPhone,
+            onDismiss = { showCallDialog = false },
+            onOpenChat = {
+                driverViewModel.markActiveChatRead()
+                showChatSheet = true
             }
-        }
+        )
+    }
+
+    if (showChatSheet && activeTrip != null) {
+        BookingChatModalSheet(
+            booking = activeTrip,
+            viewerUid = profile.driverId,
+            viewerRole = "driver",
+            messages = activeChatMessages,
+            onSendMessage = { txt -> driverViewModel.sendChatMessage(activeTrip, txt) },
+            onMarkRead = { driverViewModel.markActiveChatRead() },
+            onDismiss = { showChatSheet = false }
+        )
+    }
+
+    if (showDriverCancelDialog && activeTrip != null) {
+        var category by remember { mutableStateOf(AbuseDetectionEngine.driverCancellationReasons.first()) }
+        var note by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showDriverCancelDialog = false },
+            title = { Text("Cancel Assigned Trip?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "Frequent post-assignment cancellations affect reliability standing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    AbuseDetectionEngine.driverCancellationReasons.forEach { reasonOpt ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            RadioButton(selected = category == reasonOpt, onClick = { category = reasonOpt })
+                            Text(reasonOpt, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("Note (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                    onClick = {
+                        val combined = if (note.isBlank()) category else "$category: ${note.trim()}"
+                        driverViewModel.cancelActiveBookingByDriver(activeTrip, category, combined)
+                        showDriverCancelDialog = false
+                    },
+                    modifier = Modifier.testTag("confirm_driver_cancel_button")
+                ) { Text("Confirm Cancel") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDriverCancelDialog = false }) { Text("Keep Trip") }
+            }
+        )
     }
 }

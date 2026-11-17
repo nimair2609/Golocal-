@@ -1,48 +1,129 @@
 package com.example.customer
 
-import android.Manifest
 import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Commute
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.ElectricRickshaw
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.LocalTaxi
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Savings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.TripOrigin
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.TwoWheeler
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.model.Booking
-import com.example.data.model.BookingCallContact
-import com.example.data.model.BookingChatMessage
 import com.example.data.model.UiState
 import com.example.domain.AbuseDetectionEngine
-import com.example.domain.WestBengalCatalog
+import com.example.domain.FareCalculator
 import com.example.map.GolocalMapContainer
 import com.example.map.RouteUiState
 import com.example.shared.BookingChatModalSheet
-import com.example.shared.BookingCommunicationBar
 import com.example.shared.CallPeerConfirmDialog
-import com.example.ui.components.*
+import com.example.shared.CircularBackButton
+import com.example.shared.LocationCoordinator
+import com.example.ui.components.GolocalStatusBadge
+import com.example.ui.theme.GolocalDeepNavy
 import com.example.ui.theme.GolocalError
+import com.example.ui.theme.GolocalLightBlue
+import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.CustomerViewModel
+import kotlin.math.roundToInt
+
+private enum class RideSortFilter(val label: String) {
+    RECOMMENDED("Recommended"),
+    FASTER("Faster"),
+    CHEAPER("Cheaper"),
+    ALL("All")
+}
+
+private data class VehicleOptionUi(
+    val id: String,
+    val title: String,
+    val tagline: String,
+    val seatsLabel: String,
+    val speedFactor: Double,
+    val recommendedRank: Int,
+    val icon: ImageVector
+)
+
+private val VEHICLE_OPTIONS = listOf(
+    VehicleOptionUi("toto", "Toto / E-Rickshaw", "Everyday short local rides", "3 Seats", 1.15, 0, Icons.Filled.ElectricRickshaw),
+    VehicleOptionUi("auto", "Auto Rickshaw", "Quick street & station hops", "3 Seats", 1.0, 1, Icons.Filled.LocalTaxi),
+    VehicleOptionUi("bike", "Bike Taxi", "Fastest solo commuter option", "1 Seat", 0.78, 2, Icons.Filled.TwoWheeler),
+    VehicleOptionUi("cab", "AC Cab", "Comfortable family rides", "4 Seats", 0.92, 3, Icons.Filled.DirectionsCar),
+    VehicleOptionUi("outstation", "Outstation Cab", "Inter-district Bengal trips", "4 Seats", 0.95, 4, Icons.Filled.Commute),
+    VehicleOptionUi("scheduled", "Scheduled Cab", "Pre-booked arrival guarantee", "4 Seats", 0.95, 5, Icons.Filled.Schedule),
+    VehicleOptionUi("parcel", "Local Parcel", "Verified local package drop", "Parcel", 1.0, 6, Icons.Filled.Inventory2)
+)
 
 @Composable
 fun CustomerBookRideScreen(
@@ -55,6 +136,8 @@ fun CustomerBookRideScreen(
     val quote by customerViewModel.currentQuote.collectAsStateWithLifecycle()
     val fareConfigs by customerViewModel.fareConfigs.collectAsStateWithLifecycle()
     val drivers by customerViewModel.verifiedDrivers.collectAsStateWithLifecycle()
+    val serviceAreas by customerViewModel.serviceAreas.collectAsStateWithLifecycle()
+    val bookingsState by customerViewModel.myBookingsState.collectAsStateWithLifecycle()
     val activeBooking by customerViewModel.activeBooking.collectAsStateWithLifecycle()
     val activeOffers by customerViewModel.activeOffers.collectAsStateWithLifecycle()
     val activeTripLocation by customerViewModel.activeTripLocation.collectAsStateWithLifecycle()
@@ -63,35 +146,26 @@ fun CustomerBookRideScreen(
     val activeCallContact by customerViewModel.activeCallContact.collectAsStateWithLifecycle()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     val accountState by sessionViewModel.userAccountState.collectAsStateWithLifecycle()
+    val customerProfile by sessionViewModel.customerProfileState.collectAsStateWithLifecycle()
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
     val isSubmitting by customerViewModel.isSubmitting.collectAsStateWithLifecycle()
+
     val customerAccount = (accountState as? UiState.Success)?.data
     val customerInvoiceEmail = customerAccount?.email.orEmpty()
     val customerUid = customerAccount?.uid.orEmpty()
     val customerPhone = customerAccount?.effectiveMobileNumber().orEmpty()
+    val allBookings = (bookingsState as? UiState.Success)?.data.orEmpty()
 
-    var showPickupPicker by remember { mutableStateOf(false) }
-    var showDestPicker by remember { mutableStateOf(false) }
+    var searchTarget by remember { mutableStateOf<LocationFieldTarget?>(null) }
+    var selectedFilter by remember { mutableStateOf(RideSortFilter.RECOMMENDED) }
+    var showServiceOptionsSheet by remember { mutableStateOf(false) }
+    var showPaymentDialog by remember { mutableStateOf(false) }
     var showSosDialog by remember { mutableStateOf(false) }
     var showCancelDialog by remember { mutableStateOf(false) }
     var showComplaintDialog by remember { mutableStateOf(false) }
     var showCallDialog by remember { mutableStateOf(false) }
     var showChatSheet by remember { mutableStateOf(false) }
-    var previewRouteState by remember { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
-
-    val locationLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
-        if (perms.values.any { it }) {
-            sessionViewModel.detectDeviceLocation(context)
-        }
-    }
-
-    LaunchedEffect(gps.label) {
-        if (gps.label.isNotBlank()) {
-            customerViewModel.setCustomLabels(gps.label, draft.customDestinationLabel)
-        }
-    }
+    var routeUiState by remember { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
 
     LaunchedEffect(activeBooking?.id, customerPhone) {
         if (activeBooking != null && customerPhone.isNotBlank()) {
@@ -99,195 +173,506 @@ fun CustomerBookRideScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            IconButton(onClick = onBackHome) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Home")
+    BackHandler {
+        if (searchTarget != null) searchTarget = null else onBackHome()
+    }
+
+    if (searchTarget != null) {
+        CustomerLocationSearchSheet(
+            initialTarget = searchTarget!!,
+            draft = draft,
+            gps = gps,
+            customerProfile = customerProfile,
+            recentBookings = allBookings,
+            serviceAreas = serviceAreas,
+            onlineDrivers = drivers,
+            lowNetworkMode = prefs.lowNetworkMode,
+            onSelectCatalogPlace = { target, place ->
+                if (target == LocationFieldTarget.PICKUP) customerViewModel.setPickupPlace(place)
+                else customerViewModel.setDestinationPlace(place)
+            },
+            onSelectCoordinates = { target, lbl, lat, lng, dist ->
+                if (target == LocationFieldTarget.PICKUP) {
+                    customerViewModel.setPickupCoordinates(lbl, lat, lng, dist)
+                } else {
+                    customerViewModel.setDestinationCoordinates(lbl, lat, lng, dist)
+                }
+            },
+            onSwapLocations = { customerViewModel.swapLocations() },
+            onRequestGps = { sessionViewModel.detectDeviceLocation(context) },
+            onClose = { searchTarget = null }
+        )
+        return
+    }
+
+    val currentBooking = activeBooking
+    if (currentBooking != null) {
+        CustomerActiveRideView(
+            booking = currentBooking,
+            offers = activeOffers,
+            drivers = drivers,
+            tripLocation = activeTripLocation,
+            lowNetwork = prefs.lowNetworkMode,
+            callContact = activeCallContact,
+            unreadChatCount = unreadChatCount,
+            onBackHome = onBackHome,
+            onOpenCall = { showCallDialog = true },
+            onOpenChat = {
+                customerViewModel.markActiveChatRead()
+                showChatSheet = true
+            },
+            onAcceptOffer = { offer -> customerViewModel.confirmOffer(currentBooking.id, offer) },
+            onShareTrip = {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(
+                        Intent.EXTRA_TEXT,
+                        "GoLocal Live Trip: ${currentBooking.pickupLabel} -> ${currentBooking.destinationLabel}. Status: ${currentBooking.status}. Driver: ${currentBooking.assignedDriverName} (${currentBooking.assignedVehicleLabel})."
+                    )
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "Share GoLocal Trip"))
+            },
+            onOpenSos = { showSosDialog = true },
+            onOpenComplaint = { showComplaintDialog = true },
+            onOpenCancel = { showCancelDialog = true }
+        )
+    } else {
+        // Route Preview & Vehicle Selection Screen (modeled on Image 1 Panels 1 & 2)
+        val pickupLat = draft.pickupPlace.lat
+        val pickupLng = draft.pickupPlace.lng
+        val pickupLabel = draft.customPickupLabel.ifBlank { draft.pickupPlace.nameEn }
+        val destLabel = draft.customDestinationLabel.ifBlank { draft.destinationPlace.nameEn }
+        val roadDistanceKm = (routeUiState as? RouteUiState.Ready)?.distanceKm ?: quote.distanceKm
+        val roadDurationMin = (routeUiState as? RouteUiState.Ready)?.durationMin ?: quote.estimatedDurationMin
+
+        val sortedVehicles = remember(selectedFilter, fareConfigs, quote.distanceKm, draft.isRoundTrip) {
+            val enriched = VEHICLE_OPTIONS.map { opt ->
+                val cfg = fareConfigs.firstOrNull { it.vehicleCategory == opt.id }
+                val enabled = cfg?.isEnabled ?: (opt.id != "parcel")
+                val est = if (cfg != null) {
+                    FareCalculator.calculateFareQuote(quote.distanceKm, cfg, draft.isRoundTrip).estimatedFareInr
+                } else 0.0
+                Triple(opt, enabled, est)
             }
-            Text(
-                text = if (activeBooking != null) "Live Ride & Fare Proposals" else "Book a Ride",
-                style = MaterialTheme.typography.headlineSmall
-            )
+            when (selectedFilter) {
+                RideSortFilter.RECOMMENDED -> enriched.sortedBy { (!it.second).compareTo(false) * 100 + it.first.recommendedRank }
+                RideSortFilter.FASTER -> enriched.sortedBy { if (!it.second) 999.0 else it.first.speedFactor }
+                RideSortFilter.CHEAPER -> enriched.sortedBy { if (!it.second || it.third <= 0.0) Double.MAX_VALUE else it.third }
+                RideSortFilter.ALL -> enriched
+            }
         }
 
-        LowNetworkBanner(
-            isLowNetwork = prefs.lowNetworkMode,
-            onToggle = { sessionViewModel.setLowNetworkMode(it) }
-        )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val bottomSheetHeight = (maxHeight * 0.56f).coerceIn(340.dp, 540.dp)
 
-        val currentBooking = activeBooking
-        if (currentBooking != null) {
-            ActiveBookingView(
-                booking = currentBooking,
-                offers = activeOffers,
-                drivers = drivers,
-                tripLocation = activeTripLocation,
-                lowNetwork = prefs.lowNetworkMode,
-                callContact = activeCallContact,
-                unreadChatCount = unreadChatCount,
-                onOpenCall = { showCallDialog = true },
-                onOpenChat = {
-                    customerViewModel.markActiveChatRead()
-                    showChatSheet = true
-                },
-                onAcceptOffer = { offer -> customerViewModel.confirmOffer(currentBooking.id, offer) },
-                onShareTrip = {
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(
-                            Intent.EXTRA_TEXT,
-                            "GoLocal Live Trip: ${currentBooking.pickupLabel} -> ${currentBooking.destinationLabel}. Status: ${currentBooking.status}. Driver: ${currentBooking.assignedDriverName} (${currentBooking.assignedVehicleLabel})."
-                        )
-                    }
-                    context.startActivity(Intent.createChooser(shareIntent, "Share GoLocal Trip"))
-                },
-                onOpenSos = { showSosDialog = true },
-                onOpenComplaint = { showComplaintDialog = true },
-                onOpenCancel = { showCancelDialog = true }
-            )
-        } else {
             GolocalMapContainer(
-                pickupLat = gps.lat ?: draft.pickupPlace.lat,
-                pickupLng = gps.lng ?: draft.pickupPlace.lng,
-                pickupLabel = draft.customPickupLabel.ifBlank { draft.pickupPlace.nameEn },
+                pickupLat = pickupLat,
+                pickupLng = pickupLng,
+                pickupLabel = pickupLabel,
                 destLat = draft.destinationPlace.lat,
                 destLng = draft.destinationPlace.lng,
-                destLabel = draft.customDestinationLabel.ifBlank { draft.destinationPlace.nameEn },
+                destLabel = destLabel,
                 onlineDrivers = drivers,
                 liveTripLocation = null,
                 lowNetworkMode = prefs.lowNetworkMode,
-                mapHeight = 230.dp,
-                onRouteComputed = { previewRouteState = it }
+                fillContainer = true,
+                cornerRadius = 0.dp,
+                showBorder = false,
+                showTopRouteChip = false,
+                recenterBottomPadding = bottomSheetHeight + 12.dp,
+                userLat = gps.lat,
+                userLng = gps.lng,
+                onRouteComputed = { routeUiState = it }
             )
-            if (previewRouteState is RouteUiState.Ready) {
-                val r = previewRouteState as RouteUiState.Ready
-                Text(
-                    text = "OSRM Road Route: ${r.distanceKm} km (~${r.durationMin} min)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
+
+            // Floating Top Back + Destination & Pickup Pills
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularBackButton(onClick = onBackHome, testTag = "booking_back_button")
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                        shadowElevation = 4.dp
+                    ) {
+                        Text(
+                            text = "${String.format(java.util.Locale.US, "%.1f", roadDistanceKm)} km • ~$roadDurationMin min",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontFamily = JetBrainsMono,
+                            color = GolocalDeepNavy,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        onClick = { searchTarget = LocationFieldTarget.PICKUP },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                        shadowElevation = 5.dp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("booking_pickup_pill")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Filled.TripOrigin, contentDescription = null, tint = GolocalSuccess, modifier = Modifier.size(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Pickup", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(pickupLabel, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+
+                    Surface(
+                        onClick = { searchTarget = LocationFieldTarget.DESTINATION },
+                        shape = RoundedCornerShape(14.dp),
+                        color = GolocalDeepNavy,
+                        shadowElevation = 5.dp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("booking_destination_pill")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Filled.LocationOn, contentDescription = null, tint = GolocalLightBlue, modifier = Modifier.size(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Destination", style = MaterialTheme.typography.labelSmall, color = GolocalLightBlue)
+                                Text(destLabel, style = MaterialTheme.typography.labelMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
             }
 
-            // Pickup & Destination Selector Card
+            // Bottom Sheet: Choose a Ride + Sort Filters + Pinned Fare & Find Rider Bar
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+                    .heightIn(max = bottomSheetHeight),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 16.dp
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(top = 14.dp)
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Pickup & Destination", style = MaterialTheme.typography.titleMedium)
-                        TextButton(
-                            onClick = {
-                                locationLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                        Manifest.permission.ACCESS_COARSE_LOCATION
-                                    )
-                                )
-                            }
+                        Text(
+                            text = "Choose a ride:",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Surface(
+                            onClick = { showServiceOptionsSheet = true },
+                            shape = RoundedCornerShape(999.dp),
+                            color = GolocalLightBlue.copy(alpha = 0.65f),
+                            modifier = Modifier.testTag("booking_service_options_chip")
                         ) {
-                            Icon(Icons.Filled.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (gps.isDetecting) "Detecting..." else "Use GPS")
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Filled.Tune, contentDescription = null, tint = GolocalPrimaryBlue, modifier = Modifier.size(14.dp))
+                                Text(
+                                    text = formatBookingTypeLabel(draft.bookingType),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = GolocalPrimaryBlue
+                                )
+                            }
                         }
                     }
 
-                    gps.error?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = GolocalError)
-                    }
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    OutlinedCard(
-                        onClick = { showPickupPicker = true },
-                        modifier = Modifier.fillMaxWidth()
+                    // Sort Filter Pills (Recommended / Faster / Cheaper / All)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(Icons.Filled.TripOrigin, contentDescription = null, tint = GolocalSuccess)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Pickup Point", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    draft.customPickupLabel.ifBlank { "${draft.pickupPlace.nameEn} (${draft.pickupPlace.district})" },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                        RideSortFilter.entries.forEach { filter ->
+                            val selected = selectedFilter == filter
+                            val icon = when (filter) {
+                                RideSortFilter.RECOMMENDED -> Icons.Filled.Star
+                                RideSortFilter.FASTER -> Icons.Filled.Bolt
+                                RideSortFilter.CHEAPER -> Icons.Filled.Savings
+                                RideSortFilter.ALL -> Icons.Filled.DirectionsCar
                             }
-                            Icon(Icons.Filled.EditLocationAlt, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Surface(
+                                onClick = { selectedFilter = filter },
+                                shape = RoundedCornerShape(999.dp),
+                                color = if (selected) GolocalDeepNavy else MaterialTheme.colorScheme.surface,
+                                modifier = Modifier
+                                    .border(1.dp, if (selected) GolocalDeepNavy else MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
+                                    .testTag("ride_filter_${filter.name.lowercase()}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = filter.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    OutlinedCard(
-                        onClick = { showDestPicker = true },
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Scrollable Vehicle Options
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(bottom = 8.dp)
+                    ) {
+                        items(sortedVehicles, key = { it.first.id }) { (option, enabled, estFare) ->
+                            val onlineInCategory = drivers.count { it.isOnline && it.vehicleCategory == option.id }
+                            val realDriverEta = LocationCoordinator.estimateNearestDriverEtaMinutes(
+                                onlineDrivers = drivers,
+                                pickupLat = pickupLat,
+                                pickupLng = pickupLng,
+                                category = option.id
+                            )
+                            val tripEstMinutes = (roadDurationMin * option.speedFactor).roundToInt().coerceAtLeast(2)
+                            val availabilityText = when {
+                                !enabled -> "Admin approval required"
+                                realDriverEta != null -> "$realDriverEta min away • $onlineInCategory online"
+                                onlineInCategory > 0 -> "$onlineInCategory rider(s) online"
+                                else -> "$tripEstMinutes min ride • Dispatching nearby"
+                            }
+
+                            val isSelected = draft.selectedCategory == option.id
+                            Surface(
+                                onClick = { customerViewModel.selectCategory(option.id) },
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (isSelected) GolocalLightBlue.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surface,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) GolocalPrimaryBlue else MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                                        shape = RoundedCornerShape(16.dp)
+                                    )
+                                    .testTag("vehicle_card_${option.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(if (isSelected) GolocalPrimaryBlue else GolocalLightBlue),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = option.icon,
+                                            contentDescription = option.title,
+                                            tint = if (isSelected) Color.White else GolocalPrimaryBlue,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = option.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = option.tagline,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "$availabilityText • ${option.seatsLabel}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (enabled) GolocalPrimaryBlue else GolocalError,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Text(
+                                        text = if (enabled) "₹${estFare.toInt()}" else "Locked",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontFamily = JetBrainsMono,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (enabled) GolocalDeepNavy else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Pinned Payment + Fare Band + Find Rider Dock
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 10.dp,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(Icons.Filled.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Destination", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(
-                                    draft.customDestinationLabel.ifBlank { "${draft.destinationPlace.nameEn} (${draft.destinationPlace.district})" },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    onClick = { showPaymentDialog = true },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.testTag("payment_method_selector")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (draft.paymentMethod == "upi") Icons.Filled.QrCode2 else Icons.Filled.Payments,
+                                            contentDescription = null,
+                                            tint = GolocalPrimaryBlue,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = if (draft.paymentMethod == "upi") "UPI (Webhook Pending)" else "Cash at Drop",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+                                }
+
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = "₹${quote.estimatedFareInr.toInt()}",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontFamily = JetBrainsMono,
+                                        fontWeight = FontWeight.Bold,
+                                        color = GolocalDeepNavy
+                                    )
+                                    Text(
+                                        text = "Band ₹${quote.minPermittedFareInr.toInt()}–₹${quote.maxPermittedFareInr.toInt()}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                            Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+
+                            Button(
+                                onClick = { customerViewModel.submitBooking(invoiceEmail = customerInvoiceEmail) },
+                                enabled = !isSubmitting,
+                                colors = ButtonDefaults.buttonColors(containerColor = GolocalPrimaryBlue),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(54.dp)
+                                    .testTag("submit_booking_button"),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                if (isSubmitting) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text("Find Rider", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
 
-            // Local Service Type Selector
-            Text("Service Type", style = MaterialTheme.typography.titleMedium)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf(
-                    "now" to "Local Ride",
-                    "station_pickup" to "Railway Station",
-                    "bus_stand_pickup" to "Bus Stand",
-                    "airport_transfer" to "Airport Transfer",
-                    "village_to_town" to "Village to Town",
-                    "scheduled" to "Schedule Later",
-                    "family" to "Family Ride",
-                    "return_trip" to "Return Trip"
-                ).forEach { (id, label) ->
-                    FilterChip(
-                        selected = draft.bookingType == id,
-                        onClick = { customerViewModel.setBookingType(id) },
-                        label = { Text(label) }
-                    )
-                }
-            }
-
-            if (draft.bookingType in setOf("station_pickup", "scheduled", "native_village", "airport_transfer", "bus_stand_pickup")) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
+    if (showServiceOptionsSheet) {
+        AlertDialog(
+            onDismissRequest = { showServiceOptionsSheet = false },
+            title = { Text("Service Type & Trip Details") },
+            text = {
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf(
+                        "now" to "Local Ride",
+                        "station_pickup" to "Railway Station",
+                        "bus_stand_pickup" to "Bus Stand",
+                        "airport_transfer" to "Airport Transfer",
+                        "village_to_town" to "Village to Town",
+                        "scheduled" to "Schedule Later",
+                        "family" to "Family Ride",
+                        "return_trip" to "Return Trip"
+                    ).forEach { (id, label) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { customerViewModel.setBookingType(id) }
+                        ) {
+                            RadioButton(selected = draft.bookingType == id, onClick = { customerViewModel.setBookingType(id) })
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+
+                    if (draft.bookingType in setOf("station_pickup", "scheduled", "native_village", "airport_transfer", "bus_stand_pickup")) {
                         if (draft.bookingType == "station_pickup") {
                             OutlinedTextField(
                                 value = draft.trainNumber,
@@ -300,23 +685,13 @@ fun CustomerBookRideScreen(
                         OutlinedTextField(
                             value = draft.scheduledDateTimeLabel,
                             onValueChange = { customerViewModel.updateSpecialFields(scheduledDateTimeLabel = it) },
-                            label = { Text("Pickup Date & Time (e.g. Today 06:30 PM)") },
+                            label = { Text("Arrival Date & Time (e.g. Today 06:30 PM)") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
                     }
-                }
-            }
 
-            if (draft.bookingType == "family") {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                ) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (draft.bookingType == "family") {
                         OutlinedTextField(
                             value = draft.familyMemberName,
                             onValueChange = { customerViewModel.updateSpecialFields(familyMemberName = it) },
@@ -329,147 +704,49 @@ fun CustomerBookRideScreen(
                                 checked = draft.familyConsentConfirmed,
                                 onCheckedChange = { customerViewModel.updateSpecialFields(familyConsentConfirmed = it) }
                             )
-                            Text("Passenger consented to receive trip PIN & updates.", style = MaterialTheme.typography.bodySmall)
+                            Text("Passenger consented to receive Trip PIN & updates.", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
-            }
-
-            // Vehicle Categories
-            Text("Choose Vehicle", style = MaterialTheme.typography.titleMedium)
-            val categoryUi = listOf(
-                Triple("toto", "Toto / E-Rickshaw", Icons.Filled.ElectricRickshaw),
-                Triple("auto", "Auto Rickshaw", Icons.Filled.LocalTaxi),
-                Triple("bike", "Bike Taxi", Icons.Filled.TwoWheeler),
-                Triple("cab", "AC Cab", Icons.Filled.DirectionsCar),
-                Triple("outstation", "Outstation Cab", Icons.Filled.Commute),
-                Triple("scheduled", "Scheduled Cab", Icons.Filled.Schedule),
-                Triple("parcel", "Local Parcel", Icons.Filled.Inventory2)
-            )
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                categoryUi.forEach { (id, title, icon) ->
-                    val cfg = fareConfigs.firstOrNull { it.vehicleCategory == id }
-                    val enabled = cfg?.isEnabled ?: (id != "parcel")
-                    val est = if (cfg != null) {
-                        com.example.domain.FareCalculator.calculateFareQuote(
-                            quote.distanceKm, cfg, draft.isRoundTrip
-                        ).estimatedFareInr
-                    } else 0.0
-                    VehicleCategoryChip(
-                        id = id,
-                        title = title,
-                        subtitle = if (enabled) "${cfg?.commissionPercent?.toInt() ?: 10}% fee • Verified" else "Admin approval req.",
-                        etaOrStatus = if (enabled) "Negotiable" else "Disabled",
-                        fareLabel = if (enabled) "₹${est.toInt()}" else "Locked",
-                        icon = icon,
-                        selected = draft.selectedCategory == id,
-                        enabled = enabled,
-                        onClick = { customerViewModel.selectCategory(id) }
-                    )
-                }
-            }
-
-            // Fare Quote & Payment Selection
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Estimated Distance", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("${quote.distanceKm} km (~${quote.estimatedDurationMin} min)", fontFamily = JetBrainsMono, fontWeight = FontWeight.SemiBold)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Estimated Fare (incl. GST)", style = MaterialTheme.typography.titleSmall)
-                        Text("₹${quote.estimatedFareInr.toInt()}", style = MaterialTheme.typography.titleMedium, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
-                    }
-                    Text(
-                        text = "Permitted Rider Fare Proposal Band: ₹${quote.minPermittedFareInr.toInt()} – ₹${quote.maxPermittedFareInr.toInt()}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    HorizontalDivider()
-                    Text("Payment Method", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        FilterChip(
-                            selected = draft.paymentMethod == "cash",
-                            onClick = { customerViewModel.setPaymentMethod("cash") },
-                            label = { Text("Cash at Drop") },
-                            leadingIcon = { Icon(Icons.Filled.Payments, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        )
-                        FilterChip(
-                            selected = draft.paymentMethod == "upi",
-                            onClick = { customerViewModel.setPaymentMethod("upi") },
-                            label = { Text("UPI (Webhook Pending)") },
-                            leadingIcon = { Icon(Icons.Filled.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        )
-                    }
-                    if (draft.paymentMethod == "upi") {
-                        Text(
-                            text = "Note: Online UPI gateway webhook requires backend Cloud Function configuration; trip settles as pending_verification.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Button(
-                        onClick = { customerViewModel.submitBooking(invoiceEmail = customerInvoiceEmail) },
-                        enabled = !isSubmitting,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp)
-                            .testTag("submit_booking_button"),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        if (isSubmitting) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-                        } else {
-                            Text("Request Ride & Receive Fare Proposals")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showPickupPicker) {
-        WestBengalLocationPickerDialog(
-            title = "Select Pickup Location",
-            currentCustom = draft.customPickupLabel,
-            onDismiss = { showPickupPicker = false },
-            onSelectPlace = {
-                customerViewModel.setPickupPlace(it)
-                showPickupPicker = false
             },
-            onSaveCustom = { label ->
-                customerViewModel.setCustomLabels(label, draft.customDestinationLabel)
-                showPickupPicker = false
-            }
+            confirmButton = { Button(onClick = { showServiceOptionsSheet = false }) { Text("Done") } }
         )
     }
 
-    if (showDestPicker) {
-        WestBengalLocationPickerDialog(
-            title = "Select Destination",
-            currentCustom = draft.customDestinationLabel,
-            onDismiss = { showDestPicker = false },
-            onSelectPlace = {
-                customerViewModel.setDestinationPlace(it)
-                showDestPicker = false
+    if (showPaymentDialog) {
+        AlertDialog(
+            onDismissRequest = { showPaymentDialog = false },
+            title = { Text("Choose Payment Method") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { customerViewModel.setPaymentMethod("cash"); showPaymentDialog = false }
+                    ) {
+                        RadioButton(selected = draft.paymentMethod == "cash", onClick = { customerViewModel.setPaymentMethod("cash"); showPaymentDialog = false })
+                        Text("Cash at Drop")
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { customerViewModel.setPaymentMethod("upi"); showPaymentDialog = false }
+                    ) {
+                        RadioButton(selected = draft.paymentMethod == "upi", onClick = { customerViewModel.setPaymentMethod("upi"); showPaymentDialog = false })
+                        Column {
+                            Text("UPI Payment")
+                            Text(
+                                "Note: Online UPI gateway webhook requires backend configuration; settles as pending_verification.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             },
-            onSaveCustom = { label ->
-                customerViewModel.setCustomLabels(draft.customPickupLabel, label)
-                showDestPicker = false
-            }
+            confirmButton = { TextButton(onClick = { showPaymentDialog = false }) { Text("Close") } }
         )
     }
 
@@ -531,10 +808,7 @@ fun CustomerBookRideScreen(
                                 .clickable { selectedCategory = reasonOpt }
                                 .padding(vertical = 2.dp)
                         ) {
-                            RadioButton(
-                                selected = selectedCategory == reasonOpt,
-                                onClick = { selectedCategory = reasonOpt }
-                            )
+                            RadioButton(selected = selectedCategory == reasonOpt, onClick = { selectedCategory = reasonOpt })
                             Text(reasonOpt, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
@@ -565,7 +839,11 @@ fun CustomerBookRideScreen(
         CallPeerConfirmDialog(
             peerLabel = activeBooking!!.assignedDriverName.ifBlank { "Driver" },
             phoneNumber = activeCallContact!!.driverPhone,
-            onDismiss = { showCallDialog = false }
+            onDismiss = { showCallDialog = false },
+            onOpenChat = {
+                customerViewModel.markActiveChatRead()
+                showChatSheet = true
+            }
         )
     }
 
@@ -607,237 +885,13 @@ fun CustomerBookRideScreen(
     }
 }
 
-@Composable
-private fun ActiveBookingView(
-    booking: Booking,
-    offers: List<com.example.data.model.RideOffer>,
-    drivers: List<com.example.data.model.DriverDirectoryEntry>,
-    tripLocation: com.example.data.model.TripLocation?,
-    lowNetwork: Boolean,
-    callContact: BookingCallContact?,
-    unreadChatCount: Int,
-    onOpenCall: () -> Unit,
-    onOpenChat: () -> Unit,
-    onAcceptOffer: (com.example.data.model.RideOffer) -> Unit,
-    onShareTrip: () -> Unit,
-    onOpenSos: () -> Unit,
-    onOpenComplaint: () -> Unit,
-    onOpenCancel: () -> Unit
-) {
-    GolocalMapContainer(
-        pickupLat = booking.pickupLat,
-        pickupLng = booking.pickupLng,
-        pickupLabel = booking.pickupLabel,
-        destLat = booking.destinationLat,
-        destLng = booking.destinationLng,
-        destLabel = booking.destinationLabel,
-        onlineDrivers = drivers,
-        liveTripLocation = tripLocation,
-        lowNetworkMode = lowNetwork,
-        mapHeight = 235.dp
-    )
-
-    if (booking.assignedDriverId.isNotBlank()) {
-        BookingCommunicationBar(
-            booking = booking,
-            viewerRole = "customer",
-            callContact = callContact,
-            unreadCount = unreadChatCount,
-            onCallClick = onOpenCall,
-            onChatClick = onOpenChat
-        )
-    }
-
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surface,
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                GolocalStatusBadge(
-                    label = booking.status.uppercase(),
-                    tone = if (booking.status == "searching") "warning" else "success"
-                )
-                Text("${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km", style = MaterialTheme.typography.labelMedium)
-            }
-            Text("${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.titleMedium)
-
-            if (booking.tripPin.isNotBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text("Share 4-Digit Trip PIN at Pickup", style = MaterialTheme.typography.labelMedium)
-                            Text("Rider ${booking.assignedDriverName} (${booking.assignedVehicleLabel})", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            text = booking.tripPin,
-                            style = MaterialTheme.typography.headlineMedium,
-                            fontFamily = JetBrainsMono,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-
-            if (booking.agreedFareInr > 0) {
-                Text(
-                    text = "Locked Fare: ₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()})",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = GolocalSuccess
-                )
-            }
-
-            tripLocation?.let { loc ->
-                Text(
-                    text = "Live Driver GPS: ${String.format("%.4f", loc.lat)}, ${String.format("%.4f", loc.lng)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onShareTrip, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share")
-                }
-                Button(
-                    onClick = onOpenSos,
-                    colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Filled.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("SOS")
-                }
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onOpenComplaint, modifier = Modifier.weight(1f)) {
-                    Text("Report Issue")
-                }
-                if (booking.status != "in_progress") {
-                    TextButton(onClick = onOpenCancel, modifier = Modifier.weight(1f)) {
-                        Text("Cancel Ride", color = GolocalError)
-                    }
-                }
-            }
-        }
-    }
-
-    if (booking.status == "searching") {
-        Text("Fare Proposals from Verified Riders (${offers.size})", style = MaterialTheme.typography.titleMedium)
-        if (offers.isEmpty()) {
-            GolocalEmptyState(
-                title = "Waiting for Rider Fare Proposals",
-                message = "Permitted band: ₹${booking.minPermittedFareInr.toInt()} – ₹${booking.maxPermittedFareInr.toInt()}. Verified drivers nearby will send proposals shortly."
-            )
-        } else {
-            offers.forEach { offer ->
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(offer.driverName, style = MaterialTheme.typography.titleSmall)
-                            Text("${offer.vehicleLabel} • ETA ${offer.etaMinutes} min", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("★ ${String.format("%.1f", offer.driverRating)} • ${offer.driverCompletedRides} rides", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        }
-                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("₹${offer.proposedFareInr.toInt()}", style = MaterialTheme.typography.titleLarge, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
-                            Button(onClick = { onAcceptOffer(offer) }) {
-                                Text("Accept")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WestBengalLocationPickerDialog(
-    title: String,
-    currentCustom: String,
-    onDismiss: () -> Unit,
-    onSelectPlace: (com.example.domain.WestBengalPlace) -> Unit,
-    onSaveCustom: (String) -> Unit
-) {
-    var query by remember { mutableStateOf("") }
-    var customText by remember { mutableStateOf(currentCustom) }
-    val filtered = remember(query) { WestBengalCatalog.search(query) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = { Text("Search station, bus stand, airport, village...") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = customText,
-                    onValueChange = { customText = it },
-                    label = { Text("Or enter custom landmark / para name") },
-                    singleLine = true,
-                    trailingIcon = {
-                        if (customText.isNotBlank()) {
-                            TextButton(onClick = { onSaveCustom(customText) }) { Text("Use") }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(filtered, key = { it.id }) { place ->
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onSelectPlace(place) }
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
-                                Text(place.nameEn, style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    "${place.nameBn} • ${place.district} • ${place.category.replace('_', ' ')}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
-    )
+private fun formatBookingTypeLabel(type: String): String = when (type) {
+    "station_pickup" -> "Station"
+    "bus_stand_pickup" -> "Bus Stand"
+    "airport_transfer" -> "Airport"
+    "village_to_town" -> "Village"
+    "scheduled" -> "Scheduled"
+    "family" -> "Family"
+    "return_trip" -> "Round Trip"
+    else -> "Local Ride"
 }
