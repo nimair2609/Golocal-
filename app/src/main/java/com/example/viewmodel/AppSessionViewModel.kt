@@ -5,13 +5,10 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.map.GeocodingSearchAdapter
-import com.example.data.map.MapProviderConfig
 import com.example.data.model.AppLanguage
 import com.example.data.model.AppNotification
 import com.example.data.model.AppRole
 import com.example.data.model.CustomerProfile
-import com.example.data.model.PortalRole
 import com.example.data.model.PrivateEmergencyContact
 import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
@@ -19,7 +16,6 @@ import com.example.data.model.UserAccount
 import com.example.data.repository.ClientPreferences
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
-import com.example.data.tracking.LiveLocationTracker
 import com.example.ui.auth.AuthDiagnostics
 import com.example.ui.auth.AuthStage
 import com.example.ui.auth.RegistrationValidator
@@ -61,9 +57,6 @@ class AppSessionViewModel(
     private val _isAdmin = MutableStateFlow(false)
     val isAdmin: StateFlow<Boolean> = _isAdmin.asStateFlow()
 
-    private val _portalRole = MutableStateFlow(PortalRole.NONE)
-    val portalRole: StateFlow<PortalRole> = _portalRole.asStateFlow()
-
     private val _isAdminChecked = MutableStateFlow(false)
     val isAdminChecked: StateFlow<Boolean> = _isAdminChecked.asStateFlow()
 
@@ -75,9 +68,6 @@ class AppSessionViewModel(
 
     private val _isSubmittingRegistration = MutableStateFlow(false)
     val isSubmittingRegistration: StateFlow<Boolean> = _isSubmittingRegistration.asStateFlow()
-
-    private val _isDeletingAccount = MutableStateFlow(false)
-    val isDeletingAccount: StateFlow<Boolean> = _isDeletingAccount.asStateFlow()
 
     private val _registrationError = MutableStateFlow<String?>(null)
     val registrationError: StateFlow<String?> = _registrationError.asStateFlow()
@@ -186,10 +176,6 @@ class AppSessionViewModel(
                                 }
                                 is RegistrationStatus.PendingRegistration -> {
                                     _isAccountReady.value = false
-                                    _registrationStatus.value = status.copy(
-                                        prefilledName = status.prefilledName.ifBlank { userDisplayName },
-                                        prefilledEmail = status.prefilledEmail.ifBlank { userEmail }
-                                    )
                                     AuthDiagnostics.logStage(
                                         stage = AuthStage.REGISTRATION_REQUIRED,
                                         flow = "session_init",
@@ -211,9 +197,7 @@ class AppSessionViewModel(
                                     err.localizedMessage ?: "Unable to verify your GoLocal account right now."
                             }
                         }
-                    val role = repository.checkPortalRole(currentUserId, userEmail)
-                    _portalRole.value = role
-                    _isAdmin.value = (role == PortalRole.OWNER_ADMIN)
+                    _isAdmin.value = repository.checkIsAdmin(currentUserId, userEmail)
                     true
                 }
                 if (synced == null) {
@@ -241,26 +225,25 @@ class AppSessionViewModel(
         invoiceEmail: String,
         emergencyContactE164: String,
         termsAccepted: Boolean,
-        enteredMobileE164: String = ""
+        mobileNumberOverride: String = ""
     ) {
         if (_isSubmittingRegistration.value) return
         val currentStatus = _registrationStatus.value as? RegistrationStatus.PendingRegistration
-        val verifiedPhone = currentStatus?.verifiedMobileNumber?.ifBlank { userPhoneNumber }
-            ?.ifBlank { enteredMobileE164 }
-            ?: enteredMobileE164.ifBlank { userPhoneNumber }
+        val resolvedPhone = mobileNumberOverride.ifBlank {
+            currentStatus?.verifiedMobileNumber?.ifBlank { userPhoneNumber } ?: userPhoneNumber
+        }
 
         _isSubmittingRegistration.value = true
         _registrationError.value = null
         viewModelScope.launch {
             repository.completeMobileRegistration(
                 fullName = fullName,
-                verifiedMobileNumber = verifiedPhone,
+                verifiedMobileNumber = resolvedPhone,
                 invoiceEmail = invoiceEmail,
                 emergencyContactNumber = emergencyContactE164,
                 privacyConsentAccepted = termsAccepted,
                 role = _selectedRole.value.wire,
-                preferredLanguage = clientPreferences.value.language.code,
-                isMobileOtpVerified = currentStatus?.isPhoneAuthVerified ?: userPhoneNumber.isNotBlank()
+                preferredLanguage = clientPreferences.value.language.code
             )
                 .onSuccess { account ->
                     _registrationStatus.value = RegistrationStatus.Completed(account)
@@ -268,7 +251,7 @@ class AppSessionViewModel(
                     _isSubmittingRegistration.value = false
                     AuthDiagnostics.logStage(
                         stage = AuthStage.REGISTRATION_COMPLETED,
-                        flow = "mobile_registration",
+                        flow = "user_registration",
                         detail = "Completed profile registration for ${account.userId}"
                     )
                     _statusMessage.value = "Welcome to GoLocal, ${account.fullName}!"
@@ -276,44 +259,6 @@ class AppSessionViewModel(
                 .onFailure { err ->
                     _isSubmittingRegistration.value = false
                     _registrationError.value = err.localizedMessage ?: "Could not save registration details. Please retry."
-                }
-        }
-    }
-
-    fun onAccountCredentialLinked(linkedPhoneE164: String? = null) {
-        viewModelScope.launch {
-            if (!linkedPhoneE164.isNullOrBlank()) {
-                repository.syncVerifiedPhoneOnAccount(linkedPhoneE164)
-            } else {
-                repository.syncLinkedAuthProviders()
-            }
-                .onSuccess {
-                    _statusMessage.value = "Account security credentials linked cleanly."
-                }
-                .onFailure { err ->
-                    _statusMessage.value = err.localizedMessage ?: "Account link saved in Auth; Firestore sync will retry."
-                }
-        }
-    }
-
-    fun deleteMyAccountNow(context: Context) {
-        if (_isDeletingAccount.value) return
-        _isDeletingAccount.value = true
-        viewModelScope.launch {
-            repository.deleteMyAccountAndData()
-                .onSuccess {
-                    _isDeletingAccount.value = false
-                    com.example.ui.auth.signOut(viewModelScope, context = context)
-                }
-                .onFailure { err ->
-                    _isDeletingAccount.value = false
-                    val isRecentLogin = err is com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException ||
-                        err.message?.contains("REQUIRES_RECENT_LOGIN", ignoreCase = true) == true
-                    _statusMessage.value = if (isRecentLogin) {
-                        "Security check: Sign out and sign back in right before deleting your account."
-                    } else {
-                        err.localizedMessage ?: "Could not delete account right now. Please try again."
-                    }
                 }
         }
     }
@@ -434,39 +379,22 @@ class AppSessionViewModel(
 
     @SuppressLint("MissingPermission")
     fun detectDeviceLocation(context: Context) {
-        if (!LiveLocationTracker.hasLocationPermission(context)) {
-            _gpsLocation.value = _gpsLocation.value.copy(
-                isDetecting = false,
-                error = "Location permission denied — pick a village or pin on the map manually."
-            )
-            return
-        }
         _gpsLocation.value = _gpsLocation.value.copy(isDetecting = true, error = null)
         try {
             val client = LocationServices.getFusedLocationProviderClient(context)
-            client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+            client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
                 .addOnSuccessListener { location ->
                     if (location != null) {
-                        val lat = location.latitude
-                        val lng = location.longitude
-                        val rawCoordLabel = "GPS (${String.format("%.4f", lat)}, ${String.format("%.4f", lng)})"
                         _gpsLocation.value = GpsLocationState(
-                            lat = lat,
-                            lng = lng,
-                            label = rawCoordLabel,
+                            lat = location.latitude,
+                            lng = location.longitude,
+                            label = "GPS (${String.format("%.4f", location.latitude)}, ${String.format("%.4f", location.longitude)})",
                             isDetecting = false
                         )
-                        viewModelScope.launch {
-                            val geocoder = GeocodingSearchAdapter(endpoints = MapProviderConfig.loadEndpoints(context))
-                            val resolved = geocoder.reverseGeocode(lat, lng, allowRemoteLookup = true)
-                            if (resolved.isNotBlank()) {
-                                _gpsLocation.value = _gpsLocation.value.copy(label = resolved)
-                            }
-                        }
                     } else {
                         _gpsLocation.value = _gpsLocation.value.copy(
                             isDetecting = false,
-                            error = "GPS fix unavailable — please tap or search on the map manually."
+                            error = "GPS fix unavailable — please pick your station or locality manually."
                         )
                     }
                 }

@@ -239,7 +239,8 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertEquals("+919876543210", completed.mobileNumber)
         assertEquals("anirban.invoices@example.com", completed.email)
         assertTrue(completed.profileCompleted)
-        assertTrue(completed.mobileVerified)
+        // Phone number not verified via Firebase Phone Auth on email-signed-in emulator user -> must not spoof mobileVerified
+        org.junit.Assert.assertFalse(completed.mobileVerified)
         assertTrue(completed.hasEmergencyContact)
 
         // 3. Returning user enters directly without recreating account

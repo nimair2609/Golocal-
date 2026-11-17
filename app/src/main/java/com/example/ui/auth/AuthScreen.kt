@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.runtime.Composable
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
+import com.example.notifications.NotificationHelper
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
@@ -53,9 +56,10 @@ fun signOut(
         withContext(NonCancellable) {
             try {
                 if (context != null) {
-                    val uid = runCatching { Firebase.auth.currentUser?.uid }.getOrNull().orEmpty()
-                    if (uid.isNotBlank()) {
-                        com.example.notifications.FcmTokenSyncManager.removeCurrentToken(context, uid)
+                    runCatching { NotificationHelper.removeCurrentUserTokensOnSignOut(context) }
+                    runCatching {
+                        CredentialManager.create(context)
+                            .clearCredentialState(ClearCredentialStateRequest())
                     }
                 }
                 firebaseSignOutAction()

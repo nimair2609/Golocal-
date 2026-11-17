@@ -19,6 +19,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
 import com.example.data.model.DriverProfile
+import com.example.domain.ExpiryStatus
+import com.example.domain.RequiredDocumentsCatalog
+import com.example.shared.NotificationPermissionBannerCard
 import com.example.shared.SharedAppSettingsAndSignOutSection
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalMetricCard
@@ -28,7 +31,7 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.DriverViewModel
-import com.example.viewmodel.GovernanceViewModel
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 @Composable
@@ -187,18 +190,18 @@ fun RiderRequestsTab(
 @Composable
 fun RiderEarningsHistoryTab(
     profile: DriverProfile,
-    driverViewModel: DriverViewModel,
-    governanceViewModel: GovernanceViewModel? = null
+    driverViewModel: DriverViewModel
 ) {
     val commissions by driverViewModel.commissions.collectAsStateWithLifecycle()
     val settlements by driverViewModel.settlements.collectAsStateWithLifecycle()
     val assignedBookings by driverViewModel.assignedBookings.collectAsStateWithLifecycle()
     val ratings by driverViewModel.myRatings.collectAsStateWithLifecycle()
+    val appeals by driverViewModel.myAppeals.collectAsStateWithLifecycle()
 
     var subTab by remember { mutableIntStateOf(0) }
     var showWithdrawDialog by remember { mutableStateOf(false) }
-    var passengerFeedbackTarget by remember { mutableStateOf<Booking?>(null) }
-    var disputeTarget by remember { mutableStateOf<Booking?>(null) }
+    var passengerRateTarget by remember { mutableStateOf<Booking?>(null) }
+    var appealTarget by remember { mutableStateOf<Booking?>(null) }
 
     val totalGross = commissions.sumOf { it.grossFareInr }
     val totalComm = commissions.sumOf { it.commissionAmountInr }
@@ -278,13 +281,21 @@ fun RiderEarningsHistoryTab(
                                     }
                                     Text("${b.pickupLabel} → ${b.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                                     Text("Passenger: ${b.customerName} • ${b.distanceKm} km", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    if (b.status == "completed" && governanceViewModel != null) {
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            OutlinedButton(onClick = { passengerFeedbackTarget = b }) {
+                                    if (b.status == "completed") {
+                                        if (b.customerFeedbackRating == null) {
+                                            OutlinedButton(onClick = { passengerRateTarget = b }) {
                                                 Text("Rate Passenger")
                                             }
-                                            TextButton(onClick = { disputeTarget = b }) {
-                                                Text("Report Issue", color = GolocalError)
+                                        } else {
+                                            GolocalStatusBadge(label = "Passenger Rated ★ ${b.customerFeedbackRating}", tone = "success")
+                                        }
+                                    } else if (b.status == "cancelled") {
+                                        val existingAppeal = appeals.firstOrNull { it.bookingId == b.id }
+                                        if (existingAppeal != null) {
+                                            GolocalStatusBadge(label = "APPEAL: ${existingAppeal.status.uppercase()}", tone = "warning")
+                                        } else {
+                                            OutlinedButton(onClick = { appealTarget = b }) {
+                                                Text("Appeal Cancellation")
                                             }
                                         }
                                     }
@@ -307,7 +318,6 @@ fun RiderEarningsHistoryTab(
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                                    Text("Behaviour ${r.behaviourStars}★ • Safety ${r.safetyStars}★", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     if (r.review.isNotBlank()) Text(r.review, style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
@@ -316,6 +326,62 @@ fun RiderEarningsHistoryTab(
                 }
             }
         }
+    }
+
+    if (passengerRateTarget != null) {
+        val booking = passengerRateTarget!!
+        var stars by remember { mutableIntStateOf(5) }
+        var note by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { passengerRateTarget = null },
+            title = { Text("Rate Passenger") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        (1..5).forEach { s ->
+                            FilterChip(selected = stars == s, onClick = { stars = s }, label = { Text("$s★") })
+                        }
+                    }
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("Behavior / trip note (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    driverViewModel.submitCustomerFeedback(booking.id, stars, note)
+                    passengerRateTarget = null
+                }) { Text("Submit") }
+            },
+            dismissButton = { TextButton(onClick = { passengerRateTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    if (appealTarget != null) {
+        val booking = appealTarget!!
+        var reason by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { appealTarget = null },
+            title = { Text("Appeal Trip Cancellation") },
+            text = {
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Explain cancellation circumstances") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    driverViewModel.submitAppeal(booking.id, reason)
+                    appealTarget = null
+                }) { Text("Submit Appeal") }
+            },
+            dismissButton = { TextButton(onClick = { appealTarget = null }) { Text("Cancel") } }
+        )
     }
 
     if (showWithdrawDialog) {
@@ -340,55 +406,6 @@ fun RiderEarningsHistoryTab(
             dismissButton = { TextButton(onClick = { showWithdrawDialog = false }) { Text("Cancel") } }
         )
     }
-
-    passengerFeedbackTarget?.let { target ->
-        var stars by remember { mutableIntStateOf(5) }
-        var note by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { passengerFeedbackTarget = null },
-            title = { Text("Rate Passenger Behaviour") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        (1..5).forEach { s ->
-                            FilterChip(selected = stars == s, onClick = { stars = s }, label = { Text("$s★") })
-                        }
-                    }
-                    OutlinedTextField(
-                        value = note,
-                        onValueChange = { note = it.take(300) },
-                        label = { Text("Passenger trip note (optional)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    governanceViewModel?.submitRiderToCustomerFeedback(target, stars, note)
-                    passengerFeedbackTarget = null
-                }) { Text("Submit") }
-            },
-            dismissButton = { TextButton(onClick = { passengerFeedbackTarget = null }) { Text("Cancel") } }
-        )
-    }
-
-    disputeTarget?.let { target ->
-        com.example.customer.SubmitDisputeDialog(
-            bookingId = target.id,
-            defaultRefundInr = 0.0,
-            onDismiss = { disputeTarget = null },
-            onSubmit = { cat, desc, refund ->
-                governanceViewModel?.submitDispute(
-                    bookingId = target.id,
-                    targetUserId = target.customerId,
-                    category = cat,
-                    description = desc,
-                    requestedRefundInr = refund
-                )
-                disputeTarget = null
-            }
-        )
-    }
 }
 
 @Composable
@@ -396,8 +413,9 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
     val notifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Rider Alerts & Updates", style = MaterialTheme.typography.headlineSmall)
+        NotificationPermissionBannerCard()
         if (notifications.isEmpty()) {
-            GolocalEmptyState(title = "No Alerts Yet", message = "KYC verification updates, ride confirmations, and payout statuses appear here.")
+            GolocalEmptyState(title = "No Alerts Yet", message = "KYC verification updates, ride confirmations, chat messages, and payout statuses appear here.")
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(notifications, key = { it.id }) { notif ->
@@ -426,9 +444,7 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
 @Composable
 fun RiderProfileTab(
     profile: DriverProfile,
-    sessionViewModel: AppSessionViewModel,
-    driverViewModel: DriverViewModel? = null,
-    onOpenNotifications: () -> Unit = {}
+    sessionViewModel: AppSessionViewModel
 ) {
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     var showSupportDialog by remember { mutableStateOf(false) }
@@ -456,17 +472,45 @@ fun RiderProfileTab(
                 Text("District: ${profile.district} ${profile.block}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Driving Licence: ${profile.drivingLicenceNumber}", style = MaterialTheme.typography.bodySmall)
                 Text("Settlement UPI: ${profile.settlementUpiOrBank.ifBlank { "Not configured" }}", style = MaterialTheme.typography.bodySmall)
-                if (profile.earliestExpiryIso.isNotBlank()) {
-                    Text(
-                        "Earliest Doc Expiry: ${profile.earliestExpiryIso} (${profile.expiryAlertLevel.replace('_', ' ').uppercase()})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (profile.expiryAlertLevel == "valid") GolocalSuccess else GolocalError
-                    )
-                }
-                OutlinedButton(onClick = onOpenNotifications, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.Notifications, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("View Rider Notifications & Alerts")
+            }
+        }
+
+        val compliance = remember(profile) {
+            RequiredDocumentsCatalog.assessDriverCompliance(
+                profile = profile,
+                todayEpochDay = TimeUnit.MILLISECONDS.toDays(System.currentTimeMillis())
+            )
+        }
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Vehicle & KYC Document Expiry Status", style = MaterialTheme.typography.titleSmall)
+                compliance.forEach { item ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(item.docType.displayLabel, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                item.documentNumber.ifBlank { "Not entered" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        GolocalStatusBadge(
+                            label = item.status.name.replace('_', ' '),
+                            tone = when (item.status) {
+                                ExpiryStatus.VALID -> "success"
+                                ExpiryStatus.EXPIRING_SOON, ExpiryStatus.NOT_PROVIDED -> "warning"
+                                ExpiryStatus.EXPIRED -> "error"
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -475,18 +519,11 @@ fun RiderProfileTab(
             fallbackAccountPhone = profile.phone
         )
 
-        com.example.ui.auth.AccountSecurityLinkingCard(
-            fallbackAccountPhone = profile.phone,
-            fallbackAccountEmail = "",
-            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) }
-        )
-
         SharedAppSettingsAndSignOutSection(
             prefs = prefs,
             sessionViewModel = sessionViewModel,
             supportHelpLabel = "Rider Partner Support",
-            onOpenSupportDialog = { showSupportDialog = true },
-            onBeforeSignOut = { driverViewModel?.stopAllTrackingForSignOut() }
+            onOpenSupportDialog = { showSupportDialog = true }
         )
     }
 

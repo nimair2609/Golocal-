@@ -5,25 +5,29 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import com.example.notifications.NotificationDeepLinks
+import androidx.compose.runtime.setValue
+import com.example.notifications.NotificationDeepLinkTarget
 
 class RiderActivity : ComponentActivity() {
-    private val deepLinkScreenState = mutableStateOf<String?>(null)
+    private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        deepLinkScreenState.value = intent?.getStringExtra(NotificationDeepLinks.EXTRA_TARGET_SCREEN)?.takeIf { it.isNotBlank() }
         enableEdgeToEdge()
+        deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)
         setContent {
-            RiderAppRoot(initialDeepLinkScreen = deepLinkScreenState.value)
+            RiderAppRoot(
+                deepLinkTarget = deepLinkState,
+                onDeepLinkHandled = { deepLinkState = null }
+            )
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val screen = intent.getStringExtra(NotificationDeepLinks.EXTRA_TARGET_SCREEN)?.takeIf { it.isNotBlank() }
-        if (screen != null) deepLinkScreenState.value = screen
+        deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)
     }
 }

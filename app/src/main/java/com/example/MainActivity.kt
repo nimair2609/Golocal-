@@ -6,9 +6,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.example.customer.CustomerAppRoot
-import com.example.notifications.NotificationDeepLinks
+import com.example.notifications.NotificationDeepLinkTarget
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -26,33 +28,36 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 class MainActivity : ComponentActivity() {
-    private val deepLinkScreenState = mutableStateOf<String?>(null)
+    private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleDeepLink(intent)
         enableEdgeToEdge()
+        deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)
         setContent {
-            GolocalAppRoot(initialScreen = deepLinkScreenState.value)
+            GolocalAppRoot(
+                deepLinkTarget = deepLinkState,
+                onDeepLinkHandled = { deepLinkState = null }
+            )
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        handleDeepLink(intent)
-    }
-
-    private fun handleDeepLink(intent: Intent?) {
-        val screen = intent?.getStringExtra(NotificationDeepLinks.EXTRA_TARGET_SCREEN)?.takeIf { it.isNotBlank() }
-        if (screen != null) deepLinkScreenState.value = screen
+        deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)
     }
 }
 
 @Composable
 fun GolocalAppRoot(
     auth: FirebaseAuth = Firebase.auth,
-    initialScreen: String? = null
+    deepLinkTarget: NotificationDeepLinkTarget? = null,
+    onDeepLinkHandled: () -> Unit = {}
 ) {
-    CustomerAppRoot(auth = auth, initialDeepLinkScreen = initialScreen)
+    CustomerAppRoot(
+        auth = auth,
+        deepLinkTarget = deepLinkTarget,
+        onDeepLinkHandled = onDeepLinkHandled
+    )
 }

@@ -47,7 +47,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `customer auth screen renders Mobile OTP login without Google Sign-In or Admin entry points`() {
+    fun `customer auth screen renders Dual Auth with zero Admin or Rider entry points`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.CUSTOMER, onAuthSuccess = {})
@@ -57,7 +57,7 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithText("GoLocal").assertIsDisplayed()
         composeTestRule.onNodeWithText("Your Local. Our Priority.").assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("by NR Next").fetchSemanticsNodes().isEmpty())
-        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("phone_number_input").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("Admin Portal").fetchSemanticsNodes().isEmpty())
@@ -65,7 +65,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `rider auth screen renders Partner Mobile OTP login without Google Sign-In or Admin options`() {
+    fun `rider auth screen renders Dual Auth without Admin options`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.RIDER, onAuthSuccess = {})
@@ -73,13 +73,13 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("GoLocal Rider").assertIsDisplayed()
-        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
         assertTrue(composeTestRule.onAllNodesWithText("Admin Portal").fetchSemanticsNodes().isEmpty())
     }
 
     @Test
-    fun `admin auth screen renders strict Admin Mobile OTP gate without Google Sign-In or public signup`() {
+    fun `admin auth screen renders Dual Auth governance gate without public signup`() {
         composeTestRule.setContent {
             GolocalTheme {
                 RoleAuthScreen(mode = ExperienceMode.ADMIN, onAuthSuccess = {})
@@ -87,8 +87,8 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("GoLocal Admin Portal").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Portal Sign-In (Mobile OTP)").assertIsDisplayed()
-        assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
+        composeTestRule.onNodeWithText("Authorized Admin Sign-In").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("send_otp_button").performScrollTo().assertIsDisplayed()
     }
 
@@ -132,11 +132,12 @@ class ExampleRobolectricTest {
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText("Hello, Nimai").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("home_search_destination").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("home_hero_book_ride").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Book Ride").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Bus Tickets").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Explore").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_search_destination").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Recent Trips").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("home_hero_book_ride").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Book Ride").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Local Services").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Explore").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("No recent bookings").performScrollTo().assertIsDisplayed()
     }
 

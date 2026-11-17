@@ -14,6 +14,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -261,26 +262,18 @@ class GolocalRepository(
         val resolvedPhone = verifiedPhoneNumber.trim()
             .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
             .take(25)
-        val authUser = auth.currentUser
-        val currentProviders = authUser?.providerData?.map { it.providerId }?.filter { it != "firebase" } ?: emptyList()
 
         if (!userSnap.exists()) {
             return@runCatching RegistrationStatus.PendingRegistration(
                 verifiedMobileNumber = resolvedPhone,
-                existingAccount = null,
-                prefilledName = authUser?.displayName.orEmpty(),
-                prefilledEmail = authUser?.email.orEmpty(),
-                isPhoneAuthVerified = resolvedPhone.isNotBlank()
+                existingAccount = null
             )
         }
 
         val account = userSnap.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             ?: return@runCatching RegistrationStatus.PendingRegistration(
                 verifiedMobileNumber = resolvedPhone,
-                existingAccount = null,
-                prefilledName = authUser?.displayName.orEmpty(),
-                prefilledEmail = authUser?.email.orEmpty(),
-                isPhoneAuthVerified = resolvedPhone.isNotBlank()
+                existingAccount = null
             )
 
         val emergencyExists = try {
@@ -299,31 +292,21 @@ class GolocalRepository(
             account.privacyConsentAccepted &&
             (account.hasEmergencyContact || emergencyExists)
 
-        val isActuallyPhoneVerified = resolvedPhone.isNotBlank() || account.mobileVerified
-        val isActuallyEmailVerified = (authUser?.isEmailVerified == true) || account.emailVerified
-
         if (isComplete) {
-            val needsSync = (resolvedPhone.isNotBlank() && (account.effectiveMobileNumber().isBlank() || !account.mobileVerified)) ||
-                (currentProviders.isNotEmpty() && currentProviders.toSet() != account.authProviders.toSet()) ||
-                (isActuallyEmailVerified && !account.emailVerified)
-            if (needsSync) {
+            // Backfill mobileVerified / phone if missing on returning account without creating a duplicate
+            if (resolvedPhone.isNotBlank() && (account.effectiveMobileNumber().isBlank() || !account.mobileVerified)) {
                 try {
-                    val patch = mutableMapOf<String, Any>(
-                        "uid" to uid,
-                        "profileCompleted" to true,
-                        "mobileVerified" to isActuallyPhoneVerified,
-                        "emailVerified" to isActuallyEmailVerified,
-                        "hasEmergencyContact" to (account.hasEmergencyContact || emergencyExists),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                    if (effectivePhone.isNotBlank()) {
-                        patch["phone"] = effectivePhone
-                        patch["mobileNumber"] = effectivePhone
-                    }
-                    if (currentProviders.isNotEmpty()) {
-                        patch["authProviders"] = currentProviders
-                    }
-                    userRef.update(patch).await()
+                    userRef.update(
+                        mapOf(
+                            "uid" to uid,
+                            "phone" to resolvedPhone,
+                            "mobileNumber" to resolvedPhone,
+                            "mobileVerified" to true,
+                            "profileCompleted" to true,
+                            "hasEmergencyContact" to (account.hasEmergencyContact || emergencyExists),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -340,20 +323,15 @@ class GolocalRepository(
                     uid = account.uid.ifBlank { uid },
                     mobileNumber = effectivePhone,
                     phone = effectivePhone,
-                    mobileVerified = isActuallyPhoneVerified,
-                    emailVerified = isActuallyEmailVerified,
-                    authProviders = if (currentProviders.isNotEmpty()) currentProviders else account.authProviders,
+                    mobileVerified = true,
                     profileCompleted = true,
                     hasEmergencyContact = account.hasEmergencyContact || emergencyExists
                 )
             )
         } else {
             RegistrationStatus.PendingRegistration(
-                verifiedMobileNumber = resolvedPhone,
-                existingAccount = account,
-                prefilledName = account.fullName.ifBlank { authUser?.displayName.orEmpty() },
-                prefilledEmail = account.email.ifBlank { authUser?.email.orEmpty() },
-                isPhoneAuthVerified = resolvedPhone.isNotBlank()
+                verifiedMobileNumber = effectivePhone,
+                existingAccount = account
             )
         }
     }
@@ -365,26 +343,27 @@ class GolocalRepository(
         emergencyContactNumber: String,
         privacyConsentAccepted: Boolean,
         role: String = "customer",
-        preferredLanguage: String = "en",
-        isMobileOtpVerified: Boolean = verifiedMobileNumber.isNotBlank()
+        preferredLanguage: String = "en"
     ): Result<UserAccount> = runCatching {
         val uid = requireUserId()
-        val authUser = auth.currentUser
-        val authVerifiedPhone = authUser?.phoneNumber.orEmpty().trim()
         val safeName = fullName.trim().take(100)
-        val safePhone = authVerifiedPhone.ifBlank { verifiedMobileNumber.trim() }.take(25)
+        val safePhone = verifiedMobileNumber.trim()
+            .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
+            .take(25)
         val safeEmail = invoiceEmail.trim().take(150)
         val safeEmergency = emergencyContactNumber.trim().take(25)
-        val phoneOtpVerified = authVerifiedPhone.isNotBlank() || isMobileOtpVerified
-        val emailVerified = authUser?.isEmailVerified == true && safeEmail.equals(authUser.email.orEmpty().trim(), ignoreCase = true)
-        val providers = authUser?.providerData?.map { it.providerId }?.filter { it != "firebase" } ?: emptyList()
 
         require(safeName.length >= 2) { "Full name is required." }
-        require(safePhone.isNotBlank()) { "Mobile number is required for GoLocal bookings and coordination." }
+        require(safePhone.isNotBlank()) { "Mobile number is required to complete registration." }
         require(safeEmail.isNotBlank() && safeEmail.contains("@")) { "A valid email address is required for GST invoice delivery." }
         require(safeEmergency.length >= 8) { "A valid emergency contact number is required." }
         require(safeEmergency != safePhone) { "Emergency contact number must be different from your own mobile number." }
         require(privacyConsentAccepted) { "Please accept Terms and Privacy Policy to continue." }
+
+        val authUser = auth.currentUser
+        val phoneVerifiedByAuth = !authUser?.phoneNumber.isNullOrBlank()
+        val emailVerifiedByAuth = authUser?.isEmailVerified == true &&
+            safeEmail.equals(authUser.email.orEmpty(), ignoreCase = true)
 
         val userRef = db.collection("users").document(uid)
         val custRef = db.collection("customer_profiles").document(uid)
@@ -411,15 +390,15 @@ class GolocalRepository(
             email = safeEmail,
             phone = safePhone,
             mobileNumber = safePhone,
-            photoUrl = existingAccount?.photoUrl?.takeIf { it.isNotBlank() } ?: authUser?.photoUrl?.toString().orEmpty(),
+            photoUrl = existingAccount?.photoUrl?.ifBlank { authUser?.photoUrl?.toString().orEmpty() }
+                ?: authUser?.photoUrl?.toString().orEmpty(),
             role = resolvedRole,
             preferredLanguage = resolvedLang,
             lowNetworkMode = existingAccount?.lowNetworkMode ?: false,
             privacyConsentAccepted = true,
             profileCompleted = true,
-            emailVerified = emailVerified,
-            mobileVerified = phoneOtpVerified,
-            authProviders = providers,
+            emailVerified = emailVerifiedByAuth,
+            mobileVerified = phoneVerifiedByAuth,
             hasEmergencyContact = true,
             accountStatus = existingAccount?.accountStatus ?: "active",
             accountCreatedAt = existingAccount?.accountCreatedAt,
@@ -433,20 +412,19 @@ class GolocalRepository(
                 } else {
                     batch.update(
                         userRef,
-                        buildMap<String, Any> {
-                            put("uid", uid)
-                            put("fullName", safeName)
-                            put("email", safeEmail)
-                            put("phone", safePhone)
-                            put("mobileNumber", safePhone)
-                            put("privacyConsentAccepted", true)
-                            put("profileCompleted", true)
-                            put("emailVerified", emailVerified)
-                            put("mobileVerified", phoneOtpVerified)
-                            put("hasEmergencyContact", true)
-                            if (providers.isNotEmpty()) put("authProviders", providers)
-                            put("updatedAt", FieldValue.serverTimestamp())
-                        }
+                        mapOf(
+                            "uid" to uid,
+                            "fullName" to safeName,
+                            "email" to safeEmail,
+                            "phone" to safePhone,
+                            "mobileNumber" to safePhone,
+                            "privacyConsentAccepted" to true,
+                            "profileCompleted" to true,
+                            "emailVerified" to emailVerifiedByAuth,
+                            "mobileVerified" to phoneVerifiedByAuth,
+                            "hasEmergencyContact" to true,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
                     )
                 }
 
@@ -505,70 +483,16 @@ class GolocalRepository(
         }
         return runCatching {
             val uid = requireUserId()
-            val providers = auth.currentUser?.providerData?.map { it.providerId }?.filter { it != "firebase" } ?: emptyList()
             val ref = db.collection("users").document(uid)
             ref.update(
-                buildMap<String, Any> {
-                    put("phone", safePhone)
-                    put("mobileNumber", safePhone)
-                    put("mobileVerified", true)
-                    if (providers.isNotEmpty()) put("authProviders", providers)
-                    put("updatedAt", FieldValue.serverTimestamp())
-                }
-            ).await()
-        }
-    }
-
-    suspend fun syncLinkedAuthProviders(): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        val authUser = auth.currentUser ?: return@runCatching
-        val providers = authUser.providerData.map { it.providerId }.filter { it != "firebase" }
-        val patch = buildMap<String, Any> {
-            put("authProviders", providers)
-            put("emailVerified", authUser.isEmailVerified)
-            authUser.phoneNumber?.takeIf { it.isNotBlank() }?.let { phone ->
-                put("phone", phone)
-                put("mobileNumber", phone)
-                put("mobileVerified", true)
-            }
-            put("updatedAt", FieldValue.serverTimestamp())
-        }
-        db.collection("users").document(uid).update(patch).await()
-    }
-
-    suspend fun deleteMyAccountAndData(): Result<Unit> = runCatching {
-        val uid = requireUserId()
-        val user = auth.currentUser ?: error("No signed-in user")
-        AuthDiagnostics.logStage(AuthStage.ACCOUNT_DELETE_STARTED, flow = "account_delete")
-
-        // Delete active push notification tokens first while UID is still authenticated
-        val tokensSnap = runCatching {
-            db.collection("fcm_tokens").whereEqualTo("userId", uid).get().await()
-        }.getOrNull()
-        tokensSnap?.documents?.forEach { doc ->
-            runCatching { doc.reference.delete().await() }
-        }
-
-        // Clean user-owned private documents (Firestore rules allow owner write/delete or anonymization)
-        runCatching { db.collection("emergency_contacts").document(uid).delete().await() }
-        runCatching { db.collection("customer_profiles").document(uid).delete().await() }
-        runCatching {
-            db.collection("users").document(uid).update(
                 mapOf(
-                    "fullName" to "Deleted GoLocal User",
-                    "email" to "",
-                    "phone" to "",
-                    "mobileNumber" to "",
-                    "photoUrl" to "",
-                    "accountStatus" to "deleted",
+                    "phone" to safePhone,
+                    "mobileNumber" to safePhone,
+                    "mobileVerified" to true,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
         }
-
-        // Delete Firebase Authentication identity (throws FirebaseAuthRecentLoginRequiredException if session stale)
-        user.delete().await()
-        AuthDiagnostics.logStage(AuthStage.ACCOUNT_DELETE_COMPLETED, flow = "account_delete")
     }
 
     suspend fun updateInvoiceEmail(invoiceEmail: String): Result<Unit> = runCatching {
@@ -739,28 +663,28 @@ class GolocalRepository(
     suspend fun saveCustomerProfile(profile: CustomerProfile): Result<Unit> = runCatching {
         val uid = requireUserId()
         val ref = db.collection("customer_profiles").document(uid)
+        val existingSnap = try {
+            ref.get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, ref.path, auth)
+            throw e
+        }
+        val payload = buildMap<String, Any> {
+            put("userId", uid)
+            if (profile.homeAddress.isNotBlank()) put("homeAddress", profile.homeAddress.trim())
+            if (profile.workAddress.isNotBlank()) put("workAddress", profile.workAddress.trim())
+            if (profile.nativeVillage.isNotBlank()) put("nativeVillage", profile.nativeVillage.trim())
+            if (profile.nativeDistrict.isNotBlank()) put("nativeDistrict", profile.nativeDistrict.trim())
+            if (!existingSnap.exists()) put("createdAt", FieldValue.serverTimestamp())
+            put("updatedAt", FieldValue.serverTimestamp())
+        }
         try {
-            val existingSnap = ref.get().await()
-            if (existingSnap.exists()) {
-                val updates = mapOf(
-                    "homeAddress" to profile.homeAddress.trim(),
-                    "workAddress" to profile.workAddress.trim(),
-                    "nativeVillage" to profile.nativeVillage.trim(),
-                    "nativeDistrict" to profile.nativeDistrict.trim(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                ref.update(updates).await()
-            } else {
-                val payload = buildMap<String, Any> {
-                    put("userId", uid)
-                    if (profile.homeAddress.isNotBlank()) put("homeAddress", profile.homeAddress.trim())
-                    if (profile.workAddress.isNotBlank()) put("workAddress", profile.workAddress.trim())
-                    if (profile.nativeVillage.isNotBlank()) put("nativeVillage", profile.nativeVillage.trim())
-                    if (profile.nativeDistrict.isNotBlank()) put("nativeDistrict", profile.nativeDistrict.trim())
-                    put("createdAt", FieldValue.serverTimestamp())
-                    put("updatedAt", FieldValue.serverTimestamp())
-                }
+            if (!existingSnap.exists()) {
                 ref.set(payload).await()
+            } else {
+                ref.update(payload.filterKeys { it != "userId" && it != "createdAt" }).await()
             }
         } catch (e: CancellationException) {
             throw e
@@ -854,9 +778,6 @@ class GolocalRepository(
             put("familyConsentConfirmed", booking.familyConsentConfirmed)
             put("isRoundTrip", booking.isRoundTrip)
             if (booking.invoiceEmail.isNotBlank()) put("invoiceEmail", booking.invoiceEmail.trim().take(150))
-            if (booking.routeProvider.isNotBlank()) put("routeProvider", booking.routeProvider.trim().take(60))
-            if (booking.pickupZoneId.isNotBlank()) put("pickupZoneId", booking.pickupZoneId.trim().take(128))
-            if (booking.dropoffZoneId.isNotBlank()) put("dropoffZoneId", booking.dropoffZoneId.trim().take(128))
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -927,7 +848,30 @@ class GolocalRepository(
                 )
             }.await()
 
-            // Notify driver
+            // Populate participant contact bridge now that booking status is committed as 'assigned'
+            runCatching {
+                val userSnap = db.collection("users").document(uid).get().await()
+                val custPhone = (userSnap.getString("mobileNumber") ?: userSnap.getString("phone")).orEmpty()
+                val custName = (userSnap.getString("fullName") ?: "Customer").substringBefore(" ").take(80)
+                val driverDirSnap = db.collection("driver_profiles").document(offer.driverId).get().await()
+                val driverPhone = driverDirSnap.getString("phone").orEmpty()
+                db.collection("booking_contacts").document(bookingId)
+                    .set(
+                        buildMap<String, Any> {
+                            put("bookingId", bookingId)
+                            put("customerId", uid)
+                            put("driverId", offer.driverId)
+                            if (custPhone.isNotBlank()) put("customerPhone", custPhone.take(25))
+                            if (custName.isNotBlank()) put("customerFirstName", custName)
+                            if (driverPhone.isNotBlank()) put("driverPhone", driverPhone.take(25))
+                            put("driverName", offer.driverName.take(100))
+                            put("updatedAt", FieldValue.serverTimestamp())
+                        },
+                        SetOptions.merge()
+                    ).await()
+            }
+
+            // Notify customer
             val notifRef = db.collection("notifications").document()
             notifRef.set(
                 mapOf(
@@ -948,16 +892,24 @@ class GolocalRepository(
         tripPin
     }
 
-    suspend fun cancelBooking(bookingId: String, reason: String): Result<Unit> = runCatching {
-        requireUserId()
+    suspend fun cancelBooking(
+        bookingId: String,
+        reason: String,
+        cancelledByRole: String = "customer",
+        cancellationCategory: String = ""
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
         val ref = db.collection("bookings").document(bookingId)
         try {
             ref.update(
-                mapOf(
-                    "status" to "cancelled",
-                    "cancellationReason" to reason.ifBlank { "Cancelled by customer" },
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+                buildMap<String, Any> {
+                    put("status", "cancelled")
+                    put("cancellationReason", reason.ifBlank { "Cancelled by $cancelledByRole" }.take(250))
+                    put("cancelledBy", uid)
+                    put("cancelledByRole", cancelledByRole)
+                    if (cancellationCategory.isNotBlank()) put("cancellationCategory", cancellationCategory.take(100))
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
             ).await()
         } catch (e: CancellationException) {
             throw e
@@ -967,7 +919,108 @@ class GolocalRepository(
         }
     }
 
-    suspend fun submitRating(booking: Booking, stars: Int, review: String): Result<Unit> = runCatching {
+    suspend fun cancelBookingByDriver(
+        booking: Booking,
+        reason: String,
+        category: String = ""
+    ): Result<Unit> = cancelBooking(
+        bookingId = booking.id,
+        reason = reason.ifBlank { "Cancelled by driver" },
+        cancelledByRole = "driver",
+        cancellationCategory = category
+    )
+
+    suspend fun submitCancellationAppeal(
+        bookingId: String,
+        appellantRole: String,
+        reason: String
+    ): Result<String> = runCatching {
+        val uid = requireUserId()
+        val trimmed = reason.trim()
+        require(trimmed.length >= 5) { "Please provide a clear explanation (at least 5 characters)." }
+        val ref = db.collection("cancellation_appeals").document()
+        try {
+            ref.set(
+                mapOf(
+                    "bookingId" to bookingId,
+                    "appellantId" to uid,
+                    "appellantRole" to appellantRole,
+                    "reason" to trimmed.take(400),
+                    "status" to "open",
+                    "adminNote" to "",
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, ref.path, auth)
+            throw e
+        }
+        ref.id
+    }
+
+    fun observeMyCancellationAppeals(uid: String): Flow<List<CancellationAppeal>> =
+        safeQueryFlow("cancellation_appeals", db.collection("cancellation_appeals").whereEqualTo("appellantId", uid)) {
+            it.toObject(CancellationAppeal::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    fun observeAdminCancellationAppeals(): Flow<List<CancellationAppeal>> =
+        safeQueryFlow("cancellation_appeals", db.collection("cancellation_appeals")) {
+            it.toObject(CancellationAppeal::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    suspend fun adminResolveCancellationAppeal(
+        appealId: String,
+        decision: String,
+        adminNote: String
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(decision in listOf("accepted", "rejected")) { "Appeal decision must be accepted or rejected." }
+        val ref = db.collection("cancellation_appeals").document(appealId)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    ref,
+                    mapOf(
+                        "status" to decision,
+                        "adminNote" to adminNote.trim().take(300),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "APPEAL_${decision.uppercase()}",
+                        "targetCollection" to "cancellation_appeals",
+                        "targetId" to appealId,
+                        "summary" to "Resolved cancellation appeal as $decision",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun submitRating(
+        booking: Booking,
+        stars: Int,
+        review: String,
+        driverBehaviorRating: Int = stars,
+        vehicleConditionRating: Int = stars,
+        punctualityRating: Int = stars,
+        safetyRating: Int = stars
+    ): Result<Unit> = runCatching {
         val uid = requireUserId()
         val bookingRef = db.collection("bookings").document(booking.id)
         val ratingRef = db.collection("ratings").document(booking.id)
@@ -980,6 +1033,10 @@ class GolocalRepository(
                         put("customerId", uid)
                         put("driverId", booking.assignedDriverId)
                         put("stars", stars.coerceIn(1, 5))
+                        put("driverBehaviorRating", driverBehaviorRating.coerceIn(1, 5))
+                        put("vehicleConditionRating", vehicleConditionRating.coerceIn(1, 5))
+                        put("punctualityRating", punctualityRating.coerceIn(1, 5))
+                        put("safetyRating", safetyRating.coerceIn(1, 5))
                         if (review.isNotBlank()) put("review", review.trim())
                         put("createdAt", FieldValue.serverTimestamp())
                     }
@@ -996,6 +1053,29 @@ class GolocalRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, ratingRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun submitCustomerFeedbackByDriver(
+        bookingId: String,
+        stars: Int,
+        note: String
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        val bookingRef = db.collection("bookings").document(bookingId)
+        try {
+            bookingRef.update(
+                buildMap<String, Any> {
+                    put("customerFeedbackRating", stars.coerceIn(1, 5))
+                    if (note.isNotBlank()) put("customerFeedbackNote", note.trim().take(250))
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, bookingRef.path, auth)
             throw e
         }
     }
@@ -1047,14 +1127,7 @@ class GolocalRepository(
         ref.id
     }
 
-    suspend fun submitComplaint(
-        bookingId: String,
-        category: String,
-        description: String,
-        lat: Double? = null,
-        lng: Double? = null,
-        locationLabel: String = ""
-    ): Result<String> = runCatching {
+    suspend fun submitComplaint(bookingId: String, category: String, description: String): Result<String> = runCatching {
         val uid = requireUserId()
         val ref = db.collection("complaints").document()
         val payload = buildMap<String, Any> {
@@ -1063,11 +1136,6 @@ class GolocalRepository(
             put("category", category)
             put("description", description.trim())
             put("status", "open")
-            if (lat != null && lng != null) {
-                put("lat", lat)
-                put("lng", lng)
-            }
-            if (locationLabel.isNotBlank()) put("locationLabel", locationLabel.trim().take(200))
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -1169,6 +1237,23 @@ class GolocalRepository(
             if (profile.permitInfo.isNotBlank()) put("permitInfo", profile.permitInfo.trim())
             if (profile.settlementUpiOrBank.isNotBlank()) put("settlementUpiOrBank", profile.settlementUpiOrBank.trim())
             if (profile.documentPhotoUri.isNotBlank()) put("documentPhotoUri", profile.documentPhotoUri)
+            if (profile.pucNumber.isNotBlank()) put("pucNumber", profile.pucNumber.trim().uppercase())
+            if (profile.fitnessCertificateNumber.isNotBlank()) {
+                put("fitnessCertificateNumber", profile.fitnessCertificateNumber.trim().uppercase())
+            }
+            if (profile.dlExpiryEpochDay > 0L) put("dlExpiryEpochDay", profile.dlExpiryEpochDay)
+            if (profile.rcExpiryEpochDay > 0L) put("rcExpiryEpochDay", profile.rcExpiryEpochDay)
+            if (profile.insuranceExpiryEpochDay > 0L) put("insuranceExpiryEpochDay", profile.insuranceExpiryEpochDay)
+            if (profile.permitExpiryEpochDay > 0L) put("permitExpiryEpochDay", profile.permitExpiryEpochDay)
+            if (profile.fitnessExpiryEpochDay > 0L) put("fitnessExpiryEpochDay", profile.fitnessExpiryEpochDay)
+            if (profile.pucExpiryEpochDay > 0L) put("pucExpiryEpochDay", profile.pucExpiryEpochDay)
+            if (profile.dlPhotoUri.isNotBlank()) put("dlPhotoUri", profile.dlPhotoUri)
+            if (profile.rcPhotoUri.isNotBlank()) put("rcPhotoUri", profile.rcPhotoUri)
+            if (profile.insurancePhotoUri.isNotBlank()) put("insurancePhotoUri", profile.insurancePhotoUri)
+            if (profile.permitPhotoUri.isNotBlank()) put("permitPhotoUri", profile.permitPhotoUri)
+            if (profile.fitnessPhotoUri.isNotBlank()) put("fitnessPhotoUri", profile.fitnessPhotoUri)
+            if (profile.pucPhotoUri.isNotBlank()) put("pucPhotoUri", profile.pucPhotoUri)
+            put("verificationVersion", profile.verificationVersion.coerceAtLeast(1L))
             put("verificationStatus", "pending")
             put("isOnline", false)
             put("ratingAvg", 5.0)
@@ -1505,6 +1590,19 @@ class GolocalRepository(
             it.toObject(AuditLog::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
         }
 
+    fun observeDriverVerificationHistory(driverId: String): Flow<List<DriverVerificationHistoryEntry>> =
+        safeQueryFlow(
+            "driver_verification_history",
+            db.collection("driver_verification_history").whereEqualTo("driverId", driverId)
+        ) {
+            it.toObject(DriverVerificationHistoryEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    fun observeAllVerificationHistory(): Flow<List<DriverVerificationHistoryEntry>> =
+        safeQueryFlow("driver_verification_history", db.collection("driver_verification_history")) {
+            it.toObject(DriverVerificationHistoryEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
     suspend fun adminVerifyOrUpdateDriver(
         driverId: String,
         newStatus: String,
@@ -1512,17 +1610,35 @@ class GolocalRepository(
     ): Result<Unit> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
+        val trimmedReason = reason.trim()
+        if (newStatus in listOf("rejected", "suspended")) {
+            require(trimmedReason.length >= 4) {
+                "A specific reason is mandatory when rejecting or suspending a driver."
+            }
+        }
         val privRef = db.collection("driver_profiles").document(driverId)
         val dirRef = db.collection("driver_directory").document(driverId)
         val auditRef = db.collection("audit_logs").document()
+        val historyRef = db.collection("driver_verification_history").document()
         val notifRef = db.collection("notifications").document()
+
+        val existingSnap = privRef.get().await()
+        val nextVersion = (existingSnap.getLong("verificationVersion") ?: 1L) + 1L
 
         try {
             db.runBatch { batch ->
                 val updates = buildMap<String, Any> {
                     put("verificationStatus", newStatus)
+                    put("verificationVersion", nextVersion)
+                    put("reviewedBy", actorEmail.ifBlank { actorUid })
                     if (newStatus != "verified") put("isOnline", false)
-                    if (reason.isNotBlank()) put("rejectionReason", reason)
+                    if (trimmedReason.isNotBlank()) {
+                        put("rejectionReason", trimmedReason)
+                        put("reviewNote", trimmedReason)
+                    } else if (newStatus == "verified") {
+                        put("rejectionReason", "")
+                        put("reviewNote", "Verified by GoLocal Admin")
+                    }
                     put("updatedAt", FieldValue.serverTimestamp())
                 }
                 batch.update(privRef, updates)
@@ -1535,6 +1651,18 @@ class GolocalRepository(
                     }
                 )
                 batch.set(
+                    historyRef,
+                    mapOf(
+                        "driverId" to driverId,
+                        "reviewerId" to actorUid,
+                        "reviewerEmail" to actorEmail,
+                        "decision" to newStatus,
+                        "reason" to trimmedReason.take(300),
+                        "verificationVersion" to nextVersion,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
                     auditRef,
                     mapOf(
                         "actorId" to actorUid,
@@ -1542,7 +1670,7 @@ class GolocalRepository(
                         "action" to "DRIVER_$newStatus".uppercase(),
                         "targetCollection" to "driver_profiles",
                         "targetId" to driverId,
-                        "summary" to "Driver status changed to $newStatus ${if (reason.isNotBlank()) "($reason)" else ""}".trim(),
+                        "summary" to "Driver status changed to $newStatus (v$nextVersion) ${if (trimmedReason.isNotBlank()) "($trimmedReason)" else ""}".trim(),
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -1551,7 +1679,11 @@ class GolocalRepository(
                     mapOf(
                         "userId" to driverId,
                         "title" to "Driver Verification Update",
-                        "body" to "Your GOLOCAL driver status is now: $newStatus",
+                        "body" to if (trimmedReason.isNotBlank()) {
+                            "Your GOLOCAL driver status is now $newStatus: $trimmedReason"
+                        } else {
+                            "Your GOLOCAL driver status is now: $newStatus"
+                        },
                         "type" to "driver_verification",
                         "read" to false,
                         "createdAt" to FieldValue.serverTimestamp()
@@ -1619,13 +1751,26 @@ class GolocalRepository(
     suspend fun adminAddServiceArea(area: ServiceArea): Result<String> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
-        val ref = if (area.id.isNotBlank()) db.collection("service_areas").document(area.id.trim()) else db.collection("service_areas").document()
+        val ref = db.collection("service_areas").document()
         val auditRef = db.collection("audit_logs").document()
         try {
             db.runBatch { batch ->
                 batch.set(
                     ref,
-                    buildServiceAreaMap(area, includeCreatedAt = true)
+                    buildMap<String, Any> {
+                        put("name", area.name.trim())
+                        if (area.nameBn.isNotBlank()) put("nameBn", area.nameBn.trim())
+                        put("district", area.district.trim())
+                        if (area.block.isNotBlank()) put("block", area.block.trim())
+                        put("zoneType", area.zoneType)
+                        put("lat", area.lat)
+                        put("lng", area.lng)
+                        put("isActive", area.isActive)
+                        put("parcelApproved", area.parcelApproved)
+                        put("operationalHours", area.operationalHours)
+                        put("createdAt", FieldValue.serverTimestamp())
+                        put("updatedAt", FieldValue.serverTimestamp())
+                    }
                 )
                 batch.set(
                     auditRef,
@@ -1647,74 +1792,6 @@ class GolocalRepository(
             throw e
         }
         ref.id
-    }
-
-    suspend fun adminUpdateServiceArea(area: ServiceArea): Result<Unit> = runCatching {
-        val actorUid = requireUserId()
-        val actorEmail = auth.currentUser?.email ?: ""
-        require(area.id.isNotBlank()) { "Service area ID is required for update." }
-        val ref = db.collection("service_areas").document(area.id)
-        val auditRef = db.collection("audit_logs").document()
-        try {
-            db.runBatch { batch ->
-                batch.update(ref, buildServiceAreaMap(area, includeCreatedAt = false))
-                batch.set(
-                    auditRef,
-                    mapOf(
-                        "actorId" to actorUid,
-                        "actorEmail" to actorEmail,
-                        "action" to "UPDATE_SERVICE_AREA",
-                        "targetCollection" to "service_areas",
-                        "targetId" to area.id,
-                        "summary" to "Updated zone ${area.name} (radius=${area.radiusKm}km, pickup=${area.pickupEnabled}, drop=${area.dropoffEnabled})",
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
-            throw e
-        }
-    }
-
-    suspend fun adminSeedBoraiDefaultZone(): Result<String> {
-        val defaultArea = com.example.domain.BoraiLaunchConfig.defaultZoneTemplate()
-        return adminAddServiceArea(defaultArea)
-    }
-
-    private fun buildServiceAreaMap(area: ServiceArea, includeCreatedAt: Boolean): Map<String, Any> = buildMap {
-        put("name", area.name.trim())
-        if (area.nameBn.isNotBlank()) put("nameBn", area.nameBn.trim())
-        put("district", area.district.trim())
-        if (area.block.isNotBlank()) put("block", area.block.trim())
-        if (area.pincode.isNotBlank()) put("pincode", area.pincode.trim().take(16))
-        put("zoneType", area.zoneType)
-        put("lat", area.lat)
-        put("lng", area.lng)
-        put("centerLat", if (area.centerLat != 0.0) area.centerLat else area.lat)
-        put("centerLng", if (area.centerLng != 0.0) area.centerLng else area.lng)
-        put("radiusKm", area.radiusKm.coerceIn(0.5, 500.0))
-        if (area.polygonPoints.isNotEmpty()) {
-            put("polygonPoints", area.polygonPoints.take(50).map { mapOf("lat" to it.lat, "lng" to it.lng) })
-        }
-        if (area.villages.isNotEmpty()) {
-            put("villages", area.villages.take(100))
-        }
-        put("pickupEnabled", area.pickupEnabled)
-        put("dropoffEnabled", area.dropoffEnabled)
-        if (area.supportedVehicleCategories.isNotEmpty()) {
-            put("supportedVehicleCategories", area.supportedVehicleCategories.take(10))
-        }
-        if (area.availabilityNote.isNotBlank()) {
-            put("availabilityNote", area.availabilityNote.trim().take(240))
-        }
-        put("isActive", area.isActive)
-        put("parcelApproved", area.parcelApproved)
-        put("operationalHours", area.operationalHours)
-        if (includeCreatedAt) put("createdAt", FieldValue.serverTimestamp())
-        put("updatedAt", FieldValue.serverTimestamp())
     }
 
     suspend fun adminUpdateComplaintStatus(complaintId: String, status: String, note: String): Result<Unit> = runCatching {
@@ -2161,193 +2238,5 @@ class GolocalRepository(
             handleFirestoreError(e, OperationType.DELETE, ref.path, auth)
             throw e
         }
-    }
-
-    // --- Role Separation (Owner Admin vs Operations Staff) & Live Ops Dispatch ---
-
-    suspend fun checkPortalRole(uid: String, email: String?): PortalRole {
-        if (checkIsAdmin(uid, email)) {
-            return PortalRole.OWNER_ADMIN
-        }
-        return try {
-            val doc = db.collection("operations_staff").document(uid).get().await()
-            val isActive = doc.getBoolean("isActive") ?: true
-            if (doc.exists() && isActive) PortalRole.OPERATIONS_STAFF else PortalRole.NONE
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            PortalRole.NONE
-        }
-    }
-
-    fun observeOperationsStaff(): Flow<List<OperationsStaffEntry>> =
-        safeQueryFlow("operations_staff", db.collection("operations_staff")) {
-            it.toObject(OperationsStaffEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-        }
-
-    fun observeAllDriverDirectoryEntries(): Flow<List<DriverDirectoryEntry>> =
-        safeQueryFlow("driver_directory", db.collection("driver_directory")) {
-            it.toObject(DriverDirectoryEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-        }
-
-    fun observeAllTripLocations(): Flow<List<TripLocation>> =
-        safeQueryFlow("trip_locations", db.collection("trip_locations")) {
-            it.toObject(TripLocation::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-        }
-
-    suspend fun adminGrantOperationsAccess(
-        targetUid: String,
-        displayName: String,
-        phoneOrEmail: String,
-        assignedDistrict: String = "Paschim Medinipur"
-    ): Result<Unit> = runCatching {
-        val actorUid = requireUserId()
-        val actorEmail = auth.currentUser?.email ?: ""
-        val cleanUid = targetUid.trim()
-        require(cleanUid.isNotBlank()) { "Operations staff Firebase UID is required." }
-        val ref = db.collection("operations_staff").document(cleanUid)
-        val auditRef = db.collection("audit_logs").document()
-        try {
-            db.runBatch { batch ->
-                batch.set(
-                    ref,
-                    buildMap<String, Any> {
-                        put("userId", cleanUid)
-                        put("displayName", displayName.trim().ifBlank { "GoLocal Ops Staff" }.take(100))
-                        if (phoneOrEmail.isNotBlank()) put("phoneOrEmail", phoneOrEmail.trim().take(150))
-                        put("isActive", true)
-                        put("assignedDistrict", assignedDistrict.trim().ifBlank { "Paschim Medinipur" }.take(80))
-                        put("createdAt", FieldValue.serverTimestamp())
-                        put("updatedAt", FieldValue.serverTimestamp())
-                    }
-                )
-                batch.set(
-                    auditRef,
-                    mapOf(
-                        "actorId" to actorUid,
-                        "actorEmail" to actorEmail,
-                        "action" to "GRANT_OPS_ACCESS",
-                        "targetCollection" to "operations_staff",
-                        "targetId" to cleanUid,
-                        "summary" to "Granted Operations Staff role to ${displayName.ifBlank { cleanUid }}",
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, ref.path, auth)
-            throw e
-        }
-    }
-
-    suspend fun adminRevokeOperationsAccess(targetUid: String): Result<Unit> = runCatching {
-        val actorUid = requireUserId()
-        val actorEmail = auth.currentUser?.email ?: ""
-        val cleanUid = targetUid.trim()
-        val ref = db.collection("operations_staff").document(cleanUid)
-        val auditRef = db.collection("audit_logs").document()
-        try {
-            db.runBatch { batch ->
-                batch.delete(ref)
-                batch.set(
-                    auditRef,
-                    mapOf(
-                        "actorId" to actorUid,
-                        "actorEmail" to actorEmail,
-                        "action" to "REVOKE_OPS_ACCESS",
-                        "targetCollection" to "operations_staff",
-                        "targetId" to cleanUid,
-                        "summary" to "Revoked Operations Staff role for $cleanUid",
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.DELETE, ref.path, auth)
-            throw e
-        }
-    }
-
-    suspend fun opsAssignDriverToBooking(
-        booking: Booking,
-        driver: DriverDirectoryEntry,
-        note: String = ""
-    ): Result<String> = runCatching {
-        val actorUid = requireUserId()
-        val actorEmail = auth.currentUser?.email ?: ""
-        require(booking.status == "searching" || booking.status == "assigned") {
-            "Only searching or pending-dispatch bookings can be assigned by Operations."
-        }
-        require(driver.verificationStatus == "verified") {
-            "Driver ${driver.displayName} must be KYC-verified before assignment."
-        }
-        val tripPin = booking.tripPin.ifBlank { Random.nextInt(1000, 9999).toString() }
-        val lockedFare = if (booking.agreedFareInr > 0.0) booking.agreedFareInr else booking.estimatedFareInr
-        val bookingRef = db.collection("bookings").document(booking.id)
-        val assignmentRef = db.collection("ride_assignments").document(booking.id)
-        val auditRef = db.collection("audit_logs").document()
-        val vehicleLabel = listOf(driver.vehicleCategory.uppercase(), driver.vehicleModel, driver.maskedPlate)
-            .filter { it.isNotBlank() }.joinToString(" • ")
-
-        try {
-            db.runTransaction { tx ->
-                val snap = tx.get(bookingRef)
-                val curStatus = snap.getString("status") ?: ""
-                if (curStatus !in listOf("searching", "assigned")) {
-                    throw IllegalStateException("Booking status ($curStatus) cannot be reassigned.")
-                }
-                tx.update(
-                    bookingRef,
-                    buildMap<String, Any> {
-                        put("status", "assigned")
-                        put("assignedDriverId", driver.driverId)
-                        put("assignedDriverName", driver.displayName)
-                        put("assignedVehicleLabel", vehicleLabel)
-                        put("agreedFareInr", lockedFare)
-                        put("tripPin", tripPin)
-                        put("assignedByOpsUid", actorUid)
-                        put("opsAssignmentNote", note.ifBlank { "Assigned by GoLocal Operations Desk" }.take(300))
-                        put("updatedAt", FieldValue.serverTimestamp())
-                    }
-                )
-                val existingAssign = tx.get(assignmentRef)
-                if (!existingAssign.exists()) {
-                    tx.set(
-                        assignmentRef,
-                        mapOf(
-                            "bookingId" to booking.id,
-                            "customerId" to booking.customerId,
-                            "driverId" to driver.driverId,
-                            "lockedFareInr" to lockedFare.coerceAtLeast(1.0),
-                            "status" to "active",
-                            "createdAt" to FieldValue.serverTimestamp(),
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    )
-                }
-                tx.set(
-                    auditRef,
-                    mapOf(
-                        "actorId" to actorUid,
-                        "actorEmail" to actorEmail,
-                        "action" to "OPS_ASSIGN_DRIVER",
-                        "targetCollection" to "bookings",
-                        "targetId" to booking.id,
-                        "summary" to "Ops assigned ${driver.displayName} to ${booking.pickupLabel} -> ${booking.destinationLabel}",
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            }.await()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, bookingRef.path, auth)
-            throw e
-        }
-        tripPin
     }
 }

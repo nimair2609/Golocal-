@@ -132,7 +132,7 @@ class AuthFlowUnitTest {
     }
 
     @Test
-    fun `all role auth screens expose Mobile OTP controls without Google Sign-In`() {
+    fun `all role auth screens support both Google Sign-In and Mobile OTP login`() {
         val activeMode = androidx.compose.runtime.mutableStateOf(ExperienceMode.CUSTOMER)
         composeTestRule.setContent {
             GolocalTheme {
@@ -143,9 +143,8 @@ class AuthFlowUnitTest {
             composeTestRule.runOnUiThread { activeMode.value = mode }
             composeTestRule.waitForIdle()
 
-            // Google Sign-In must not be rendered on any role screen
-            assertTrue(composeTestRule.onAllNodesWithTag("google_sign_in_button").fetchSemanticsNodes().isEmpty())
-            assertTrue(composeTestRule.onAllNodesWithText("Continue with Google").fetchSemanticsNodes().isEmpty())
+            // Verify Google Sign-In option is available alongside Mobile OTP
+            composeTestRule.onNodeWithTag("google_sign_in_button").performScrollTo().assertIsDisplayed()
 
             // Verify Mobile OTP form renders directly without extra toggle step
             composeTestRule.onNodeWithTag("country_code_selector").performScrollTo().assertIsDisplayed()
@@ -166,7 +165,7 @@ class AuthFlowUnitTest {
                 NewUserRegistrationScreen(
                     verifiedMobileNumber = "+919876543210",
                     isSubmitting = false,
-                    onSubmitRegistration = { name, email, emergency, terms ->
+                    onSubmitRegistration = { name, email, emergency, terms, _ ->
                         submittedFullName = name
                         submittedEmail = email
                         submittedEmergency = emergency
@@ -207,17 +206,19 @@ class AuthFlowUnitTest {
         var submittedEmail: String? = null
         var submittedEmergency: String? = null
         var submittedTerms = false
+        var submittedMobile: String? = null
 
         composeTestRule.setContent {
             GolocalTheme {
                 NewUserRegistrationScreen(
                     verifiedMobileNumber = "+919876543210",
                     isSubmitting = false,
-                    onSubmitRegistration = { name, email, emergency, terms ->
+                    onSubmitRegistration = { name, email, emergency, terms, mobile ->
                         submittedFullName = name
                         submittedEmail = email
                         submittedEmergency = emergency
                         submittedTerms = terms
+                        submittedMobile = mobile
                     },
                     onSignOut = {}
                 )
@@ -245,48 +246,7 @@ class AuthFlowUnitTest {
         assertEquals("Sohini Mukherjee", submittedFullName)
         assertEquals("sohini.invoices@example.com", submittedEmail)
         assertEquals("+919830011223", submittedEmergency)
+        assertEquals("+919876543210", submittedMobile)
         assertTrue(submittedTerms)
-    }
-
-    @Test
-    fun `NewUserRegistrationScreen collects contact mobile number when verified phone is blank`() {
-        var submittedMobile: String? = null
-        var submittedName: String? = null
-        var submittedEmail: String? = null
-        var submittedEmergency: String? = null
-
-        composeTestRule.setContent {
-            GolocalTheme {
-                NewUserRegistrationScreen(
-                    verifiedMobileNumber = "",
-                    prefilledName = "Priya Bose",
-                    prefilledEmail = "priya@example.com",
-                    isPhoneAuthVerified = false,
-                    isSubmitting = false,
-                    onSubmitRegistration = { _, _, _, _ -> },
-                    onSubmitRegistrationWithPhone = { name, mobile, email, emergency, _ ->
-                        submittedName = name
-                        submittedMobile = mobile
-                        submittedEmail = email
-                        submittedEmergency = emergency
-                    },
-                    onSignOut = {}
-                )
-            }
-        }
-        composeTestRule.waitForIdle()
-
-        assertTrue(composeTestRule.onAllNodesWithTag("reg_verified_mobile_display").fetchSemanticsNodes().isEmpty())
-        composeTestRule.onNodeWithTag("reg_mobile_input").performScrollTo().assertIsDisplayed()
-        composeTestRule.onNodeWithTag("reg_mobile_input").performTextInput("9876501234")
-        composeTestRule.onNodeWithTag("reg_emergency_phone_input").performScrollTo().performTextInput("9830011223")
-        composeTestRule.onNodeWithTag("reg_terms_checkbox").performScrollTo().performClick()
-        composeTestRule.onNodeWithTag("reg_submit_button").performScrollTo().performClick()
-        composeTestRule.waitForIdle()
-
-        assertEquals("Priya Bose", submittedName)
-        assertEquals("+919876501234", submittedMobile)
-        assertEquals("priya@example.com", submittedEmail)
-        assertEquals("+919830011223", submittedEmergency)
     }
 }

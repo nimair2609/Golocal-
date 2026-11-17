@@ -1,22 +1,22 @@
 package com.example.viewmodel
 
-import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.map.MapProviderConfig
-import com.example.data.map.OsrmRoutingAdapter
-import com.example.data.map.RouteResult
 import com.example.data.model.Booking
+import com.example.data.model.BookingCallContact
+import com.example.data.model.BookingChatMessage
+import com.example.data.model.CancellationAppeal
 import com.example.data.model.CommissionRecord
 import com.example.data.model.DriverProfile
 import com.example.data.model.DriverSettlement
+import com.example.data.model.DriverVerificationHistoryEntry
+import com.example.data.model.RatingRecord
+import com.example.data.model.RideOffer
 import com.example.data.model.UiState
+import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
-import com.example.data.tracking.LiveLocationTracker
-import com.example.data.tracking.LocationTelemetryState
-import com.example.data.tracking.RealtimeTrackingRepository
-import com.example.domain.BoraiLaunchConfig
+import com.example.domain.BookingChatValidator
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -28,7 +28,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -38,20 +37,11 @@ import kotlinx.coroutines.launch
 class DriverViewModel(
     private val repository: GolocalRepository,
     private val currentUserId: String,
-    private val realtimeTrackingRepository: RealtimeTrackingRepository? = null,
-    private var osrmAdapter: OsrmRoutingAdapter = OsrmRoutingAdapter()
+    private val communicationRepository: CommunicationRepository? = null
 ) : ViewModel() {
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
-
-    private val _telemetryState = MutableStateFlow(LocationTelemetryState())
-    val telemetryState: StateFlow<LocationTelemetryState> = _telemetryState.asStateFlow()
-
-    private var liveTracker: LiveLocationTracker? = null
-    private var activeTrackingRepo: RealtimeTrackingRepository? = realtimeTrackingRepository
-    private var lastTrackedBookingId: String = ""
-    private var lastFirestoreSyncMs: Long = 0L
 
     val driverProfileState: StateFlow<UiState<DriverProfile?>> = repository.observeMyDriverProfile(currentUserId)
         .map<DriverProfile?, UiState<DriverProfile?>> { UiState.Success(it) }
@@ -69,6 +59,19 @@ class DriverViewModel(
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
             initialValue = UiState.Loading
         )
+
+    val verificationHistory: StateFlow<List<DriverVerificationHistoryEntry>> =
+        repository.observeDriverVerificationHistory(currentUserId)
+            .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+            .catch { error ->
+                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                emit(emptyList())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = emptyList()
+            )
 
     private val _dismissedRequestIds = MutableStateFlow<Set<String>>(emptySet())
 
@@ -89,7 +92,7 @@ class DriverViewModel(
             initialValue = emptyList()
         )
 
-    val myOffers: StateFlow<List<com.example.data.model.RideOffer>> = repository.observeDriverOffers(currentUserId)
+    val myOffers: StateFlow<List<RideOffer>> = repository.observeDriverOffers(currentUserId)
         .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
@@ -101,7 +104,7 @@ class DriverViewModel(
             initialValue = emptyList()
         )
 
-    val myRatings: StateFlow<List<com.example.data.model.RatingRecord>> = repository.observeDriverRatings(currentUserId)
+    val myRatings: StateFlow<List<RatingRecord>> = repository.observeDriverRatings(currentUserId)
         .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
@@ -125,7 +128,7 @@ class DriverViewModel(
             initialValue = emptyList()
         )
 
-    val currentActiveBooking: StateFlow<Booking?> = assignedBookings
+    val activeAssignedBooking: StateFlow<Booking?> = assignedBookings
         .map { list ->
             list.firstOrNull { it.status in setOf("assigned", "arriving", "arrived", "in_progress") }
         }
@@ -135,47 +138,51 @@ class DriverViewModel(
             initialValue = null
         )
 
-    val activeTripRoute: StateFlow<RouteResult?> = combine(
-        currentActiveBooking,
-        _telemetryState
-    ) { booking, telemetry ->
-        booking to telemetry
-    }.flatMapLatest { (booking, telemetry) ->
-        if (booking == null) {
-            flowOf<RouteResult?>(null)
-        } else {
-            flow<RouteResult?> {
-                val startLat: Double
-                val startLng: Double
-                val endLat: Double
-                val endLng: Double
-                if (booking.status == "in_progress") {
-                    startLat = booking.pickupLat
-                    startLng = booking.pickupLng
-                    endLat = booking.destinationLat
-                    endLng = booking.destinationLng
-                } else {
-                    startLat = if (telemetry.hasRealFix) telemetry.lastLat else booking.pickupLat
-                    startLng = if (telemetry.hasRealFix) telemetry.lastLng else booking.pickupLng
-                    endLat = booking.pickupLat
-                    endLng = booking.pickupLng
-                }
-                emit(
-                    osrmAdapter.fetchRoute(
-                        startLat = startLat,
-                        startLng = startLng,
-                        endLat = endLat,
-                        endLng = endLng,
-                        vehicleCategory = booking.vehicleCategory
-                    )
-                )
+    val activeChatMessages: StateFlow<List<BookingChatMessage>> = activeAssignedBooking
+        .flatMapLatest { booking ->
+            val comm = communicationRepository
+            if (comm == null || booking == null || !BookingChatValidator.isChatReadAllowed(booking.status)) {
+                flowOf(emptyList())
+            } else {
+                comm.observeMessages(booking.id)
+                    .catch { error ->
+                        if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                        emit(emptyList())
+                    }
             }
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-        initialValue = null
-    )
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = emptyList()
+        )
+
+    val unreadChatCount: StateFlow<Int> = activeChatMessages
+        .map { msgs -> msgs.count { it.senderId != currentUserId && !it.readByDriver } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = 0
+        )
+
+    val activeCallContact: StateFlow<BookingCallContact?> = activeAssignedBooking
+        .flatMapLatest { booking ->
+            val comm = communicationRepository
+            if (comm == null || booking == null || !BookingChatValidator.isChatWriteAllowed(booking.status)) {
+                flowOf(null)
+            } else {
+                comm.observeParticipantCallContact(booking)
+                    .catch { error ->
+                        if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                        emit(null)
+                    }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null
+        )
 
     val commissions: StateFlow<List<CommissionRecord>> = repository.observeDriverCommissions(currentUserId)
         .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
@@ -201,132 +208,16 @@ class DriverViewModel(
             initialValue = emptyList()
         )
 
-    fun attachContext(context: Context) {
-        if (activeTrackingRepo == null) {
-            activeTrackingRepo = RealtimeTrackingRepository(context.applicationContext)
+    val myAppeals: StateFlow<List<CancellationAppeal>> = repository.observeMyCancellationAppeals(currentUserId)
+        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .catch { error ->
+            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
         }
-        if (liveTracker == null) {
-            osrmAdapter = OsrmRoutingAdapter(endpoints = MapProviderConfig.loadEndpoints(context))
-            val tracker = LiveLocationTracker(context.applicationContext)
-            liveTracker = tracker
-            viewModelScope.launch {
-                tracker.state.collect { st ->
-                    _telemetryState.value = st
-                }
-            }
-        } else {
-            liveTracker?.refreshPermissionStatus()
-        }
-    }
-
-    fun refreshLocationPermission(context: Context) {
-        attachContext(context)
-        liveTracker?.refreshPermissionStatus()
-        syncLocationSharingLifecycle(context)
-    }
-
-    fun syncLocationSharingLifecycle(context: Context) {
-        attachContext(context)
-        val tracker = liveTracker ?: return
-        val profile = (driverProfileState.value as? UiState.Success)?.data
-        val activeBooking = currentActiveBooking.value
-        val isAuthorized = profile?.verificationStatus == "verified" &&
-            (profile.isOnline || activeBooking != null)
-
-        if (!isAuthorized) {
-            val prevBooking = lastTrackedBookingId
-            lastTrackedBookingId = ""
-            if (tracker.state.value.isSharing || prevBooking.isNotBlank()) {
-                val lat = tracker.state.value.lastLat
-                val lng = tracker.state.value.lastLng
-                tracker.stopTracking("Location sharing stopped (offline / no active trip)")
-                viewModelScope.launch {
-                    if (prevBooking.isNotBlank()) {
-                        activeTrackingRepo?.stopTripSharing(prevBooking, lat, lng)
-                    } else {
-                        activeTrackingRepo?.stopDriverSharing(lat, lng)
-                    }
-                }
-            }
-            return
-        }
-
-        if (activeBooking != null) {
-            lastTrackedBookingId = activeBooking.id
-        } else if (lastTrackedBookingId.isNotBlank()) {
-            val completedId = lastTrackedBookingId
-            lastTrackedBookingId = ""
-            val lat = tracker.state.value.lastLat
-            val lng = tracker.state.value.lastLng
-            viewModelScope.launch {
-                activeTrackingRepo?.stopTripSharing(completedId, lat, lng)
-            }
-        }
-
-        tracker.startTracking(
-            highAccuracyTripMode = activeBooking != null,
-            onFix = { lat, lng, accuracy, speed, heading ->
-                val bookingNow = currentActiveBooking.value
-                viewModelScope.launch {
-                    activeTrackingRepo?.publishDriverLocation(
-                        lat = lat,
-                        lng = lng,
-                        activeBookingId = bookingNow?.id.orEmpty(),
-                        customerId = bookingNow?.customerId.orEmpty(),
-                        accuracyMeters = accuracy,
-                        speedMps = speed,
-                        headingDeg = heading,
-                        trackingStatus = "active"
-                    )
-                    // Throttled Firestore mirror (every >= 15s during active trip) for audit & cross-portal fallback
-                    val now = System.currentTimeMillis()
-                    if (bookingNow != null && (now - lastFirestoreSyncMs) >= 15_000L) {
-                        lastFirestoreSyncMs = now
-                        repository.advanceDriverTripState(
-                            booking = bookingNow,
-                            nextStatus = bookingNow.status,
-                            enteredPin = "",
-                            driverLat = lat,
-                            driverLng = lng
-                        )
-                    }
-                }
-            },
-            onSignalAvailabilityChanged = { available ->
-                if (!available) {
-                    val bookingNow = currentActiveBooking.value
-                    val snap = tracker.state.value
-                    viewModelScope.launch {
-                        activeTrackingRepo?.markGpsSignalLost(
-                            lastLat = snap.lastLat,
-                            lastLng = snap.lastLng,
-                            activeBookingId = bookingNow?.id.orEmpty(),
-                            customerId = bookingNow?.customerId.orEmpty()
-                        )
-                    }
-                }
-            }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = emptyList()
         )
-    }
-
-    fun stopAllTrackingForSignOut() {
-        val snap = _telemetryState.value
-        val prevBooking = lastTrackedBookingId
-        lastTrackedBookingId = ""
-        liveTracker?.stopTracking("Signed out")
-        viewModelScope.launch {
-            if (prevBooking.isNotBlank()) {
-                activeTrackingRepo?.stopTripSharing(prevBooking, snap.lastLat, snap.lastLng)
-            } else {
-                activeTrackingRepo?.stopDriverSharing(snap.lastLat, snap.lastLng)
-            }
-        }
-    }
-
-    override fun onCleared() {
-        liveTracker?.stopTracking("Session closed")
-        super.onCleared()
-    }
 
     fun rejectRequest(bookingId: String) {
         _dismissedRequestIds.value = _dismissedRequestIds.value + bookingId
@@ -355,7 +246,21 @@ class DriverViewModel(
         insuranceNumber: String,
         permitInfo: String,
         settlementUpi: String,
-        documentPhotoUri: String
+        documentPhotoUri: String,
+        pucNumber: String = "",
+        fitnessCertificateNumber: String = "",
+        dlExpiryEpochDay: Long = 0L,
+        rcExpiryEpochDay: Long = 0L,
+        insuranceExpiryEpochDay: Long = 0L,
+        permitExpiryEpochDay: Long = 0L,
+        fitnessExpiryEpochDay: Long = 0L,
+        pucExpiryEpochDay: Long = 0L,
+        dlPhotoUri: String = "",
+        rcPhotoUri: String = "",
+        insurancePhotoUri: String = "",
+        permitPhotoUri: String = "",
+        fitnessPhotoUri: String = "",
+        pucPhotoUri: String = ""
     ) {
         if (legalName.trim().length < 2 || phone.trim().length < 6 ||
             vehicleRegNumber.trim().length < 4 || drivingLicenceNumber.trim().length < 4
@@ -363,6 +268,7 @@ class DriverViewModel(
             _message.value = "Please fill in legal name, phone, vehicle registration, and driving licence."
             return
         }
+        val existingVersion = (driverProfileState.value as? UiState.Success)?.data?.verificationVersion ?: 0L
         viewModelScope.launch {
             repository.registerDriverApplication(
                 DriverProfile(
@@ -380,29 +286,36 @@ class DriverViewModel(
                     insuranceNumber = insuranceNumber,
                     permitInfo = permitInfo,
                     settlementUpiOrBank = settlementUpi,
-                    documentPhotoUri = documentPhotoUri
+                    documentPhotoUri = documentPhotoUri,
+                    pucNumber = pucNumber,
+                    fitnessCertificateNumber = fitnessCertificateNumber,
+                    dlExpiryEpochDay = dlExpiryEpochDay,
+                    rcExpiryEpochDay = rcExpiryEpochDay,
+                    insuranceExpiryEpochDay = insuranceExpiryEpochDay,
+                    permitExpiryEpochDay = permitExpiryEpochDay,
+                    fitnessExpiryEpochDay = fitnessExpiryEpochDay,
+                    pucExpiryEpochDay = pucExpiryEpochDay,
+                    dlPhotoUri = dlPhotoUri,
+                    rcPhotoUri = rcPhotoUri,
+                    insurancePhotoUri = insurancePhotoUri,
+                    permitPhotoUri = permitPhotoUri,
+                    fitnessPhotoUri = fitnessPhotoUri,
+                    pucPhotoUri = pucPhotoUri,
+                    verificationVersion = (existingVersion + 1L).coerceAtLeast(1L)
                 )
             ).onSuccess {
-                _message.value = "Application submitted. Admin verification is required before going online."
+                _message.value = "KYC submitted for verification. Admin review is required before going online."
             }.onFailure {
                 _message.value = it.localizedMessage ?: "Registration failed"
             }
         }
     }
 
-    fun toggleOnline(
-        online: Boolean,
-        lat: Double = _telemetryState.value.lastLat.takeIf { it != 0.0 } ?: BoraiLaunchConfig.DEFAULT_LAT,
-        lng: Double = _telemetryState.value.lastLng.takeIf { it != 0.0 } ?: BoraiLaunchConfig.DEFAULT_LNG
-    ) {
+    fun toggleOnline(online: Boolean, lat: Double, lng: Double) {
         viewModelScope.launch {
             repository.setDriverOnlineStatus(online, lat, lng)
                 .onSuccess {
-                    if (!online) {
-                        liveTracker?.stopTracking("Driver went offline")
-                        activeTrackingRepo?.stopDriverSharing(lat, lng)
-                    }
-                    _message.value = if (online) "You are now Online and visible to riders." else "You are now Offline and GPS sharing is stopped."
+                    _message.value = if (online) "You are now Online and visible to riders." else "You are now Offline."
                 }
                 .onFailure {
                     _message.value = it.localizedMessage ?: "Unable to update online status"
@@ -427,30 +340,73 @@ class DriverViewModel(
         }
     }
 
-    fun advanceTripState(
-        booking: Booking,
-        nextStatus: String,
-        enteredPin: String = "",
-        lat: Double = _telemetryState.value.lastLat,
-        lng: Double = _telemetryState.value.lastLng
-    ) {
+    fun advanceTripState(booking: Booking, nextStatus: String, enteredPin: String = "", lat: Double, lng: Double) {
+        val profile = (driverProfileState.value as? UiState.Success)?.data
         viewModelScope.launch {
             repository.advanceDriverTripState(booking, nextStatus, enteredPin, lat, lng)
                 .onSuccess {
-                    if (nextStatus == "completed" || nextStatus == "cancelled") {
-                        activeTrackingRepo?.stopTripSharing(booking.id, lat, lng)
+                    if (profile != null && communicationRepository != null && BookingChatValidator.isChatWriteAllowed(nextStatus)) {
+                        communicationRepository.publishParticipantContactForActiveTrip(
+                            booking = booking.copy(status = nextStatus),
+                            myPhone = profile.phone,
+                            myDisplayName = profile.legalName,
+                            isDriver = true
+                        )
                     }
                     _message.value = when (nextStatus) {
-                        "arriving" -> "Marked as heading to pickup. Live GPS shared with passenger."
+                        "arriving" -> "Marked as heading to pickup."
                         "arrived" -> "Marked as arrived at pickup. Ask passenger for Trip PIN."
-                        "in_progress" -> "Trip started! Live route telemetry active."
-                        "completed" -> "Trip completed, fare settled, and live trip sharing stopped."
+                        "in_progress" -> "Trip started!"
+                        "completed" -> "Trip completed & fare settlement recorded."
                         else -> "Status updated."
                     }
                 }
                 .onFailure {
                     _message.value = it.localizedMessage ?: "Failed to update trip state"
                 }
+        }
+    }
+
+    fun cancelActiveBookingByDriver(booking: Booking, category: String, reason: String) {
+        viewModelScope.launch {
+            repository.cancelBookingByDriver(booking, reason, category)
+                .onSuccess { _message.value = "Trip cancelled. Frequent cancellations are reviewed by Operations." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to cancel trip" }
+        }
+    }
+
+    fun submitCustomerFeedback(bookingId: String, stars: Int, note: String) {
+        viewModelScope.launch {
+            repository.submitCustomerFeedbackByDriver(bookingId, stars, note)
+                .onSuccess { _message.value = "Passenger feedback recorded." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to save feedback" }
+        }
+    }
+
+    fun sendChatMessage(booking: Booking, text: String) {
+        val comm = communicationRepository ?: return
+        val driverName = (driverProfileState.value as? UiState.Success)?.data?.legalName ?: "GoLocal Rider"
+        viewModelScope.launch {
+            comm.sendMessage(booking, "driver", driverName, text)
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to send message" }
+        }
+    }
+
+    fun markActiveChatRead() {
+        val comm = communicationRepository ?: return
+        val booking = activeAssignedBooking.value ?: return
+        val msgs = activeChatMessages.value
+        if (msgs.isEmpty()) return
+        viewModelScope.launch {
+            comm.markMessagesRead(booking.id, "driver", msgs)
+        }
+    }
+
+    fun submitAppeal(bookingId: String, reason: String) {
+        viewModelScope.launch {
+            repository.submitCancellationAppeal(bookingId, "driver", reason)
+                .onSuccess { _message.value = "Appeal submitted for Admin review." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to submit appeal" }
         }
     }
 

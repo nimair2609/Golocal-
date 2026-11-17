@@ -26,11 +26,11 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.R
 import com.example.authStateFlow
 import com.example.data.model.AppRole
-import com.example.data.model.PortalRole
 import com.example.data.repository.BusRepository
-import com.example.data.repository.GolocalGovernanceRepository
+import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
+import com.example.notifications.NotificationHelper
 import com.example.shared.ExperienceMode
 import com.example.shared.GolocalRoleSplashScreen
 import com.example.shared.RoleAuthScreen
@@ -42,8 +42,6 @@ import com.example.updater.AppUpdateDialogHost
 import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AdminViewModel
 import com.example.viewmodel.AppSessionViewModel
-import com.example.viewmodel.BusBookingViewModel
-import com.example.viewmodel.GovernanceViewModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -51,10 +49,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
 @Composable
-fun AdminAppRoot(
-    auth: FirebaseAuth = Firebase.auth,
-    initialDeepLinkModule: String? = null
-) {
+fun AdminAppRoot(auth: FirebaseAuth = Firebase.auth) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var splashDone by remember { mutableStateOf(false) }
 
@@ -80,8 +75,7 @@ fun AdminAppRoot(
                 displayName = user.displayName ?: "GoLocal Admin",
                 email = user.email ?: "",
                 phoneNumber = user.phoneNumber ?: "",
-                photoUrl = user.photoUrl?.toString() ?: "",
-                initialDeepLinkModule = initialDeepLinkModule
+                photoUrl = user.photoUrl?.toString() ?: ""
             )
         }
     }
@@ -94,8 +88,7 @@ fun AdminAuthenticatedShell(
     displayName: String,
     email: String,
     phoneNumber: String = "",
-    photoUrl: String,
-    initialDeepLinkModule: String? = null
+    photoUrl: String
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -122,12 +115,21 @@ fun AdminAuthenticatedShell(
 
     LaunchedEffect(currentUserId) {
         sessionViewModel.selectRole(AppRole.ADMIN)
-        com.example.notifications.FcmTokenSyncManager.syncCurrentToken(context, currentUserId, "admin")
     }
 
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
-    val portalRole by sessionViewModel.portalRole.collectAsStateWithLifecycle()
+    val isAdmin by sessionViewModel.isAdmin.collectAsStateWithLifecycle()
     val isAdminChecked by sessionViewModel.isAdminChecked.collectAsStateWithLifecycle()
+
+    LaunchedEffect(currentUserId, isAdmin) {
+        if (isAdmin) {
+            NotificationHelper.registerCurrentFcmToken(
+                context = context,
+                userId = currentUserId,
+                appVariant = "admin"
+            )
+        }
+    }
     val darkTheme = when (prefs.darkThemeMode) {
         "dark" -> true
         "light" -> false
@@ -142,7 +144,7 @@ fun AdminAuthenticatedShell(
             return@GolocalTheme
         }
 
-        if (portalRole == PortalRole.NONE) {
+        if (!isAdmin) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -162,14 +164,14 @@ fun AdminAuthenticatedShell(
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Icon(Icons.Filled.GppBad, contentDescription = null, tint = GolocalError, modifier = Modifier.size(48.dp))
-                        Text("Unauthorized Portal Account", style = MaterialTheme.typography.titleLarge)
+                        Text("Unauthorized Administrator Account", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            text = "Signed in as $adminIdentity, which does not hold GoLocal Owner Admin or Operations Staff privileges. All Portal routes are strictly restricted.",
+                            text = "Signed in as $adminIdentity, which does not hold GoLocal Admin privileges. All Admin Portal routes are strictly restricted.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Button(
-                            onClick = { signOut(scope) },
+                            onClick = { signOut(scope = scope, context = context) },
                             colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                             modifier = Modifier.fillMaxWidth().testTag("admin_unauthorized_signout")
                         ) {
@@ -191,80 +193,32 @@ fun AdminAuthenticatedShell(
                     val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
                     AdminViewModel(
                         repository = GolocalRepository(db),
-                        realtimeTrackingRepository = com.example.data.tracking.RealtimeTrackingRepository(app)
-                    )
-                }
-            }
-        )
-        LaunchedEffect(currentUserId, context) {
-            adminViewModel.attachContext(context)
-        }
-        val governanceViewModel: GovernanceViewModel = viewModel(
-            key = "admin_gov_$currentUserId",
-            factory = viewModelFactory {
-                initializer {
-                    val app = checkNotNull(this[APPLICATION_KEY])
-                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
-                    GovernanceViewModel(
-                        repository = GolocalGovernanceRepository(db),
-                        currentUserId = currentUserId,
-                        role = if (portalRole == PortalRole.OWNER_ADMIN) "admin" else "operations"
-                    )
-                }
-            }
-        )
-        val busViewModel: BusBookingViewModel = viewModel(
-            key = "admin_bus_$currentUserId",
-            factory = viewModelFactory {
-                initializer {
-                    val app = checkNotNull(this[APPLICATION_KEY])
-                    val db = FirebaseFirestore.getInstance(app.getString(R.string.firestore_database_id))
-                    BusBookingViewModel(
-                        repository = BusRepository(db),
-                        currentUserId = currentUserId,
-                        mode = "admin"
+                        communicationRepository = CommunicationRepository(db),
+                        busRepository = BusRepository(db)
                     )
                 }
             }
         )
 
         val adminMsg by adminViewModel.message.collectAsStateWithLifecycle()
-        val govMsg by governanceViewModel.message.collectAsStateWithLifecycle()
-        val busMsg by busViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
-        val defaultModule = if (portalRole == PortalRole.OWNER_ADMIN) "dashboard" else "ops_map"
-        var selectedModule by remember(portalRole) { mutableStateOf(defaultModule) }
-        val modules = remember(portalRole) {
-            if (portalRole == PortalRole.OWNER_ADMIN) {
-                listOf(
-                    Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
-                    Triple("ops_map", "Live Ops Map", Icons.Filled.Map),
-                    Triple("customers", "Customers", Icons.Filled.People),
-                    Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi),
-                    Triple("bookings", "Bookings & Fraud", Icons.Filled.DirectionsCar),
-                    Triple("bus_admin", "Bus & Tariffs", Icons.Filled.DirectionsBus),
-                    Triple("services", "Zones & Fares", Icons.Filled.Tune),
-                    Triple("payments", "Payments", Icons.Filled.AccountBalance),
-                    Triple("reports", "Reports", Icons.Filled.Analytics),
-                    Triple("settings", "Settings & RBAC", Icons.Filled.Settings)
-                )
-            } else {
-                listOf(
-                    Triple("ops_map", "Live Ops Map", Icons.Filled.Map),
-                    Triple("bookings", "Dispatch & Escalations", Icons.Filled.DirectionsCar)
-                )
-            }
-        }
-        LaunchedEffect(initialDeepLinkModule, modules) {
-            val validModules = modules.map { it.first }.toSet()
-            if (initialDeepLinkModule != null && initialDeepLinkModule in validModules) {
-                selectedModule = initialDeepLinkModule
-            }
-        }
+        var selectedModule by remember { mutableStateOf("dashboard") }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-        BackHandler(enabled = selectedModule != defaultModule) { selectedModule = defaultModule }
+        BackHandler(enabled = selectedModule != "dashboard") { selectedModule = "dashboard" }
+
+        val modules = listOf(
+            Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
+            Triple("customers", "Customers", Icons.Filled.People),
+            Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi),
+            Triple("bookings", "Bookings", Icons.Filled.DirectionsCar),
+            Triple("buses", "Private Bus", Icons.Filled.DirectionsBus),
+            Triple("services", "Services & Fares", Icons.Filled.Tune),
+            Triple("payments", "Payments", Icons.Filled.AccountBalance),
+            Triple("reports", "Reports", Icons.Filled.Analytics),
+            Triple("settings", "Settings", Icons.Filled.Settings)
+        )
 
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val wideScreen = maxWidth >= 700.dp
@@ -278,7 +232,7 @@ fun AdminAuthenticatedShell(
                         selectedModule = it
                         scope.launch { drawerState.close() }
                     },
-                    onSignOut = { signOut(scope, context = context) }
+                    onSignOut = { signOut(scope = scope, context = context) }
                 )
             }
 
@@ -290,18 +244,11 @@ fun AdminAuthenticatedShell(
                         }
                         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                             GolocalStatusMessageBanner(
-                                message = busMsg ?: govMsg ?: adminMsg,
-                                onDismiss = {
-                                    busViewModel.clearMessage()
-                                    governanceViewModel.clearMessage()
-                                    adminViewModel.clearMessage()
-                                },
+                                message = adminMsg,
+                                onDismiss = { adminViewModel.clearMessage() },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                             )
-                            com.example.notifications.NotificationPermissionBannerCard(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                            )
-                            AdminModuleContent(selectedModule, portalRole, adminViewModel, governanceViewModel, busViewModel)
+                            AdminModuleContent(selectedModule, adminViewModel)
                         }
                     }
                 }
@@ -345,18 +292,11 @@ fun AdminAuthenticatedShell(
                     ) { padding ->
                         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
                             GolocalStatusMessageBanner(
-                                message = busMsg ?: govMsg ?: adminMsg,
-                                onDismiss = {
-                                    busViewModel.clearMessage()
-                                    governanceViewModel.clearMessage()
-                                    adminViewModel.clearMessage()
-                                },
+                                message = adminMsg,
+                                onDismiss = { adminViewModel.clearMessage() },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
-                            com.example.notifications.NotificationPermissionBannerCard(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                            )
-                            AdminModuleContent(selectedModule, portalRole, adminViewModel, governanceViewModel, busViewModel)
+                            AdminModuleContent(selectedModule, adminViewModel)
                         }
                     }
                 }
@@ -449,21 +389,17 @@ private fun AdminSidebar(
 @Composable
 private fun AdminModuleContent(
     selectedModule: String,
-    portalRole: PortalRole,
-    adminViewModel: AdminViewModel,
-    governanceViewModel: GovernanceViewModel,
-    busViewModel: BusBookingViewModel
+    adminViewModel: AdminViewModel
 ) {
     when (selectedModule) {
-        "ops_map" -> AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "bookings" -> AdminBookingsModule(adminViewModel, governanceViewModel, portalRole)
-        "dashboard" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminDashboardModule(adminViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "customers" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminCustomersModule(adminViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "riders" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminRidersModule(adminViewModel, governanceViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "bus_admin" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminBusGovernanceModule(busViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "services" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminServicesModule(adminViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "payments" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminPaymentsModule(adminViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "reports" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminReportsModule(adminViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
-        "settings" -> if (portalRole == PortalRole.OWNER_ADMIN) AdminSettingsModule(adminViewModel) else AdminLiveOperationsMapModule(adminViewModel, portalRole)
+        "dashboard" -> AdminDashboardModule(adminViewModel)
+        "customers" -> AdminCustomersModule(adminViewModel)
+        "riders" -> AdminRidersModule(adminViewModel)
+        "bookings" -> AdminBookingsModule(adminViewModel)
+        "buses" -> AdminBusManagementModule(adminViewModel)
+        "services" -> AdminServicesModule(adminViewModel)
+        "payments" -> AdminPaymentsModule(adminViewModel)
+        "reports" -> AdminReportsModule(adminViewModel)
+        "settings" -> AdminSettingsModule(adminViewModel)
     }
 }

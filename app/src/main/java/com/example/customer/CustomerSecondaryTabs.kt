@@ -18,8 +18,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
+import com.example.data.model.BusBooking
 import com.example.data.model.UiState
+import com.example.shared.BookingChatModalSheet
+import com.example.shared.NotificationPermissionBannerCard
 import com.example.shared.SharedAppSettingsAndSignOutSection
+import com.example.shared.maskPhoneNumber
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalError
@@ -27,35 +31,35 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.CustomerViewModel
-import com.example.viewmodel.GovernanceViewModel
 
 @Composable
 fun CustomerBookingsHistoryTab(
     customerViewModel: CustomerViewModel,
-    governanceViewModel: GovernanceViewModel? = null,
-    onOpenBookRide: () -> Unit
+    onOpenBookRide: () -> Unit,
+    onOpenBusBooking: () -> Unit = {}
 ) {
     val bookingsState by customerViewModel.myBookingsState.collectAsStateWithLifecycle()
     val payments by customerViewModel.myPayments.collectAsStateWithLifecycle()
     val ratings by customerViewModel.myRatings.collectAsStateWithLifecycle()
-    val disputes = if (governanceViewModel != null) {
-        governanceViewModel.myDisputes.collectAsStateWithLifecycle().value
-    } else {
-        emptyList()
-    }
+    val appeals by customerViewModel.myAppeals.collectAsStateWithLifecycle()
+    val myBusBookings by customerViewModel.myBusBookings.collectAsStateWithLifecycle()
+    val archivedMessages by customerViewModel.archivedChatMessages.collectAsStateWithLifecycle()
 
     var subTab by remember { mutableIntStateOf(0) }
     var ratingTarget by remember { mutableStateOf<Booking?>(null) }
     var refundTarget by remember { mutableStateOf<Booking?>(null) }
     var complaintTarget by remember { mutableStateOf<Booking?>(null) }
+    var appealTarget by remember { mutableStateOf<Booking?>(null) }
+    var chatArchiveTarget by remember { mutableStateOf<Booking?>(null) }
+    var qrTicketDialog by remember { mutableStateOf<BusBooking?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Bookings & Transactions", style = MaterialTheme.typography.headlineSmall)
-        ScrollableTabRow(selectedTabIndex = subTab, edgePadding = 0.dp) {
-            Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("History") })
-            Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Payments") })
-            Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Ratings") })
-            Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Disputes (${disputes.size})") })
+        TabRow(selectedTabIndex = subTab) {
+            Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("Rides") })
+            Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Buses") })
+            Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Payments") })
+            Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Ratings") })
         }
 
         when (subTab) {
@@ -110,6 +114,36 @@ fun CustomerBookingsHistoryTab(
                                             TextButton(onClick = { complaintTarget = booking }) { Text("Dispute", color = GolocalError) }
                                         }
                                     }
+                                    if (booking.status == "cancelled") {
+                                        val existingAppeal = appeals.firstOrNull { it.bookingId == booking.id }
+                                        if (booking.cancellationReason.isNotBlank()) {
+                                            Text(
+                                                "Reason: ${booking.cancellationReason}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (existingAppeal != null) {
+                                            GolocalStatusBadge(
+                                                label = "APPEAL: ${existingAppeal.status.uppercase()}",
+                                                tone = if (existingAppeal.status == "approved") "success" else "warning"
+                                            )
+                                        } else {
+                                            OutlinedButton(onClick = { appealTarget = booking }) {
+                                                Text("Appeal Cancellation")
+                                            }
+                                        }
+                                    }
+                                    if (booking.assignedDriverId.isNotBlank() && booking.status in setOf("completed", "cancelled")) {
+                                        TextButton(
+                                            onClick = {
+                                                customerViewModel.openChatArchive(booking.id)
+                                                chatArchiveTarget = booking
+                                            }
+                                        ) {
+                                            Text("View Chat Archive")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -117,6 +151,26 @@ fun CustomerBookingsHistoryTab(
                 }
             }
             1 -> {
+                if (myBusBookings.isEmpty()) {
+                    GolocalEmptyState(
+                        title = "No Bus Tickets Yet",
+                        message = "Reserve seats on approved West Bengal private buses to see digital QR boarding passes.",
+                        actionLabel = "Browse Private Buses",
+                        onAction = onOpenBusBooking
+                    )
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(myBusBookings, key = { it.id }) { ticket ->
+                            BusTicketSummaryCard(
+                                ticket = ticket,
+                                onShowQr = { qrTicketDialog = ticket },
+                                onCancel = { customerViewModel.cancelBusBooking(ticket, "Cancelled by passenger") }
+                            )
+                        }
+                    }
+                }
+            }
+            2 -> {
                 if (payments.isEmpty()) {
                     GolocalEmptyState(
                         title = "No Payment Transactions",
@@ -150,7 +204,7 @@ fun CustomerBookingsHistoryTab(
                     }
                 }
             }
-            2 -> {
+            3 -> {
                 if (ratings.isEmpty()) {
                     GolocalEmptyState(
                         title = "No Ratings Submitted",
@@ -167,7 +221,7 @@ fun CustomerBookingsHistoryTab(
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                                     Text(
-                                        "Behaviour ${r.behaviourStars}★ • Cleanliness ${r.vehicleStars}★ • Punctuality ${r.punctualityStars}★ • Safety ${r.safetyStars}★",
+                                        "Behavior ${r.driverBehaviorRating}★ • Vehicle ${r.vehicleConditionRating}★ • Punctuality ${r.punctualityRating}★ • Safety ${r.safetyRating}★",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -178,49 +232,100 @@ fun CustomerBookingsHistoryTab(
                     }
                 }
             }
-            3 -> {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    CustomerDisputesListSection(disputes = disputes)
-                }
-            }
         }
     }
 
     ratingTarget?.let { target ->
-        if (governanceViewModel != null) {
-            MultiCriteriaRatingDialog(
-                booking = target,
-                onDismiss = { ratingTarget = null },
-                onSubmit = { b, v, p, s, review ->
-                    governanceViewModel.submitMultiCriteriaRating(target, b, v, p, s, review)
-                    ratingTarget = null
+        var stars by remember { mutableIntStateOf(5) }
+        var behaviorRating by remember { mutableIntStateOf(5) }
+        var vehicleRating by remember { mutableIntStateOf(5) }
+        var punctualityRating by remember { mutableIntStateOf(5) }
+        var safetyRating by remember { mutableIntStateOf(5) }
+        var review by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { ratingTarget = null },
+            title = { Text("Rate Your Rider") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Overall Rating", style = MaterialTheme.typography.labelMedium)
+                    StarSelectorRow(selected = stars, onSelect = { stars = it })
+                    Text("Driver Behavior", style = MaterialTheme.typography.labelMedium)
+                    StarSelectorRow(selected = behaviorRating, onSelect = { behaviorRating = it })
+                    Text("Vehicle Condition", style = MaterialTheme.typography.labelMedium)
+                    StarSelectorRow(selected = vehicleRating, onSelect = { vehicleRating = it })
+                    Text("Punctuality", style = MaterialTheme.typography.labelMedium)
+                    StarSelectorRow(selected = punctualityRating, onSelect = { punctualityRating = it })
+                    Text("Safety & Route Adherence", style = MaterialTheme.typography.labelMedium)
+                    StarSelectorRow(selected = safetyRating, onSelect = { safetyRating = it })
+                    OutlinedTextField(
+                        value = review,
+                        onValueChange = { review = it },
+                        label = { Text("Review comment (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
-            )
-        } else {
-            var stars by remember { mutableIntStateOf(5) }
-            var review by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { ratingTarget = null },
-                title = { Text("Rate Your Rider") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            (1..5).forEach { s ->
-                                FilterChip(selected = stars == s, onClick = { stars = s }, label = { Text("$s★") })
-                            }
-                        }
-                        OutlinedTextField(value = review, onValueChange = { review = it }, label = { Text("Review comment (optional)") }, modifier = Modifier.fillMaxWidth())
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        customerViewModel.submitRating(target, stars, review)
-                        ratingTarget = null
-                    }) { Text("Submit Rating") }
-                },
-                dismissButton = { TextButton(onClick = { ratingTarget = null }) { Text("Cancel") } }
-            )
-        }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    customerViewModel.submitRating(
+                        booking = target,
+                        stars = stars,
+                        review = review,
+                        driverBehaviorRating = behaviorRating,
+                        vehicleConditionRating = vehicleRating,
+                        punctualityRating = punctualityRating,
+                        safetyRating = safetyRating
+                    )
+                    ratingTarget = null
+                }) { Text("Submit Rating") }
+            },
+            dismissButton = { TextButton(onClick = { ratingTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    appealTarget?.let { target ->
+        var reason by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { appealTarget = null },
+            title = { Text("Appeal Cancellation") },
+            text = {
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Explain why this cancellation shouldn't count against you") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    customerViewModel.submitAppeal(target.id, reason)
+                    appealTarget = null
+                }) { Text("Submit Appeal") }
+            },
+            dismissButton = { TextButton(onClick = { appealTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    chatArchiveTarget?.let { booking ->
+        BookingChatModalSheet(
+            booking = booking,
+            viewerUid = booking.customerId,
+            viewerRole = "customer",
+            messages = archivedMessages,
+            onSendMessage = {},
+            onMarkRead = {},
+            onDismiss = {
+                customerViewModel.openChatArchive(null)
+                chatArchiveTarget = null
+            }
+        )
+    }
+
+    qrTicketDialog?.let { ticket ->
+        BusQrTicketDialog(ticket = ticket, onDismiss = { qrTicketDialog = null })
     }
 
     refundTarget?.let { target ->
@@ -243,37 +348,32 @@ fun CustomerBookingsHistoryTab(
     }
 
     complaintTarget?.let { target ->
-        if (governanceViewModel != null) {
-            SubmitDisputeDialog(
-                bookingId = target.id,
-                defaultRefundInr = if (target.agreedFareInr > 0) target.agreedFareInr else target.estimatedFareInr,
-                onDismiss = { complaintTarget = null },
-                onSubmit = { cat, desc, refund ->
-                    governanceViewModel.submitDispute(
-                        bookingId = target.id,
-                        targetUserId = target.assignedDriverId,
-                        category = cat,
-                        description = desc,
-                        requestedRefundInr = refund
-                    )
+        var desc by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { complaintTarget = null },
+            title = { Text("File Trip Complaint") },
+            text = {
+                OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Describe the issue") }, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                Button(onClick = {
+                    customerViewModel.submitComplaint(target.id, "customer_dispute", desc)
                     complaintTarget = null
-                }
-            )
-        } else {
-            var desc by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { complaintTarget = null },
-                title = { Text("File Trip Complaint") },
-                text = {
-                    OutlinedTextField(value = desc, onValueChange = { desc = it }, label = { Text("Describe the issue") }, modifier = Modifier.fillMaxWidth())
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        customerViewModel.submitComplaint(target.id, "customer_dispute", desc)
-                        complaintTarget = null
-                    }) { Text("Submit") }
-                },
-                dismissButton = { TextButton(onClick = { complaintTarget = null }) { Text("Cancel") } }
+                }) { Text("Submit") }
+            },
+            dismissButton = { TextButton(onClick = { complaintTarget = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+@Composable
+private fun StarSelectorRow(selected: Int, onSelect: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        (1..5).forEach { s ->
+            FilterChip(
+                selected = selected == s,
+                onClick = { onSelect(s) },
+                label = { Text("$s★") }
             )
         }
     }
@@ -282,7 +382,8 @@ fun CustomerBookingsHistoryTab(
 @Composable
 fun CustomerExploreTab(
     customerViewModel: CustomerViewModel,
-    onSelectServicePreset: (bookingType: String, category: String) -> Unit
+    onSelectServicePreset: (bookingType: String, category: String) -> Unit,
+    onOpenBusBooking: () -> Unit = {}
 ) {
     val drivers by customerViewModel.verifiedDrivers.collectAsStateWithLifecycle()
     val serviceAreas by customerViewModel.serviceAreas.collectAsStateWithLifecycle()
@@ -300,6 +401,32 @@ fun CustomerExploreTab(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("Explore Local Drivers & Services", style = MaterialTheme.typography.headlineSmall)
+
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp))
+                .clickable { onOpenBusBooking() }
+                .testTag("explore_private_bus_card")
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("West Bengal Private Bus Tickets", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Book verified operator seats with official tariff & QR boarding pass.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(Icons.Filled.DirectionsBus, contentDescription = "Private Bus", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
 
         // Local Service Shortcuts
         Text("West Bengal Local Mobility Services", style = MaterialTheme.typography.titleMedium)
@@ -392,10 +519,11 @@ fun CustomerNotificationsTab(sessionViewModel: AppSessionViewModel) {
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Notifications", style = MaterialTheme.typography.headlineSmall)
+        NotificationPermissionBannerCard()
         if (notifications.isEmpty()) {
             GolocalEmptyState(
                 title = "All Caught Up",
-                message = "Ride confirmations, Trip PINs, fare updates, and safety alerts appear here."
+                message = "Ride confirmations, Trip PINs, chat messages, and safety alerts appear here."
             )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -460,23 +588,34 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Personal & Invoice Info", style = MaterialTheme.typography.titleSmall)
 
+                var showFullMobile by remember { mutableStateOf(false) }
+                val displayedPhone = when {
+                    verifiedPhone.isBlank() -> "Verified via Mobile OTP"
+                    showFullMobile -> verifiedPhone
+                    else -> maskPhoneNumber(verifiedPhone)
+                }
                 OutlinedTextField(
-                    value = verifiedPhone.ifBlank { "No mobile number set" },
+                    value = displayedPhone,
                     onValueChange = {},
                     readOnly = true,
                     enabled = false,
-                    label = {
-                        Text(
-                            if (account?.mobileVerified == true) "Verified Mobile Number (Read-Only)"
-                            else "Contact Mobile Number (Link OTP Below)"
-                        )
-                    },
+                    label = { Text("Verified Mobile Number (Read-Only)") },
                     trailingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.VerifiedUser,
-                            contentDescription = if (account?.mobileVerified == true) "Verified" else "Unverified",
-                            tint = if (account?.mobileVerified == true) GolocalSuccess else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (verifiedPhone.isNotBlank()) {
+                                IconButton(onClick = { showFullMobile = !showFullMobile }) {
+                                    Icon(
+                                        imageVector = if (showFullMobile) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = if (showFullMobile) "Hide mobile number" else "Show mobile number"
+                                    )
+                                }
+                            }
+                            Icon(
+                                imageVector = Icons.Filled.VerifiedUser,
+                                contentDescription = "Verified",
+                                tint = GolocalSuccess
+                            )
+                        }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("profile_verified_mobile_readonly"),
                     singleLine = true
@@ -493,7 +632,7 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
                     value = invoiceEmail,
                     onValueChange = { invoiceEmail = it },
                     label = { Text("Email Address (for Ride Invoices) *") },
-                    supportingText = { Text("Used for GST invoice delivery.") },
+                    supportingText = { Text("Used strictly for GST invoice delivery — never for login.") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -520,12 +659,6 @@ fun CustomerProfileTab(sessionViewModel: AppSessionViewModel) {
                 }
             }
         }
-
-        com.example.ui.auth.AccountSecurityLinkingCard(
-            fallbackAccountPhone = verifiedPhone,
-            fallbackAccountEmail = invoiceEmail,
-            onPhoneLinked = { phone -> sessionViewModel.onAccountCredentialLinked(phone) }
-        )
 
         // Private Emergency Contact Card (Protected; never exposed to drivers or public profiles)
         Surface(

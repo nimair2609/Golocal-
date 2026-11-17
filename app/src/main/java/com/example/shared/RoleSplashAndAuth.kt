@@ -32,8 +32,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.repository.ClientPreferences
-import android.content.Context
-import androidx.compose.ui.platform.LocalContext
 import com.example.ui.auth.PhoneAuthController
 import com.example.ui.auth.PhoneAuthFormContent
 import com.example.ui.auth.PhoneAuthStep
@@ -48,6 +46,7 @@ import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AppSessionViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 enum class ExperienceMode(
     val appTitle: String,
@@ -60,26 +59,26 @@ enum class ExperienceMode(
     CUSTOMER(
         appTitle = "GoLocal",
         roleLabel = "Customer Mobility & Local Services",
-        headline = "Sign In with Mobile OTP",
-        description = "Book verified Totos, Autos, Bikes, Cabs, Railway Station, Airport & Private Bus rides across West Bengal using your verified mobile number.",
+        headline = "Welcome to GoLocal",
+        description = "Continue with Google or verify your mobile number via OTP to book local rides and private buses across West Bengal.",
         buttonLabel = "Send OTP",
-        footerNotice = "New users complete a one-time safety & invoice setup right after OTP sign-in."
+        footerNotice = "New users complete a quick profile & safety setup right after sign-in."
     ),
     RIDER(
         appTitle = "GoLocal Rider",
         roleLabel = "Verified Driver & Partner App",
-        headline = "Partner Login (Mobile OTP)",
-        description = "Sign in or register as a GoLocal driver or bus operator partner using Mobile OTP to accept rides, manage buses, and track earnings.",
+        headline = "Partner Sign-In",
+        description = "Sign in with Google or Mobile OTP to manage driver verification documents, trip requests, and daily earnings.",
         buttonLabel = "Send Partner OTP",
-        footerNotice = "Admin document verification (Driving Licence, RC, Insurance & Permits) is mandatory before going online."
+        footerNotice = "Admin KYC document verification (DL, RC, Insurance, Permit & PUC) is mandatory before going online."
     ),
     ADMIN(
         appTitle = "GoLocal Admin Portal",
         roleLabel = "Operations & Governance",
-        headline = "Portal Sign-In (Mobile OTP)",
-        description = "Restricted management portal for Owner Admin & Operations Staff to oversee live tracking, zones, KYC verification, disputes, SOS safety response, and audit logs.",
-        buttonLabel = "Send Portal OTP",
-        footerNotice = "Public self-registration is disabled. Access is enforced by Firebase Auth & Firestore /admins/{uid} or /operations_staff/{uid} rules."
+        headline = "Authorized Admin Sign-In",
+        description = "Sign in with your verified Google Workspace/Gmail admin account or allowlisted mobile OTP.",
+        buttonLabel = "Send Admin OTP",
+        footerNotice = "Public self-registration is disabled. Access is enforced by Firebase Auth & Firestore /admins/{uid} rules."
     )
 }
 
@@ -169,9 +168,10 @@ fun GolocalRoleSplashScreen(
 fun RoleAuthScreen(
     mode: ExperienceMode,
     onAuthSuccess: () -> Unit,
-    phoneControllerFactory: ((CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null
+    phoneControllerFactory: ((CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null,
+    googleGateway: com.example.ui.auth.GoogleSignInGateway = com.example.ui.auth.DefaultGoogleSignInGateway()
 ) {
-    val context = LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val controller = remember(mode) {
         phoneControllerFactory?.invoke(scope) { _ -> onAuthSuccess() }
@@ -184,7 +184,8 @@ fun RoleAuthScreen(
         onDispose { controller.dispose() }
     }
     val phoneState by controller.uiState.collectAsStateWithLifecycle()
-    var showPolicyDialog by remember { mutableStateOf(false) }
+    var isGoogleSigningIn by remember { mutableStateOf(false) }
+    var googleError by remember { mutableStateOf<String?>(null) }
 
     BackHandler(enabled = phoneState.step == PhoneAuthStep.VERIFY_OTP) {
         controller.changeMobileNumber()
@@ -208,16 +209,16 @@ fun RoleAuthScreen(
                 .widthIn(max = 540.dp)
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .padding(horizontal = 24.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     GoLocalLogoMark(
-                        modifier = Modifier.size(50.dp),
+                        modifier = Modifier.size(48.dp),
                         onDarkBackground = false
                     )
                     Column {
@@ -237,8 +238,8 @@ fun RoleAuthScreen(
 
                 if (mode != ExperienceMode.ADMIN) {
                     Card(
-                        shape = RoundedCornerShape(22.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                        shape = RoundedCornerShape(20.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
                         colors = CardDefaults.cardColors(containerColor = GolocalPureWhite)
                     ) {
                         Image(
@@ -246,7 +247,7 @@ fun RoleAuthScreen(
                             contentDescription = "${mode.appTitle} illustration",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(180.dp),
+                                .height(140.dp),
                             contentScale = ContentScale.Crop
                         )
                     }
@@ -340,6 +341,94 @@ fun RoleAuthScreen(
                         }
                     }
 
+                    if (phoneState.step == PhoneAuthStep.INPUT_PHONE) {
+                        if (!googleError.isNullOrBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("google_auth_error_banner")
+                            ) {
+                                Text(
+                                    text = googleError ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                if (isGoogleSigningIn || phoneState.isBusy) return@OutlinedButton
+                                googleError = null
+                                isGoogleSigningIn = true
+                                scope.launch {
+                                    when (
+                                        val outcome = com.example.ui.auth.GoogleAuthManager.onGoogleSignInClicked(
+                                            context = context,
+                                            gateway = googleGateway
+                                        )
+                                    ) {
+                                        is com.example.ui.auth.GoogleSignInOutcome.Success -> {
+                                            isGoogleSigningIn = false
+                                            onAuthSuccess()
+                                        }
+                                        is com.example.ui.auth.GoogleSignInOutcome.Cancelled -> {
+                                            isGoogleSigningIn = false
+                                            googleError = outcome.message
+                                        }
+                                        is com.example.ui.auth.GoogleSignInOutcome.Error -> {
+                                            isGoogleSigningIn = false
+                                            googleError = outcome.message
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !isGoogleSigningIn && !phoneState.isBusy,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .testTag("google_sign_in_button"),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            if (isGoogleSigningIn) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("Signing in with Google...")
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.AccountCircle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Continue with Google",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            HorizontalDivider(modifier = Modifier.weight(1f))
+                            Text(
+                                text = "OR MOBILE OTP",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            HorizontalDivider(modifier = Modifier.weight(1f))
+                        }
+                    }
+
                     PhoneAuthFormContent(
                         controller = controller,
                         state = phoneState,
@@ -352,44 +441,9 @@ fun RoleAuthScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    TextButton(
-                        onClick = { showPolicyDialog = true },
-                        modifier = Modifier
-                            .align(Alignment.Start)
-                            .heightIn(min = 48.dp)
-                            .testTag("auth_privacy_policy_button")
-                    ) {
-                        Icon(Icons.Filled.PrivacyTip, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Privacy Policy & Terms of Service")
-                    }
                 }
             }
         }
-    }
-
-    if (showPolicyDialog) {
-        AlertDialog(
-            onDismissRequest = { showPolicyDialog = false },
-            title = { Text("GoLocal Privacy Policy & Terms") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "GoLocal by NR Next processes your OTP-verified mobile number, pickup/drop locations, and emergency SOS contact strictly to deliver rides, bus tickets, invoices, and safety support.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        "We never sell personal data. Driver KYC documents are reviewed by verified Operations Administrators and are not shared publicly. You may delete your account and associated personal data anytime in Profile.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showPolicyDialog = false }) { Text("Understand") }
-            }
-        )
     }
 }
 
@@ -437,14 +491,11 @@ fun SharedAppSettingsAndSignOutSection(
     prefs: ClientPreferences,
     sessionViewModel: AppSessionViewModel,
     supportHelpLabel: String = "Help & Support",
-    onOpenSupportDialog: (() -> Unit)? = null,
-    onBeforeSignOut: (() -> Unit)? = null
+    onOpenSupportDialog: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var showPolicyDialog by remember { mutableStateOf(false) }
-    val isDeletingAccount by sessionViewModel.isDeletingAccount.collectAsStateWithLifecycle()
 
     Surface(
         shape = RoundedCornerShape(18.dp),
@@ -507,7 +558,7 @@ fun SharedAppSettingsAndSignOutSection(
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Support, Privacy & Account Deletion", style = MaterialTheme.typography.titleSmall)
+            Text("Support & Account Governance", style = MaterialTheme.typography.titleSmall)
             if (onOpenSupportDialog != null) {
                 OutlinedButton(
                     onClick = onOpenSupportDialog,
@@ -519,33 +570,13 @@ fun SharedAppSettingsAndSignOutSection(
                 }
             }
             OutlinedButton(
-                onClick = { showPolicyDialog = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("settings_privacy_policy_button")
-            ) {
-                Icon(Icons.Filled.PrivacyTip, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Privacy Policy & Data Safety")
-            }
-            OutlinedButton(
                 onClick = { showDeleteDialog = true },
-                enabled = !isDeletingAccount,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("delete_account_button")
+                modifier = Modifier.fillMaxWidth()
             ) {
-                if (isDeletingAccount) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                } else {
-                    Text("Delete Account & Data", color = GolocalError)
-                }
+                Text("Request Account Deletion", color = GolocalError)
             }
             Button(
-                onClick = {
-                    onBeforeSignOut?.invoke()
-                    signOut(scope, context = context)
-                },
+                onClick = { signOut(scope = scope, context = context) },
                 colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -559,54 +590,32 @@ fun SharedAppSettingsAndSignOutSection(
     }
 
     if (showDeleteDialog) {
-        var confirmText by remember { mutableStateOf("") }
+        var reason by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { if (!isDeletingAccount) showDeleteDialog = false },
-            title = { Text("Delete Account Permanently?") },
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Account Deletion Request") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "This permanently removes your profile, private SOS contact, FCM tokens, and Firebase Auth account. Financial tax/ride ledger records required by compliance retain anonymized references.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = confirmText,
-                        onValueChange = { confirmText = it },
-                        label = { Text("Type DELETE to confirm") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("confirm_delete_input")
-                    )
-                }
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Reason for deletion request") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             },
             confirmButton = {
                 Button(
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
-                    enabled = confirmText.trim().equals("DELETE", ignoreCase = true) && !isDeletingAccount,
                     onClick = {
-                        sessionViewModel.deleteMyAccountNow(context)
+                        sessionViewModel.submitSupportOrDeletion(
+                            "account_deletion",
+                            reason.ifBlank { "User requested account deletion" }
+                        )
                         showDeleteDialog = false
-                    },
-                    modifier = Modifier.testTag("confirm_delete_account_button")
-                ) { Text("Delete Permanently") }
+                    }
+                ) { Text("Submit Request") }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    if (showPolicyDialog) {
-        AlertDialog(
-            onDismissRequest = { showPolicyDialog = false },
-            title = { Text("Privacy Policy & Data Safety") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Data Collected: Verified mobile number, trip pickup/drop coordinates (only while using ride/dispatch), driver KYC docs (DL, RC, Insurance), private SOS contact.", style = MaterialTheme.typography.bodySmall)
-                    Text("Encryption & Deletion: All data is transmitted over TLS and stored in Firebase Firestore/Storage with role-based access rules. Tap 'Delete Account & Data' to permanently remove your personal profile and auth credentials.", style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = {
-                Button(onClick = { showPolicyDialog = false }) { Text("Close") }
             }
         )
     }

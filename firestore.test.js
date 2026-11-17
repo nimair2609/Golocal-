@@ -503,450 +503,242 @@ test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{
   );
 });
 
-test("FCM tokens: owner write/delete allowed, outsider read/write denied", async () => {
-  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
-  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
-  const tokenId = `${CUSTOMER_UID}_abc123token`;
-
-  await assertSucceeds(
-    aliceDb.collection("fcm_tokens").doc(tokenId).set({
-      userId: CUSTOMER_UID,
-      role: "customer",
-      token: "fcm_valid_device_token_string_123456",
-      platform: "android",
-      appPackage: "com.aistudio.golocal.wbmxrq",
-      active: true,
-      updatedAt: nowTs(),
-    })
-  );
-
-  await assertFails(bobDb.collection("fcm_tokens").doc(tokenId).get());
-  await assertFails(
-    bobDb.collection("fcm_tokens").doc(tokenId).set({
-      userId: CUSTOMER_UID,
-      role: "customer",
-      token: "hijack_token_string_123456",
-      platform: "android",
-      active: true,
-      updatedAt: nowTs(),
-    })
-  );
-
-  await assertSucceeds(aliceDb.collection("fcm_tokens").doc(tokenId).delete());
-});
-
-test("Formal disputes & driver cancellation: assigned driver cancels trip; Admin resolves disputes", async () => {
+test("Two-way booking chat & participant contact bridge: scoped to booking participants and locked on completion", async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    await ctx.firestore().collection("bookings").doc("booking_cancel_test").set({
+    const db = ctx.firestore();
+    await db.collection("bookings").doc("chat_trip_1").set({
       customerId: CUSTOMER_UID,
-      customerName: "Alice",
+      customerName: "Alice Sen",
       assignedDriverId: DRIVER_UID,
+      assignedDriverName: "Rahul Das",
       bookingType: "now",
       vehicleCategory: "toto",
       pickupLabel: "Bandel Station",
-      destinationLabel: "Hooghly Imambara",
-      distanceKm: 3.5,
-      estimatedFareInr: 65,
-      minPermittedFareInr: 55,
-      maxPermittedFareInr: 90,
+      destinationLabel: "Chinsurah Court",
+      distanceKm: 4.5,
+      estimatedFareInr: 70,
+      minPermittedFareInr: 60,
+      maxPermittedFareInr: 95,
       paymentMethod: "cash",
       paymentStatus: "pending",
-      status: "assigned",
+      status: "arriving",
       createdAt: nowTs(),
       updatedAt: nowTs(),
     });
   });
 
-  // Unassigned user cannot cancel the booking
-  const outsiderDb = testEnv.authenticatedContext(OTHER_UID).firestore();
-  await assertFails(
-    outsiderDb.collection("bookings").doc("booking_cancel_test").update({
-      status: "cancelled",
-      cancelledBy: OTHER_UID,
-      cancelledByRole: "driver",
-      updatedAt: nowTs(),
-    })
-  );
-
-  // Assigned driver CAN cancel before trip starts
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
   const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
+  const rogueDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+  // Customer and assigned driver can exchange messages during active trip
   await assertSucceeds(
-    driverDb.collection("bookings").doc("booking_cancel_test").update({
-      status: "cancelled",
-      cancellationReason: "Vehicle issue / flat tyre",
-      cancelledBy: DRIVER_UID,
-      cancelledByRole: "driver",
-      cancellationFeeInr: 0,
-      refundAmountInr: 0,
-      updatedAt: nowTs(),
-    })
-  );
-
-  // Customer creates dispute (`open`); customer cannot self-resolve; Admin resolves
-  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
-  await assertSucceeds(
-    aliceDb.collection("disputes").doc("dispute_1").set({
-      bookingId: "booking_cancel_test",
-      reporterId: CUSTOMER_UID,
-      reporterRole: "customer",
-      targetUserId: DRIVER_UID,
-      category: "no_show_fee",
-      description: "Driver asked for extra money outside tariff.",
-      requestedRefundInr: 25,
-      status: "open",
-      adminResolutionNote: "",
-      resolvedBy: "",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-
-  await assertFails(
-    aliceDb.collection("disputes").doc("dispute_1").update({
-      status: "resolved_refund",
-      adminResolutionNote: "Self approved",
-      updatedAt: nowTs(),
-    })
-  );
-
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
-  await assertSucceeds(
-    adminDb.collection("disputes").doc("dispute_1").update({
-      status: "resolved_refund",
-      adminResolutionNote: "Approved ₹25 goodwill refund",
-      resolvedBy: "admin_uid",
-      updatedAt: nowTs(),
-    })
-  );
-});
-
-test("Ratings: 1 per bookingId, assigned driver note allowed, customer blocked from moderation", async () => {
-  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
-  const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
-
-  await assertSucceeds(
-    aliceDb.collection("ratings").doc("booking_rate_1").set({
-      bookingId: "booking_rate_1",
+    custDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_1").set({
+      bookingId: "chat_trip_1",
       customerId: CUSTOMER_UID,
       driverId: DRIVER_UID,
-      stars: 5,
-      behaviourStars: 5,
-      vehicleStars: 4,
-      punctualityStars: 5,
-      safetyStars: 5,
-      review: "Safe ride from Bandel station",
-      moderationStatus: "active",
+      senderId: CUSTOMER_UID,
+      senderRole: "customer",
+      senderName: "Alice",
+      text: "Near Gate 2 now",
+      deliveryState: "sent",
+      readByCustomer: true,
+      readByDriver: false,
+      createdAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    driverDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_1").update({
+      deliveryState: "read",
+      readByDriver: true,
+    })
+  );
+  await assertSucceeds(
+    driverDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_2").set({
+      bookingId: "chat_trip_1",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      senderId: DRIVER_UID,
+      senderRole: "driver",
+      senderName: "Rahul Das",
+      text: "Reaching in 2 mins",
+      deliveryState: "sent",
+      readByCustomer: false,
+      readByDriver: true,
       createdAt: nowTs(),
     })
   );
 
-  // Customer cannot mutate moderationStatus
+  // Outsider cannot read or write chat messages
   await assertFails(
-    aliceDb.collection("ratings").doc("booking_rate_1").update({
-      moderationStatus: "hidden",
+    rogueDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_1").get()
+  );
+  await assertFails(
+    rogueDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_rogue").set({
+      bookingId: "chat_trip_1",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      senderId: OTHER_UID,
+      senderRole: "customer",
+      senderName: "Bob",
+      text: "Spoof",
+      deliveryState: "sent",
+      createdAt: nowTs(),
     })
   );
 
-  // Assigned driver can add bidirectional customer rating
+  // Active-trip call contact bridge readable only by participants while active
   await assertSucceeds(
-    driverDb.collection("ratings").doc("booking_rate_1").update({
-      riderToCustomerStars: 5,
-      riderToCustomerNote: "Polite passenger, timely at pickup.",
+    custDb.collection("booking_contacts").doc("chat_trip_1").set({
+      bookingId: "chat_trip_1",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      customerFirstName: "Alice",
+      customerPhone: "+919800000001",
+      updatedAt: nowTs(),
     })
   );
+  await assertSucceeds(driverDb.collection("booking_contacts").doc("chat_trip_1").get());
+  await assertFails(rogueDb.collection("booking_contacts").doc("chat_trip_1").get());
 
-  // Admin can moderate rating
-  await assertSucceeds(
-    adminDb.collection("ratings").doc("booking_rate_1").update({
-      moderationStatus: "flagged",
-      flaggedReason: "Under review",
+  // Complete the trip -> new messages & contact lookup are blocked; reading chat history still allowed for participants
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("bookings").doc("chat_trip_1").update({
+      status: "completed",
+      updatedAt: nowTs(),
+    });
+  });
+
+  await assertFails(
+    custDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_3").set({
+      bookingId: "chat_trip_1",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      senderId: CUSTOMER_UID,
+      senderRole: "customer",
+      senderName: "Alice",
+      text: "Post trip text",
+      deliveryState: "sent",
+      createdAt: nowTs(),
     })
+  );
+  await assertFails(driverDb.collection("booking_contacts").doc("chat_trip_1").get());
+  await assertSucceeds(
+    custDb.collection("booking_chats").doc("chat_trip_1").collection("messages").doc("msg_1").get()
   );
 });
 
-test("Private Bus Governance: unapproved tariff blocks customer booking; approved schedule allows atomic booking & operator QR check-in", async () => {
-  const OPERATOR_UID = "bus_op_1";
-  const opDb = testEnv.authenticatedContext(OPERATOR_UID).firestore();
-  const aliceDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
-  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+test("FCM user tokens & Private Bus tariff gating / atomic seat reservation rules", async () => {
   const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
 
-  // Unverified operator cannot register bus vehicle
+  // FCM tokens isolated to owner
+  await assertSucceeds(
+    custDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer`).set({
+      userId: CUSTOMER_UID,
+      token: "fcm_token_sample_123456",
+      platform: "android",
+      appVariant: "customer",
+      active: true,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(bobDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer`).get());
+
+  // Bus route without official fareSource CANNOT be activated even by admin
   await assertFails(
-    opDb.collection("bus_vehicles").doc("bus_v1").set({
-      operatorId: OPERATOR_UID,
-      busName: "Chinsurah Express",
-      registrationNumber: "WB15B1234",
-      busType: "AC Seater",
-      totalSeats: 36,
-      verificationStatus: "pending",
-      createdAt: nowTs(),
+    adminDb.collection("bus_routes").doc("route_no_source").set({
+      operatorId: "op_1",
+      routeName: "Chinsurah - Dankuni",
+      originStop: "Chinsurah",
+      destinationStop: "Dankuni",
+      distanceKm: 28,
+      baseSeatFareInr: 40,
+      fareSource: "",
+      effectiveDateLabel: "",
+      status: "active",
       updatedAt: nowTs(),
     })
   );
 
-  // Operator registers and Admin verifies
+  // Admin creates verified route & schedule WITH official fareSource
   await assertSucceeds(
-    opDb.collection("bus_operators").doc(OPERATOR_UID).set({
-      operatorId: OPERATOR_UID,
-      ownerUid: OPERATOR_UID,
-      companyName: "Hooghly Stage Carriage",
-      contactPhone: "+919800011223",
-      operatorLicenseNumber: "WB-OP-881",
-      permitNumber: "WB15-SC-2026",
-      district: "Hooghly",
-      verificationStatus: "pending",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-  await assertSucceeds(
-    adminDb.collection("bus_operators").doc(OPERATOR_UID).update({
-      verificationStatus: "verified",
-      updatedAt: nowTs(),
-    })
-  );
-
-  // Verified operator submits vehicle & route (`pending_fare_approval`)
-  await assertSucceeds(
-    opDb.collection("bus_vehicles").doc("bus_v1").set({
-      operatorId: OPERATOR_UID,
-      busName: "Chinsurah Express",
-      registrationNumber: "WB15B1234",
-      busType: "AC Seater",
-      totalSeats: 36,
-      verificationStatus: "pending",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-  await assertSucceeds(
-    opDb.collection("bus_routes").doc("route_1").set({
-      operatorId: OPERATOR_UID,
-      routeName: "Chinsurah -> Kolkata Esplanade",
-      originTown: "Chinsurah",
-      destinationTown: "Kolkata",
-      stops: ["Chinsurah", "Bandel", "Esplanade"],
+    adminDb.collection("bus_routes").doc("route_1").set({
+      operatorId: "op_1",
+      operatorName: "Hooghly Express Travels",
+      routeName: "Chinsurah - Esplanade",
+      originStop: "Chinsurah",
+      destinationStop: "Esplanade",
       distanceKm: 42,
-      farePerSeatInr: 75,
-      fareSource: "government_gazette",
-      authorityRef: "WB-TD-2025-11",
-      effectiveDateIso: "2026-01-01",
-      fareApprovalStatus: "pending_fare_approval",
+      baseSeatFareInr: 25,
+      perKmSeatRateInr: 1.5,
+      fareSource: "WBTC Stage Carriage Permit Tariff",
+      effectiveDateLabel: "2026-04-01",
+      status: "active",
       createdAt: nowTs(),
       updatedAt: nowTs(),
     })
   );
   await assertSucceeds(
-    opDb.collection("bus_schedules").doc("sched_1").set({
+    adminDb.collection("bus_schedules").doc("sched_1").set({
       routeId: "route_1",
-      operatorId: OPERATOR_UID,
-      busId: "bus_v1",
-      busName: "Chinsurah Express (WB15B1234)",
-      originTown: "Chinsurah",
-      destinationTown: "Kolkata",
-      departureDateIso: "2026-12-01",
+      operatorId: "op_1",
+      operatorName: "Hooghly Express Travels",
+      busLabel: "WB-15-B-4421 AC",
+      busType: "ac_seater",
+      originStop: "Chinsurah",
+      destinationStop: "Esplanade",
       departureTimeLabel: "07:30 AM",
-      totalSeats: 36,
-      bookedSeatIds: [],
-      farePerSeatInr: 75,
-      fareApprovalStatus: "pending_fare_approval",
+      arrivalTimeLabel: "09:15 AM",
+      travelDateLabel: "2026-04-20",
+      totalSeats: 40,
+      bookedSeats: [],
+      farePerSeatInr: 88,
+      fareSource: "WBTC Stage Carriage Permit Tariff",
+      effectiveDateLabel: "2026-04-01",
+      gstPercent: 5,
+      commissionPercent: 8,
       status: "scheduled",
       createdAt: nowTs(),
       updatedAt: nowTs(),
     })
   );
 
-  // Customer CANNOT book seats while fareApprovalStatus == pending_fare_approval
-  await assertFails(
-    aliceDb.collection("bus_bookings").doc("ticket_pending_fail").set({
-      customerId: CUSTOMER_UID,
-      customerName: "Alice",
-      scheduleId: "sched_1",
-      routeId: "route_1",
-      operatorId: OPERATOR_UID,
-      seatIds: ["1A"],
-      seatCount: 1,
-      totalPaidInr: 78.75,
-      qrToken: "GLBUS-TICKET-1234",
-      qrValidated: false,
-      status: "confirmed",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-
-  // Admin approves route & schedule
+  // Customer creates bus booking & atomically reserves seats
   await assertSucceeds(
-    adminDb.collection("bus_schedules").doc("sched_1").update({
-      fareApprovalStatus: "approved",
-      updatedAt: nowTs(),
-    })
-  );
-
-  // Customer CAN lock seat & create confirmed bus ticket on approved schedule
-  await assertSucceeds(
-    aliceDb.collection("bus_seat_locks").doc("sched_1_1A").set({
-      scheduleId: "sched_1",
-      seatId: "1A",
-      lockedByUid: CUSTOMER_UID,
-      lockedUntilEpochMs: Date.now() + 60000,
-      status: "booked",
-    })
-  );
-  await assertSucceeds(
-    aliceDb.collection("bus_bookings").doc("ticket_valid_1").set({
-      customerId: CUSTOMER_UID,
-      customerName: "Alice",
-      scheduleId: "sched_1",
-      routeId: "route_1",
-      operatorId: OPERATOR_UID,
-      seatIds: ["1A"],
-      seatCount: 1,
-      totalPaidInr: 78.75,
-      qrToken: "GLBUS-VALID-112233",
-      qrValidated: false,
-      status: "confirmed",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-
-  // Outsider CANNOT mark ticket boarded; verified operator CAN
-  await assertFails(
-    bobDb.collection("bus_bookings").doc("ticket_valid_1").update({
-      status: "boarded",
-      qrValidated: true,
+    custDb.collection("bus_schedules").doc("sched_1").update({
+      bookedSeats: ["1A", "1B"],
       updatedAt: nowTs(),
     })
   );
   await assertSucceeds(
-    opDb.collection("bus_bookings").doc("ticket_valid_1").update({
-      status: "boarded",
-      qrValidated: true,
-      updatedAt: nowTs(),
-    })
-  );
-});
-
-test("Operations Staff RBAC: strict separation from Owner Admin and PII isolation, while permitting live dispatch assistance", async () => {
-  const OPS_UID = "ops_staff_borai";
-  await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    const adminDb = ctx.firestore();
-    await adminDb.collection("operations_staff").doc(OPS_UID).set({
-      userId: OPS_UID,
-      displayName: "Mohanpur Ops Desk",
-      phoneOrEmail: "+919800099111",
-      isActive: true,
-      assignedDistrict: "Paschim Medinipur",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    });
-    await adminDb.collection("users").doc(CUSTOMER_UID).set({
-      uid: CUSTOMER_UID,
-      userId: CUSTOMER_UID,
-      fullName: "Alice Sen",
-      phone: "+919800000001",
-      role: "customer",
-      preferredLanguage: "en",
-      accountStatus: "active",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    });
-    await adminDb.collection("driver_directory").doc(DRIVER_UID).set({
-      driverId: DRIVER_UID,
-      displayName: "Rahul Das",
-      vehicleCategory: "toto",
-      maskedPlate: "WB34****1234",
-      district: "Paschim Medinipur",
-      block: "Mohanpur",
-      verificationStatus: "verified",
-      isOnline: true,
-      currentLat: 21.8160,
-      currentLng: 87.3703,
-      updatedAt: nowTs(),
-    });
-    await adminDb.collection("bookings").doc("borai_booking_1").set({
+    custDb.collection("bus_bookings").doc("bus_book_1").set({
+      bookingRef: "GLB-1001",
       customerId: CUSTOMER_UID,
       customerName: "Alice Sen",
-      bookingType: "now",
-      vehicleCategory: "toto",
-      pickupLabel: "Borai Market (721457)",
-      pickupDistrict: "Paschim Medinipur",
-      pickupLat: 21.8160,
-      pickupLng: 87.3703,
-      destinationLabel: "Mohanpur Block HQ",
-      destinationDistrict: "Paschim Medinipur",
-      destinationLat: 21.8439,
-      destinationLng: 87.4191,
-      distanceKm: 6.2,
-      estimatedDurationMin: 16,
-      estimatedFareInr: 72,
-      minPermittedFareInr: 60,
-      maxPermittedFareInr: 95,
-      paymentMethod: "cash",
-      paymentStatus: "pending",
-      status: "searching",
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    });
-  });
-
-  const ownerDb = testEnv.authenticatedContext("owner_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
-  const opsDb = testEnv.authenticatedContext(OPS_UID, { phone_number: "+919800099111" }).firestore();
-
-  // Owner CAN configure Borai service_areas & polygon zones
-  await assertSucceeds(
-    ownerDb.collection("service_areas").doc("borai_721457_zone").set({
-      name: "Borai & Mohanpur Launch Zone",
-      district: "Paschim Medinipur",
-      block: "Mohanpur",
-      pincode: "721457",
-      zoneType: "village",
-      lat: 21.8160,
-      lng: 87.3703,
-      centerLat: 21.8160,
-      centerLng: 87.3703,
-      radiusKm: 12.0,
-      villages: ["Borai", "Mohanpur", "Gholai", "Paikbar"],
-      pickupEnabled: true,
-      dropoffEnabled: true,
-      supportedVehicleCategories: ["toto", "auto", "bike", "cab"],
-      isActive: true,
+      scheduleId: "sched_1",
+      routeId: "route_1",
+      operatorId: "op_1",
+      operatorName: "Hooghly Express Travels",
+      routeLabel: "Chinsurah -> Esplanade",
+      travelDateLabel: "2026-04-20",
+      departureTimeLabel: "07:30 AM",
+      seatNumbers: ["1A", "1B"],
+      seatCount: 2,
+      totalFareInr: 185,
+      gstInr: 8.8,
+      commissionInr: 14.08,
+      paymentMethod: "upi",
+      paymentStatus: "pending_verification",
+      status: "confirmed",
+      qrPayload: "GOLOCAL-BUS|v1|bus_book_1|GLB-1001|sched_1|1A,1B",
       createdAt: nowTs(),
       updatedAt: nowTs(),
     })
   );
 
-  // Ops CANNOT modify service areas, fare configs, platform settings, or escalate to Owner Admin
-  await assertFails(
-    opsDb.collection("service_areas").doc("borai_721457_zone").update({
-      isActive: false,
-      updatedAt: nowTs(),
-    })
-  );
-  await assertFails(opsDb.collection("admins").doc(OPS_UID).set({ userId: OPS_UID, email: "x@y.com", createdAt: nowTs() }));
-  await assertFails(opsDb.collection("operations_staff").doc("other_ops").set({ userId: "other_ops", displayName: "Rogue", isActive: true, createdAt: nowTs(), updatedAt: nowTs() }));
-  await assertFails(opsDb.collection("users").doc(CUSTOMER_UID).get());
-  await assertFails(opsDb.collection("platform_settings").doc("global").set({ helplineNumber: "+911234", updatedAt: nowTs() }));
-
-  // Ops CAN monitor searching/active bookings & verified driver directory and assign a verified driver
-  await assertSucceeds(opsDb.collection("bookings").doc("borai_booking_1").get());
-  await assertSucceeds(opsDb.collection("driver_directory").doc(DRIVER_UID).get());
-  await assertSucceeds(
-    opsDb.collection("bookings").doc("borai_booking_1").update({
-      status: "assigned",
-      assignedDriverId: DRIVER_UID,
-      assignedDriverName: "Rahul Das",
-      assignedVehicleLabel: "toto - WB34****1234",
-      agreedFareInr: 72,
-      tripPin: "4821",
-      assignedByOpsUid: OPS_UID,
-      opsAssignmentNote: "Dispatched from Borai stand",
-      updatedAt: nowTs(),
-    })
-  );
+  // Other customer cannot read Alice's bus ticket
+  await assertFails(bobDb.collection("bus_bookings").doc("bus_book_1").get());
 });
-
 

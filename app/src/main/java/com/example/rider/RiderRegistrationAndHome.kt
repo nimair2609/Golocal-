@@ -24,39 +24,69 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.customer.StructuredCancellationDialog
-import com.example.data.map.RouteResult
 import com.example.data.model.Booking
+import com.example.data.model.BookingCallContact
 import com.example.data.model.CommissionRecord
 import com.example.data.model.DriverDirectoryEntry
-import com.example.data.model.DriverDocumentItem
 import com.example.data.model.DriverProfile
-import com.example.data.model.GeoPointDto
-import com.example.data.tracking.LocationTelemetryState
-import com.example.domain.BoraiLaunchConfig
+import com.example.domain.AbuseDetectionEngine
+import com.example.domain.ExpiryStatus
+import com.example.domain.KycDocType
+import com.example.domain.RequiredDocumentsCatalog
+import com.example.map.GolocalMapContainer
+import com.example.shared.BookingChatModalSheet
+import com.example.shared.BookingCommunicationBar
+import com.example.shared.CallPeerConfirmDialog
+import com.example.shared.NotificationPermissionBannerCard
 import com.example.ui.auth.signOut
 import com.example.ui.components.GoLocalLogoMark
-import com.example.ui.components.GoLocalOsmMapCard
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalMetricCard
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.*
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.DriverViewModel
-import com.example.viewmodel.GovernanceViewModel
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.TimeUnit
+
+private fun todayEpochDay(): Long =
+    TimeUnit.MILLISECONDS.toDays(System.currentTimeMillis())
+
+private fun formatEpochDay(epochDay: Long): String {
+    if (epochDay <= 0L) return ""
+    val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    return fmt.format(Date(TimeUnit.DAYS.toMillis(epochDay)))
+}
+
+private fun parseIsoDateToEpochDay(raw: String): Long {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return 0L
+    val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+        isLenient = false
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+    return runCatching {
+        val ms = fmt.parse(trimmed)?.time ?: return 0L
+        TimeUnit.MILLISECONDS.toDays(ms)
+    }.getOrDefault(0L)
+}
 
 @Composable
 fun RiderRegistrationAndVerificationGate(
     existingProfile: DriverProfile?,
     displayName: String,
     driverViewModel: DriverViewModel,
-    governanceViewModel: GovernanceViewModel? = null,
     verifiedPhone: String = ""
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val history by driverViewModel.verificationHistory.collectAsStateWithLifecycle()
 
     var showForm by remember(existingProfile?.verificationStatus) {
         mutableStateOf(existingProfile == null || existingProfile.verificationStatus == "rejected")
@@ -67,29 +97,54 @@ fun RiderRegistrationAndVerificationGate(
         mutableStateOf(existingProfile?.phone?.ifBlank { verifiedPhone } ?: verifiedPhone)
     }
     var address by remember(existingProfile?.address) { mutableStateOf(existingProfile?.address ?: "") }
-    var district by remember(existingProfile?.district) {
-        mutableStateOf(existingProfile?.district?.ifBlank { BoraiLaunchConfig.DEFAULT_DISTRICT } ?: BoraiLaunchConfig.DEFAULT_DISTRICT)
-    }
+    var district by remember(existingProfile?.district) { mutableStateOf(existingProfile?.district?.ifBlank { "Hooghly" } ?: "Hooghly") }
     var block by remember(existingProfile?.block) { mutableStateOf(existingProfile?.block ?: "") }
     var vehicleCategory by remember(existingProfile?.vehicleCategory) { mutableStateOf(existingProfile?.vehicleCategory ?: "toto") }
     var vehicleModel by remember(existingProfile?.vehicleModel) { mutableStateOf(existingProfile?.vehicleModel ?: "") }
     var vehicleReg by remember(existingProfile?.vehicleRegNumber) { mutableStateOf(existingProfile?.vehicleRegNumber ?: "") }
+    var licence by remember(existingProfile?.drivingLicenceNumber) { mutableStateOf(existingProfile?.drivingLicenceNumber ?: "") }
+    var rcNumber by remember(existingProfile?.rcNumber) { mutableStateOf(existingProfile?.rcNumber ?: "") }
+    var insurance by remember(existingProfile?.insuranceNumber) { mutableStateOf(existingProfile?.insuranceNumber ?: "") }
+    var permit by remember(existingProfile?.permitInfo) { mutableStateOf(existingProfile?.permitInfo ?: "") }
+    var fitness by remember(existingProfile?.fitnessCertificateNumber) { mutableStateOf(existingProfile?.fitnessCertificateNumber ?: "") }
+    var puc by remember(existingProfile?.pucNumber) { mutableStateOf(existingProfile?.pucNumber ?: "") }
     var upi by remember(existingProfile?.settlementUpiOrBank) { mutableStateOf(existingProfile?.settlementUpiOrBank ?: "") }
 
-    val seedDocs = remember(existingProfile?.driverId, existingProfile?.documents) {
-        val list = existingProfile?.documents?.toMutableList() ?: mutableListOf()
-        if (list.isEmpty() && existingProfile != null) {
-            if (existingProfile.drivingLicenceNumber.isNotBlank()) {
-                list.add(DriverDocumentItem(docType = "DRIVING_LICENCE", label = "Driving Licence", documentNumber = existingProfile.drivingLicenceNumber))
-            }
-            if (existingProfile.rcNumber.isNotBlank()) {
-                list.add(DriverDocumentItem(docType = "RC", label = "Vehicle RC", documentNumber = existingProfile.rcNumber))
-            }
-            if (existingProfile.insuranceNumber.isNotBlank()) {
-                list.add(DriverDocumentItem(docType = "INSURANCE", label = "Insurance", documentNumber = existingProfile.insuranceNumber))
+    var dlExpiryInput by remember(existingProfile?.dlExpiryEpochDay) { mutableStateOf(formatEpochDay(existingProfile?.dlExpiryEpochDay ?: 0L)) }
+    var rcExpiryInput by remember(existingProfile?.rcExpiryEpochDay) { mutableStateOf(formatEpochDay(existingProfile?.rcExpiryEpochDay ?: 0L)) }
+    var insuranceExpiryInput by remember(existingProfile?.insuranceExpiryEpochDay) { mutableStateOf(formatEpochDay(existingProfile?.insuranceExpiryEpochDay ?: 0L)) }
+    var permitExpiryInput by remember(existingProfile?.permitExpiryEpochDay) { mutableStateOf(formatEpochDay(existingProfile?.permitExpiryEpochDay ?: 0L)) }
+    var fitnessExpiryInput by remember(existingProfile?.fitnessExpiryEpochDay) { mutableStateOf(formatEpochDay(existingProfile?.fitnessExpiryEpochDay ?: 0L)) }
+    var pucExpiryInput by remember(existingProfile?.pucExpiryEpochDay) { mutableStateOf(formatEpochDay(existingProfile?.pucExpiryEpochDay ?: 0L)) }
+
+    var docUri by remember(existingProfile?.documentPhotoUri) { mutableStateOf(existingProfile?.documentPhotoUri ?: "") }
+    var dlPhotoUri by remember(existingProfile?.dlPhotoUri) { mutableStateOf(existingProfile?.dlPhotoUri ?: "") }
+    var rcPhotoUri by remember(existingProfile?.rcPhotoUri) { mutableStateOf(existingProfile?.rcPhotoUri ?: "") }
+    var insurancePhotoUri by remember(existingProfile?.insurancePhotoUri) { mutableStateOf(existingProfile?.insurancePhotoUri ?: "") }
+    var permitPhotoUri by remember(existingProfile?.permitPhotoUri) { mutableStateOf(existingProfile?.permitPhotoUri ?: "") }
+    var fitnessPhotoUri by remember(existingProfile?.fitnessPhotoUri) { mutableStateOf(existingProfile?.fitnessPhotoUri ?: "") }
+    var pucPhotoUri by remember(existingProfile?.pucPhotoUri) { mutableStateOf(existingProfile?.pucPhotoUri ?: "") }
+
+    var pendingPhotoTarget by remember { mutableStateOf("general") }
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            val s = uri.toString()
+            when (pendingPhotoTarget) {
+                "dl" -> dlPhotoUri = s
+                "rc" -> rcPhotoUri = s
+                "insurance" -> insurancePhotoUri = s
+                "permit" -> permitPhotoUri = s
+                "fitness" -> fitnessPhotoUri = s
+                "puc" -> pucPhotoUri = s
+                else -> docUri = s
             }
         }
-        SnapshotStateMapLike(list)
+    }
+
+    val requiredDocs = remember(vehicleCategory) {
+        RequiredDocumentsCatalog.requiredFor(vehicleCategory)
     }
 
     Column(
@@ -115,10 +170,7 @@ fun RiderRegistrationAndVerificationGate(
                     Text("GoLocal Rider", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            OutlinedButton(onClick = {
-                driverViewModel.stopAllTrackingForSignOut()
-                signOut(scope, context = context)
-            }) {
+            OutlinedButton(onClick = { signOut(scope = scope, context = context) }) {
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Sign Out")
@@ -141,7 +193,7 @@ fun RiderRegistrationAndVerificationGate(
                     )
                     Text(
                         text = when (status) {
-                            "pending" -> "Your Driving Licence, Vehicle RC, and Permit are awaiting GoLocal Admin verification. You cannot go online or send fare proposals until approved."
+                            "pending" -> "Your Driving Licence, Vehicle RC, Insurance, and Permit are awaiting GoLocal Admin verification. You cannot go online until approved."
                             "rejected" -> "Verification Rejected: ${existingProfile.rejectionReason.ifBlank { "Please verify document details and resubmit." }}"
                             else -> "Account Suspended: ${existingProfile.rejectionReason.ifBlank { "Contact GoLocal Partner Support." }}"
                         },
@@ -155,7 +207,27 @@ fun RiderRegistrationAndVerificationGate(
                     }
                 }
             }
-            VerificationTimelineCard(history = existingProfile.verificationHistory)
+        }
+
+        if (history.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Verification Audit Timeline", style = MaterialTheme.typography.titleSmall)
+                    history.take(4).forEach { entry ->
+                        Text(
+                            text = "${entry.decision.uppercase()} • ${entry.reason.ifBlank { "Reviewed by Operations" }}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
 
         if (showForm) {
@@ -167,7 +239,7 @@ fun RiderRegistrationAndVerificationGate(
                     .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Register Vehicle & Structured KYC", style = MaterialTheme.typography.titleMedium)
+                    Text("Register Vehicle & KYC Documents", style = MaterialTheme.typography.titleMedium)
                     OutlinedTextField(value = legalName, onValueChange = { legalName = it }, label = { Text("Full Legal Name *") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                     OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Mobile Number *") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                     OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Home / Stand Address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -189,42 +261,126 @@ fun RiderRegistrationAndVerificationGate(
 
                     OutlinedTextField(value = vehicleModel, onValueChange = { vehicleModel = it }, label = { Text("Vehicle Model (e.g. Bajaj RE / Mayuri Toto)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                     OutlinedTextField(value = vehicleReg, onValueChange = { vehicleReg = it }, label = { Text("Vehicle Registration Number *") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    OutlinedTextField(value = upi, onValueChange = { upi = it }, label = { Text("Settlement UPI ID or Bank Ref") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
 
-                    StructuredDocumentChecklistEditor(
-                        vehicleCategory = vehicleCategory,
-                        docsState = seedDocs,
-                        governanceViewModel = governanceViewModel
+                    Text(
+                        text = "Required for ${vehicleCategory.uppercase()}: ${requiredDocs.joinToString { it.displayLabel }}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
+
+                    KycDocumentInputRow(
+                        label = "Driving Licence No. *",
+                        docNum = licence,
+                        onDocNumChange = { licence = it },
+                        expiryIso = dlExpiryInput,
+                        onExpiryChange = { dlExpiryInput = it },
+                        hasPhoto = dlPhotoUri.isNotBlank() || docUri.isNotBlank(),
+                        onPickPhoto = {
+                            pendingPhotoTarget = "dl"
+                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    )
+                    KycDocumentInputRow(
+                        label = "Vehicle RC Number",
+                        docNum = rcNumber,
+                        onDocNumChange = { rcNumber = it },
+                        expiryIso = rcExpiryInput,
+                        onExpiryChange = { rcExpiryInput = it },
+                        hasPhoto = rcPhotoUri.isNotBlank(),
+                        onPickPhoto = {
+                            pendingPhotoTarget = "rc"
+                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    )
+                    KycDocumentInputRow(
+                        label = "Insurance Policy No.",
+                        docNum = insurance,
+                        onDocNumChange = { insurance = it },
+                        expiryIso = insuranceExpiryInput,
+                        onExpiryChange = { insuranceExpiryInput = it },
+                        hasPhoto = insurancePhotoUri.isNotBlank(),
+                        onPickPhoto = {
+                            pendingPhotoTarget = "insurance"
+                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    )
+                    if (KycDocType.FITNESS in requiredDocs) {
+                        KycDocumentInputRow(
+                            label = "Fitness Certificate No.",
+                            docNum = fitness,
+                            onDocNumChange = { fitness = it },
+                            expiryIso = fitnessExpiryInput,
+                            onExpiryChange = { fitnessExpiryInput = it },
+                            hasPhoto = fitnessPhotoUri.isNotBlank(),
+                            onPickPhoto = {
+                                pendingPhotoTarget = "fitness"
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                    }
+                    if (KycDocType.PERMIT in requiredDocs) {
+                        KycDocumentInputRow(
+                            label = "Commercial / Route Permit",
+                            docNum = permit,
+                            onDocNumChange = { permit = it },
+                            expiryIso = permitExpiryInput,
+                            onExpiryChange = { permitExpiryInput = it },
+                            hasPhoto = permitPhotoUri.isNotBlank(),
+                            onPickPhoto = {
+                                pendingPhotoTarget = "permit"
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                    }
+                    if (KycDocType.PUC in requiredDocs) {
+                        KycDocumentInputRow(
+                            label = "PUC Certificate No.",
+                            docNum = puc,
+                            onDocNumChange = { puc = it },
+                            expiryIso = pucExpiryInput,
+                            onExpiryChange = { pucExpiryInput = it },
+                            hasPhoto = pucPhotoUri.isNotBlank(),
+                            onPickPhoto = {
+                                pendingPhotoTarget = "puc"
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                    }
+
+                    OutlinedTextField(value = upi, onValueChange = { upi = it }, label = { Text("Settlement UPI ID or Bank Ref") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
 
                     Button(
                         onClick = {
-                            val docItems = seedDocs.buildListForCategory(vehicleCategory)
-                            if (governanceViewModel != null) {
-                                governanceViewModel.submitStructuredDriverKyc(
-                                    legalName = legalName,
-                                    phone = phone,
-                                    address = address,
-                                    district = district,
-                                    block = block,
-                                    vehicleCategory = vehicleCategory,
-                                    vehicleModel = vehicleModel,
-                                    vehicleRegNumber = vehicleReg,
-                                    settlementUpiOrBank = upi,
-                                    documents = docItems
-                                )
-                            } else {
-                                val dl = docItems.firstOrNull { it.docType == "DRIVING_LICENCE" }?.documentNumber.orEmpty()
-                                val rc = docItems.firstOrNull { it.docType == "RC" }?.documentNumber.orEmpty()
-                                val ins = docItems.firstOrNull { it.docType == "INSURANCE" }?.documentNumber.orEmpty()
-                                val perm = docItems.firstOrNull { it.docType == "COMMERCIAL_PERMIT" }?.documentNumber.orEmpty()
-                                val url = docItems.firstOrNull { it.storageUrl.isNotBlank() }?.storageUrl.orEmpty()
-                                driverViewModel.registerDriver(
-                                    legalName, phone, address, district, block,
-                                    vehicleCategory, vehicleModel, vehicleReg,
-                                    dl, rc, ins, perm, upi, url
-                                )
-                            }
+                            driverViewModel.registerDriver(
+                                legalName = legalName,
+                                phone = phone,
+                                address = address,
+                                district = district,
+                                block = block,
+                                vehicleCategory = vehicleCategory,
+                                vehicleModel = vehicleModel,
+                                vehicleRegNumber = vehicleReg,
+                                drivingLicenceNumber = licence,
+                                rcNumber = rcNumber,
+                                insuranceNumber = insurance,
+                                permitInfo = permit,
+                                settlementUpi = upi,
+                                documentPhotoUri = docUri.ifBlank { dlPhotoUri.ifBlank { rcPhotoUri } },
+                                pucNumber = puc,
+                                fitnessCertificateNumber = fitness,
+                                dlExpiryEpochDay = parseIsoDateToEpochDay(dlExpiryInput),
+                                rcExpiryEpochDay = parseIsoDateToEpochDay(rcExpiryInput),
+                                insuranceExpiryEpochDay = parseIsoDateToEpochDay(insuranceExpiryInput),
+                                permitExpiryEpochDay = parseIsoDateToEpochDay(permitExpiryInput),
+                                fitnessExpiryEpochDay = parseIsoDateToEpochDay(fitnessExpiryInput),
+                                pucExpiryEpochDay = parseIsoDateToEpochDay(pucExpiryInput),
+                                dlPhotoUri = dlPhotoUri,
+                                rcPhotoUri = rcPhotoUri,
+                                insurancePhotoUri = insurancePhotoUri,
+                                permitPhotoUri = permitPhotoUri,
+                                fitnessPhotoUri = fitnessPhotoUri,
+                                pucPhotoUri = pucPhotoUri
+                            )
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -241,6 +397,41 @@ fun RiderRegistrationAndVerificationGate(
 }
 
 @Composable
+private fun KycDocumentInputRow(
+    label: String,
+    docNum: String,
+    onDocNumChange: (String) -> Unit,
+    expiryIso: String,
+    onExpiryChange: (String) -> Unit,
+    hasPhoto: Boolean,
+    onPickPhoto: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = docNum,
+                onValueChange = onDocNumChange,
+                label = { Text(label) },
+                modifier = Modifier.weight(1.2f),
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = expiryIso,
+                onValueChange = { if (it.length <= 10) onExpiryChange(it) },
+                label = { Text("Expiry (YYYY-MM-DD)") },
+                modifier = Modifier.weight(1f),
+                singleLine = true
+            )
+        }
+        OutlinedButton(onClick = onPickPhoto, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(if (hasPhoto) "Document Photo Attached ✓" else "Attach Photo ($label)")
+        }
+    }
+}
+
+@Composable
 fun RiderHomeDashboardTab(
     profile: DriverProfile,
     assignedBookings: List<Booking>,
@@ -248,30 +439,26 @@ fun RiderHomeDashboardTab(
     commissions: List<CommissionRecord>,
     sessionViewModel: AppSessionViewModel,
     driverViewModel: DriverViewModel,
-    governanceViewModel: GovernanceViewModel? = null,
     lowNetworkMode: Boolean,
-    onOpenRequests: () -> Unit,
-    onOpenNotifications: () -> Unit = {}
+    onOpenRequests: () -> Unit
 ) {
     val context = LocalContext.current
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
-    val telemetry by driverViewModel.telemetryState.collectAsStateWithLifecycle()
-    val activeTripRoute by driverViewModel.activeTripRoute.collectAsStateWithLifecycle()
-
-    LaunchedEffect(context) {
-        driverViewModel.attachContext(context)
-    }
-
+    val activeChatMessages by driverViewModel.activeChatMessages.collectAsStateWithLifecycle()
+    val unreadChatCount by driverViewModel.unreadChatCount.collectAsStateWithLifecycle()
+    val activeCallContact by driverViewModel.activeCallContact.collectAsStateWithLifecycle()
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        driverViewModel.refreshLocationPermission(context)
         if (perms.values.any { it }) {
             sessionViewModel.detectDeviceLocation(context)
         }
     }
 
-    // Compute strict real today's rides & today's earnings from Firestore records
+    var showCallDialog by remember { mutableStateOf(false) }
+    var showChatSheet by remember { mutableStateOf(false) }
+    var showDriverCancelDialog by remember { mutableStateOf(false) }
+
     val startOfDaySec = remember {
         Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
@@ -290,8 +477,13 @@ fun RiderHomeDashboardTab(
         it.status in setOf("assigned", "arriving", "arrived", "in_progress")
     }
 
-    val currentLat = if (telemetry.hasRealFix) telemetry.lastLat else (gps.lat ?: BoraiLaunchConfig.DEFAULT_LAT)
-    val currentLng = if (telemetry.hasRealFix) telemetry.lastLng else (gps.lng ?: BoraiLaunchConfig.DEFAULT_LNG)
+    val expiryAlerts = remember(profile) {
+        RequiredDocumentsCatalog.assessDriverCompliance(profile, todayEpochDay())
+            .filter { it.status == ExpiryStatus.EXPIRED || it.status == ExpiryStatus.EXPIRING_SOON }
+    }
+
+    val currentLat = gps.lat ?: 22.9041
+    val currentLng = gps.lng ?: 88.3976
 
     Column(
         modifier = Modifier
@@ -326,7 +518,7 @@ fun RiderHomeDashboardTab(
             )
         }
 
-        // Online Status & Foreground Location Telemetry Banner
+        // Online Status Banner
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = if (profile.isOnline) GolocalSuccessContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -334,68 +526,48 @@ fun RiderHomeDashboardTab(
                 .fillMaxWidth()
                 .border(1.dp, if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
         ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (profile.isOnline) Icons.Filled.Check else Icons.Filled.Pause,
-                                contentDescription = null,
-                                tint = GolocalPureWhite
-                            )
-                        }
-                        Column {
-                            Text(
-                                text = if (profile.isOnline) "You're Online!" else "You're Offline",
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Text(
-                                text = telemetry.statusMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    TextButton(
-                        onClick = {
-                            locationLauncher.launch(
-                                arrayOf(
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                )
-                            )
-                        }
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.outline),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(if (!telemetry.permissionGranted) "Allow GPS" else if (gps.isDetecting) "GPS..." else "Sync GPS")
-                    }
-                }
-                if (!telemetry.permissionGranted || telemetry.isGpsSignalLost) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (!telemetry.permissionGranted) GolocalError.copy(alpha = 0.12f) else GolocalWarning.copy(alpha = 0.16f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = if (!telemetry.permissionGranted) {
-                                "Foreground Location Permission required to broadcast live coordinates while Online or on an active trip."
-                            } else {
-                                "GPS signal interrupted — last verified location preserved safely until satellite lock returns."
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (!telemetry.permissionGranted) GolocalError else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        Icon(
+                            imageVector = if (profile.isOnline) Icons.Filled.Check else Icons.Filled.Pause,
+                            contentDescription = null,
+                            tint = GolocalPureWhite
                         )
                     }
+                    Column {
+                        Text(
+                            text = if (profile.isOnline) "You're Online!" else "You're Offline",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (profile.isOnline) "Ready to receive local ride requests" else "Toggle switch to start receiving rides",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        locationLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    }
+                ) {
+                    Text(if (gps.isDetecting) "GPS..." else "Sync GPS")
                 }
             }
         }
@@ -435,42 +607,34 @@ fun RiderHomeDashboardTab(
             )
         }
 
-        if (profile.expiryAlertLevel in setOf("expiring_soon", "expired")) {
+        NotificationPermissionBannerCard()
+
+        if (expiryAlerts.isNotEmpty()) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = GolocalError.copy(alpha = 0.12f),
+                color = GolocalErrorContainer,
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(1.dp, GolocalError, RoundedCornerShape(16.dp))
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.Warning, contentDescription = null, tint = GolocalError)
-                    Text(
-                        text = if (profile.expiryAlertLevel == "expired") {
-                            "Document expired (${profile.earliestExpiryIso}). Renew KYC documents promptly to avoid service suspension."
-                        } else {
-                            "Document expiring soon (${profile.earliestExpiryIso}). Upload renewed copy before expiry."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = GolocalError
-                    )
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Document Expiry Notice", style = MaterialTheme.typography.titleSmall, color = GolocalError)
+                    expiryAlerts.forEach { item ->
+                        Text(
+                            text = "${item.docType.displayLabel}: ${item.status.name.replace('_', ' ')}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
             }
         }
 
         // Active Trip Execution Card (if driver has an assigned trip)
         if (activeTrip != null) {
-            var showDriverCancelDialog by remember { mutableStateOf(false) }
             ActiveRiderTripExecutionCard(
                 booking = activeTrip,
                 currentLat = currentLat,
                 currentLng = currentLng,
-                telemetry = telemetry,
-                route = activeTripRoute,
                 onlineSelf = DriverDirectoryEntry(
                     driverId = profile.driverId,
                     displayName = profile.legalName,
@@ -479,35 +643,26 @@ fun RiderHomeDashboardTab(
                     currentLng = currentLng
                 ),
                 lowNetworkMode = lowNetworkMode,
+                callContact = activeCallContact,
+                unreadChatCount = unreadChatCount,
+                onCallCustomer = { showCallDialog = true },
+                onChatCustomer = {
+                    driverViewModel.markActiveChatRead()
+                    showChatSheet = true
+                },
+                onCancelTrip = { showDriverCancelDialog = true },
                 onAdvanceState = { next, pin ->
                     driverViewModel.advanceTripState(activeTrip, next, pin, currentLat, currentLng)
-                },
-                onRequestCancel = if (governanceViewModel != null) {
-                    { showDriverCancelDialog = true }
-                } else null
+                }
             )
-            if (showDriverCancelDialog && governanceViewModel != null) {
-                StructuredCancellationDialog(
-                    booking = activeTrip,
-                    actorRole = "driver",
-                    fareConfig = null,
-                    onDismiss = { showDriverCancelDialog = false },
-                    onConfirmCancel = { code, label ->
-                        governanceViewModel.cancelBookingStructured(
-                            bookingId = activeTrip.id,
-                            actorRole = "driver",
-                            reasonCode = code,
-                            reasonLabel = label
-                        )
-                        showDriverCancelDialog = false
-                    }
-                )
-            }
         } else {
-            GoLocalOsmMapCard(
-                centerLat = currentLat,
-                centerLng = currentLng,
-                driverLivePoint = GeoPointDto(currentLat, currentLng),
+            GolocalMapContainer(
+                pickupLat = currentLat,
+                pickupLng = currentLng,
+                pickupLabel = gps.label.ifBlank { "${profile.district} Stand" },
+                destLat = currentLat + 0.015,
+                destLng = currentLng + 0.015,
+                destLabel = "Nearby Zone",
                 onlineDrivers = if (profile.isOnline) listOf(
                     DriverDirectoryEntry(
                         driverId = profile.driverId,
@@ -517,9 +672,9 @@ fun RiderHomeDashboardTab(
                         currentLng = currentLng
                     )
                 ) else emptyList(),
+                liveTripLocation = null,
                 lowNetworkMode = lowNetworkMode,
-                statusBadgeText = if (profile.isOnline) "Partner Duty GPS Active" else "Partner Stand Map (OSM)",
-                height = if (lowNetworkMode) 150.dp else 210.dp
+                mapHeight = 225.dp
             )
 
             Button(
@@ -565,6 +720,72 @@ fun RiderHomeDashboardTab(
                 }
             }
         }
+        if (showCallDialog && activeTrip != null && activeCallContact != null && activeCallContact!!.customerPhone.isNotBlank()) {
+            CallPeerConfirmDialog(
+                peerLabel = activeTrip.customerName.trim().substringBefore(" ").ifBlank { "Passenger" },
+                phoneNumber = activeCallContact!!.customerPhone,
+                onDismiss = { showCallDialog = false }
+            )
+        }
+
+        if (showChatSheet && activeTrip != null) {
+            BookingChatModalSheet(
+                booking = activeTrip,
+                viewerUid = profile.driverId,
+                viewerRole = "driver",
+                messages = activeChatMessages,
+                onSendMessage = { txt -> driverViewModel.sendChatMessage(activeTrip, txt) },
+                onMarkRead = { driverViewModel.markActiveChatRead() },
+                onDismiss = { showChatSheet = false }
+            )
+        }
+
+        if (showDriverCancelDialog && activeTrip != null) {
+            var category by remember { mutableStateOf(AbuseDetectionEngine.driverCancellationReasons.first()) }
+            var note by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showDriverCancelDialog = false },
+                title = { Text("Cancel Assigned Trip?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "Frequent post-assignment cancellations affect reliability standing.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        AbuseDetectionEngine.driverCancellationReasons.forEach { reasonOpt ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                RadioButton(selected = category == reasonOpt, onClick = { category = reasonOpt })
+                                Text(reasonOpt, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        OutlinedTextField(
+                            value = note,
+                            onValueChange = { note = it },
+                            label = { Text("Note (optional)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                        onClick = {
+                            val combined = if (note.isBlank()) category else "$category: ${note.trim()}"
+                            driverViewModel.cancelActiveBookingByDriver(activeTrip, category, combined)
+                            showDriverCancelDialog = false
+                        },
+                        modifier = Modifier.testTag("confirm_driver_cancel_button")
+                    ) { Text("Confirm Cancel") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDriverCancelDialog = false }) { Text("Keep Trip") }
+                }
+            )
+        }
     }
 }
 
@@ -573,12 +794,14 @@ private fun ActiveRiderTripExecutionCard(
     booking: Booking,
     currentLat: Double,
     currentLng: Double,
-    telemetry: LocationTelemetryState,
-    route: RouteResult?,
     onlineSelf: DriverDirectoryEntry,
     lowNetworkMode: Boolean,
-    onAdvanceState: (nextStatus: String, pin: String) -> Unit,
-    onRequestCancel: (() -> Unit)? = null
+    callContact: BookingCallContact?,
+    unreadChatCount: Int,
+    onCallCustomer: () -> Unit,
+    onChatCustomer: () -> Unit,
+    onCancelTrip: () -> Unit,
+    onAdvanceState: (nextStatus: String, pin: String) -> Unit
 ) {
     var enteredPin by remember(booking.id) { mutableStateOf("") }
 
@@ -595,37 +818,31 @@ private fun ActiveRiderTripExecutionCard(
                 GolocalStatusBadge(label = booking.status.uppercase(), tone = "success")
             }
 
-            GoLocalOsmMapCard(
-                centerLat = currentLat,
-                centerLng = currentLng,
-                pickupPoint = GeoPointDto(booking.pickupLat, booking.pickupLng),
+            GolocalMapContainer(
+                pickupLat = booking.pickupLat,
+                pickupLng = booking.pickupLng,
                 pickupLabel = booking.pickupLabel,
-                destinationPoint = GeoPointDto(booking.destinationLat, booking.destinationLng),
-                destinationLabel = booking.destinationLabel,
-                driverLivePoint = GeoPointDto(currentLat, currentLng),
+                destLat = booking.destinationLat,
+                destLng = booking.destinationLng,
+                destLabel = booking.destinationLabel,
                 onlineDrivers = listOf(onlineSelf),
-                routePoints = route?.points.orEmpty(),
+                liveTripLocation = null,
                 lowNetworkMode = lowNetworkMode,
-                statusBadgeText = if (booking.status == "in_progress") "Trip Route (OSM)" else "Navigating to Pickup (OSM)",
-                height = if (lowNetworkMode) 150.dp else 225.dp
+                mapHeight = 225.dp
             )
 
-            Text("Passenger: ${booking.customerName}", style = MaterialTheme.typography.titleSmall)
+            BookingCommunicationBar(
+                booking = booking,
+                viewerRole = "driver",
+                callContact = callContact,
+                unreadCount = unreadChatCount,
+                onCallClick = onCallCustomer,
+                onChatClick = onChatCustomer
+            )
+
+            Text("Passenger: ${booking.customerName.trim().substringBefore(" ")}", style = MaterialTheme.typography.titleSmall)
             Text("Route: ${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.bodyMedium)
-            Text(
-                text = "Agreed Fare: ₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${route?.distanceKm ?: booking.distanceKm} km (~${route?.durationMin ?: booking.estimatedDurationMin} min)",
-                fontFamily = JetBrainsMono,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = if (telemetry.isGpsSignalLost) {
-                    "GPS Signal Lost — holding last coordinates (${String.format(Locale.US, "%.4f", currentLat)}, ${String.format(Locale.US, "%.4f", currentLng)})"
-                } else {
-                    "Customer-visible live GPS: ${String.format(Locale.US, "%.4f", currentLat)}, ${String.format(Locale.US, "%.4f", currentLng)} (${telemetry.accuracyMeters.toInt()}m)"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = if (telemetry.isGpsSignalLost) GolocalError else GolocalSuccess
-            )
+            Text("Agreed Fare: ₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${booking.distanceKm} km", fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.primary)
 
             when (booking.status) {
                 "assigned" -> {
@@ -660,22 +877,23 @@ private fun ActiveRiderTripExecutionCard(
                     }
                 }
                 "in_progress" -> {
+                    Text("Live GPS coordinate broadcast active (${String.format("%.4f", currentLat)}, ${String.format("%.4f", currentLng)})", style = MaterialTheme.typography.bodySmall, color = GolocalSuccess)
                     Button(
                         onClick = { onAdvanceState("completed", "") },
                         colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess),
                         modifier = Modifier.fillMaxWidth().testTag("rider_complete_ride_button")
                     ) {
-                        Text("Complete Ride, Settle Fare & Stop GPS")
+                        Text("Complete Ride & Settle Fare")
                     }
                 }
             }
 
-            if (onRequestCancel != null && booking.status in setOf("assigned", "arriving", "arrived")) {
+            if (booking.status != "in_progress") {
                 TextButton(
-                    onClick = onRequestCancel,
-                    modifier = Modifier.fillMaxWidth().testTag("rider_cancel_active_trip_button")
+                    onClick = onCancelTrip,
+                    modifier = Modifier.align(Alignment.End).testTag("rider_cancel_trip_button")
                 ) {
-                    Text("Cancel Assigned Trip (Reason Required)", color = GolocalError)
+                    Text("Cancel Assigned Trip", color = GolocalError)
                 }
             }
         }

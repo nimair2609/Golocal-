@@ -13,39 +13,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.model.DisputeRecord
+import com.example.data.model.Booking
+import com.example.data.model.CancellationAppeal
 import com.example.data.model.FareConfig
-import com.example.domain.CancellationAndFraudEngine
+import com.example.shared.BookingChatModalSheet
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalError
 import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AdminViewModel
-import com.example.viewmodel.GovernanceViewModel
 
 @Composable
-fun AdminBookingsModule(
-    adminViewModel: AdminViewModel,
-    governanceViewModel: GovernanceViewModel? = null,
-    portalRole: com.example.data.model.PortalRole = com.example.data.model.PortalRole.OWNER_ADMIN
-) {
+fun AdminBookingsModule(adminViewModel: AdminViewModel) {
     val bookings by adminViewModel.bookings.collectAsStateWithLifecycle()
-    val drivers by adminViewModel.drivers.collectAsStateWithLifecycle()
     val complaints by adminViewModel.complaints.collectAsStateWithLifecycle()
     val emergencies by adminViewModel.emergencies.collectAsStateWithLifecycle()
     val sosEmergencyContacts by adminViewModel.sosEmergencyContacts.collectAsStateWithLifecycle()
-    val legacyRatings by adminViewModel.ratings.collectAsStateWithLifecycle()
-    val disputes = governanceViewModel?.allDisputes?.collectAsStateWithLifecycle()?.value.orEmpty()
-    val govRatings = governanceViewModel?.allRatings?.collectAsStateWithLifecycle()?.value
-    val ratings = if (!govRatings.isNullOrEmpty()) govRatings else legacyRatings
-    val anomalyFlags = remember(bookings, drivers, disputes) {
-        CancellationAndFraudEngine.analyzeAnomalies(bookings, drivers, disputes)
-    }
+    val ratings by adminViewModel.ratings.collectAsStateWithLifecycle()
+    val cancellationAdvisories by adminViewModel.cancellationAdvisories.collectAsStateWithLifecycle()
+    val cancellationAppeals by adminViewModel.cancellationAppeals.collectAsStateWithLifecycle()
+    val inspectedMessages by adminViewModel.inspectedChatMessages.collectAsStateWithLifecycle()
 
     var subTab by remember { mutableIntStateOf(0) }
     var statusFilter by remember { mutableStateOf("all") }
-    var resolveDisputeTarget by remember { mutableStateOf<DisputeRecord?>(null) }
+    var inspectingChatBooking by remember { mutableStateOf<Booking?>(null) }
+    var appealDecisionTarget by remember { mutableStateOf<Pair<CancellationAppeal, String>?>(null) }
 
     Column(
         modifier = Modifier
@@ -54,11 +47,12 @@ fun AdminBookingsModule(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Bookings, Disputes & Reviews", style = MaterialTheme.typography.headlineSmall)
+        Text("Bookings, Disputes & Governance", style = MaterialTheme.typography.headlineSmall)
         ScrollableTabRow(selectedTabIndex = subTab, edgePadding = 0.dp) {
             Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("Bookings (${bookings.size})") })
-            Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("SOS, Fraud & Disputes") })
+            Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("SOS & Disputes") })
             Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Reviews (${ratings.size})") })
+            Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Appeals & Abuse (${cancellationAppeals.count { it.status == "pending" }})") })
         }
 
         when (subTab) {
@@ -95,6 +89,16 @@ fun AdminBookingsModule(
                                 Text("${b.pickupLabel} → ${b.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                                 Text("Customer: ${b.customerName} • Driver: ${b.assignedDriverName.ifBlank { "Unassigned" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("Category: ${b.vehicleCategory.uppercase()} • Type: ${b.bookingType} • Payment: ${b.paymentMethod.uppercase()} (${b.paymentStatus})", style = MaterialTheme.typography.labelSmall)
+                                if (b.assignedDriverId.isNotBlank()) {
+                                    TextButton(
+                                        onClick = {
+                                            adminViewModel.inspectBookingChat(b.id)
+                                            inspectingChatBooking = b
+                                        }
+                                    ) {
+                                        Text("Inspect Chat Archive")
+                                    }
+                                }
                             }
                         }
                     }
@@ -147,81 +151,7 @@ fun AdminBookingsModule(
                     }
                 }
 
-                Text("Rule-Based Fraud & Cancellation Anomalies (${anomalyFlags.size})", style = MaterialTheme.typography.titleMedium)
-                if (anomalyFlags.isEmpty()) {
-                    Text("No suspicious cancellation patterns or open dispute spikes detected.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    anomalyFlags.forEach { flag ->
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = GolocalError.copy(alpha = 0.08f),
-                            modifier = Modifier.fillMaxWidth().border(1.dp, GolocalError, RoundedCornerShape(16.dp))
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("${flag.patternType.replace('_', ' ').uppercase()} (${flag.targetName})", style = MaterialTheme.typography.titleSmall, color = GolocalError, modifier = Modifier.weight(1f))
-                                    GolocalStatusBadge(label = flag.severity.uppercase(), tone = if (flag.severity == "high") "error" else "warning")
-                                }
-                                Text(flag.reasonSummary, style = MaterialTheme.typography.bodySmall)
-                                if (portalRole == com.example.data.model.PortalRole.OWNER_ADMIN) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        if (flag.targetRole == "driver" || flag.targetRole == "pair") {
-                                            OutlinedButton(onClick = {
-                                                governanceViewModel?.adminReviewDriverKyc(
-                                                    flag.targetUserId,
-                                                    "suspended",
-                                                    "Suspended after Admin review of ${flag.patternType}"
-                                                )
-                                            }) {
-                                                Text("Suspend Driver", color = GolocalError)
-                                            }
-                                        } else if (flag.targetRole == "customer") {
-                                            OutlinedButton(onClick = {
-                                                adminViewModel.setUserAccountStatus(flag.targetUserId, "restricted")
-                                            }) {
-                                                Text("Restrict Account", color = GolocalError)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Text("Formal Disputes Queue (${disputes.size})", style = MaterialTheme.typography.titleMedium)
-                if (disputes.isEmpty()) {
-                    Text("No formal fare or service disputes submitted yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    disputes.forEach { d ->
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("${d.category.replace('_', ' ').uppercase()} • ${d.reporterRole.uppercase()}", style = MaterialTheme.typography.titleSmall)
-                                    GolocalStatusBadge(
-                                        label = d.status.replace('_', ' ').uppercase(),
-                                        tone = if (d.status.startsWith("resolved")) "success" else "warning"
-                                    )
-                                }
-                                Text(d.description, style = MaterialTheme.typography.bodySmall)
-                                if (d.requestedRefundInr > 0.0) {
-                                    Text("Requested Refund: ₹${d.requestedRefundInr.toInt()}", style = MaterialTheme.typography.labelSmall, fontFamily = JetBrainsMono)
-                                }
-                                if (!d.status.startsWith("resolved")) {
-                                    Button(onClick = { resolveDisputeTarget = d }) {
-                                        Text("Review & Resolve Dispute")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Text("Legacy Trip Complaints (${complaints.size})", style = MaterialTheme.typography.titleMedium)
+                Text("Customer & Rider Complaints (${complaints.size})", style = MaterialTheme.typography.titleMedium)
                 if (complaints.isEmpty()) {
                     GolocalEmptyState(title = "No Complaints", message = "Filed disputes and trip complaints appear here.")
                 } else {
@@ -257,35 +187,77 @@ fun AdminBookingsModule(
                             color = MaterialTheme.colorScheme.surface,
                             modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                         ) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                                    GolocalStatusBadge(
-                                        label = r.moderationStatus.uppercase(),
-                                        tone = if (r.moderationStatus == "hidden") "error" else "success"
-                                    )
-                                }
-                                Text("Behaviour ${r.behaviourStars}★ • Clean ${r.vehicleStars}★ • Punctual ${r.punctualityStars}★ • Safety ${r.safetyStars}★", style = MaterialTheme.typography.labelSmall)
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("★ ${r.stars} / 5 • Booking #${r.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                                Text(
+                                    "Behavior ${r.driverBehaviorRating}★ • Vehicle ${r.vehicleConditionRating}★ • Punctuality ${r.punctualityRating}★ • Safety ${r.safetyRating}★",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Text("Driver: ${r.driverId} • Customer: ${r.customerId}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 if (r.review.isNotBlank()) Text(r.review, style = MaterialTheme.typography.bodySmall)
-                                if (r.riderToCustomerStars != null) {
-                                    Text("Rider → Passenger: ★ ${r.riderToCustomerStars}/5 (${r.riderToCustomerNote})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+            3 -> {
+                Text("Automated Cancellation Advisories (${cancellationAdvisories.size})", style = MaterialTheme.typography.titleMedium)
+                if (cancellationAdvisories.isEmpty()) {
+                    GolocalEmptyState(title = "No Abuse Advisories", message = "No customer or driver cancellation anomalies detected right now.")
+                } else {
+                    cancellationAdvisories.forEach { adv ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxWidth().border(1.dp, GolocalError, RoundedCornerShape(16.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("${adv.role.uppercase()} • ${adv.userId.take(10)}", style = MaterialTheme.typography.titleSmall)
+                                    GolocalStatusBadge(label = "${adv.cancellationRatePct}% CANCELLED", tone = "error")
                                 }
-                                if (governanceViewModel != null) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        if (r.moderationStatus != "hidden") {
-                                            OutlinedButton(onClick = {
-                                                governanceViewModel.adminModerateRating(r, "hidden", "Abusive or spam review hidden by Admin")
-                                            }) {
-                                                Text("Hide Abuse", color = GolocalError)
-                                            }
-                                        } else {
-                                            OutlinedButton(onClick = {
-                                                governanceViewModel.adminModerateRating(r, "active", "Restored by Admin")
-                                            }) {
-                                                Text("Restore")
-                                            }
+                                Text(adv.flagReason, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+
+                Text("Cancellation Appeals (${cancellationAppeals.size})", style = MaterialTheme.typography.titleMedium)
+                if (cancellationAppeals.isEmpty()) {
+                    GolocalEmptyState(title = "No Appeals Submitted", message = "Customer and driver cancellation appeals appear here.")
+                } else {
+                    cancellationAppeals.forEach { appeal ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("${appeal.appellantRole.uppercase()} • Booking #${appeal.bookingId.take(8)}", style = MaterialTheme.typography.titleSmall)
+                                    GolocalStatusBadge(
+                                        label = appeal.status.uppercase(),
+                                        tone = when (appeal.status) {
+                                            "accepted", "approved" -> "success"
+                                            "rejected" -> "error"
+                                            else -> "warning"
                                         }
+                                    )
+                                }
+                                Text(appeal.reason, style = MaterialTheme.typography.bodySmall)
+                                if (appeal.adminNote.isNotBlank()) {
+                                    Text("Decision: ${appeal.adminNote}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (appeal.status == "open" || appeal.status == "pending") {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = { appealDecisionTarget = appeal to "accepted" },
+                                            colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess)
+                                        ) { Text("Approve") }
+                                        OutlinedButton(
+                                            onClick = { appealDecisionTarget = appeal to "rejected" }
+                                        ) { Text("Reject", color = GolocalError) }
                                     }
                                 }
                             }
@@ -296,39 +268,44 @@ fun AdminBookingsModule(
         }
     }
 
-    resolveDisputeTarget?.let { d ->
+    inspectingChatBooking?.let { booking ->
+        BookingChatModalSheet(
+            booking = booking.copy(status = "completed"),
+            viewerUid = "",
+            viewerRole = "customer",
+            messages = inspectedMessages,
+            onSendMessage = {},
+            onMarkRead = {},
+            onDismiss = {
+                adminViewModel.inspectBookingChat(null)
+                inspectingChatBooking = null
+            }
+        )
+    }
+
+    appealDecisionTarget?.let { (appeal, decision) ->
         var note by remember { mutableStateOf("") }
-        var refundAmt by remember { mutableStateOf(if (d.requestedRefundInr > 0.0) d.requestedRefundInr.toInt().toString() else "0") }
         AlertDialog(
-            onDismissRequest = { resolveDisputeTarget = null },
-            title = { Text("Resolve Dispute #${d.id.take(8)}") },
+            onDismissRequest = { appealDecisionTarget = null },
+            title = { Text("${decision.replaceFirstChar { it.uppercase() }} Cancellation Appeal") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(d.description, style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(
-                        value = note,
-                        onValueChange = { note = it },
-                        label = { Text("Resolution note for reporter *") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = refundAmt,
-                        onValueChange = { refundAmt = it.filter { c -> c.isDigit() || c == '.' } },
-                        label = { Text("Approved Refund (₹, 0 if none)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Resolution note *") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             },
             confirmButton = {
-                Button(onClick = {
-                    val amt = refundAmt.toDoubleOrNull() ?: 0.0
-                    val status = if (amt > 0.0) "resolved_refund" else "resolved_closed"
-                    governanceViewModel?.adminResolveDispute(d, status, note.ifBlank { "Reviewed by GoLocal Operations" }, amt)
-                    resolveDisputeTarget = null
-                }) { Text("Save Decision") }
+                Button(
+                    enabled = note.trim().length >= 3,
+                    onClick = {
+                        adminViewModel.resolveCancellationAppeal(appeal.id, decision, note.trim())
+                        appealDecisionTarget = null
+                    }
+                ) { Text("Confirm") }
             },
-            dismissButton = { TextButton(onClick = { resolveDisputeTarget = null }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { appealDecisionTarget = null }) { Text("Cancel") } }
         )
     }
 }
@@ -384,7 +361,33 @@ fun AdminServicesModule(adminViewModel: AdminViewModel) {
                 }
             }
         } else {
-            OwnerServiceZonesConfigurator(adminViewModel = adminViewModel)
+            Button(onClick = { showAddArea = true }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.AddLocationAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Add West Bengal Service Area")
+            }
+            if (serviceAreas.isEmpty()) {
+                GolocalEmptyState(title = "No Custom Service Areas", message = "Add towns, stations, bus stands, airports, or rural blocks to govern service coverage.")
+            } else {
+                serviceAreas.forEach { area ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                    ) {
+                        Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(area.name, style = MaterialTheme.typography.titleSmall)
+                                Text("${area.district} • ${area.zoneType.replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(
+                                checked = area.isActive,
+                                onCheckedChange = { adminViewModel.toggleServiceArea(area.id, it) }
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -425,6 +428,40 @@ fun AdminServicesModule(adminViewModel: AdminViewModel) {
                 }) { Text("Publish New Version") }
             },
             dismissButton = { TextButton(onClick = { editingConfig = null }) { Text("Cancel") } }
+        )
+    }
+
+    if (showAddArea) {
+        var name by remember { mutableStateOf("") }
+        var nameBn by remember { mutableStateOf("") }
+        var district by remember { mutableStateOf("Hooghly") }
+        var block by remember { mutableStateOf("") }
+        var zoneType by remember { mutableStateOf("railway_station") }
+        var parcelOk by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showAddArea = false },
+            title = { Text("Add Service Area") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Area / Hub Name *") }, singleLine = true)
+                    OutlinedTextField(value = nameBn, onValueChange = { nameBn = it }, label = { Text("Bengali Name (Optional)") }, singleLine = true)
+                    OutlinedTextField(value = district, onValueChange = { district = it }, label = { Text("District *") }, singleLine = true)
+                    OutlinedTextField(value = block, onValueChange = { block = it }, label = { Text("Block / Town") }, singleLine = true)
+                    OutlinedTextField(value = zoneType, onValueChange = { zoneType = it }, label = { Text("Type (railway_station, bus_stand, airport, village)") }, singleLine = true)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = parcelOk, onCheckedChange = { parcelOk = it })
+                        Text("Parcel Delivery Approved")
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    adminViewModel.addServiceArea(name, nameBn, district, block, zoneType, parcelOk)
+                    showAddArea = false
+                }) { Text("Save Area") }
+            },
+            dismissButton = { TextButton(onClick = { showAddArea = false }) { Text("Cancel") } }
         )
     }
 }

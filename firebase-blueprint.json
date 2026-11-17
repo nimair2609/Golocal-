@@ -77,15 +77,10 @@
         "permitInfo": { "type": "string" },
         "settlementUpiOrBank": { "type": "string" },
         "documentPhotoUri": { "type": "string" },
-        "documents": { "type": "array" },
-        "verificationHistory": { "type": "array" },
-        "earliestExpiryIso": { "type": "string" },
-        "expiryAlertLevel": { "type": "string", "enum": ["valid", "expiring_soon", "expired", "missing"] },
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
         "rejectionReason": { "type": "string" },
         "isOnline": { "type": "boolean" },
         "ratingAvg": { "type": "number" },
-        "totalRatingCount": { "type": "integer" },
         "completedRides": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -124,18 +119,8 @@
         "district": { "type": "string" },
         "block": { "type": "string" },
         "zoneType": { "type": "string", "enum": ["railway_station", "bus_stand", "airport", "village", "hospital", "market", "town"] },
-        "pincode": { "type": "string" },
         "lat": { "type": "number" },
         "lng": { "type": "number" },
-        "centerLat": { "type": "number" },
-        "centerLng": { "type": "number" },
-        "radiusKm": { "type": "number" },
-        "polygonPoints": { "type": "array" },
-        "villages": { "type": "array" },
-        "pickupEnabled": { "type": "boolean" },
-        "dropoffEnabled": { "type": "boolean" },
-        "supportedVehicleCategories": { "type": "array" },
-        "availabilityNote": { "type": "string" },
         "isActive": { "type": "boolean" },
         "parcelApproved": { "type": "boolean" },
         "operationalHours": { "type": "string" },
@@ -209,18 +194,8 @@
         "familyConsentConfirmed": { "type": "boolean" },
         "isRoundTrip": { "type": "boolean" },
         "cancellationReason": { "type": "string" },
-        "cancelledBy": { "type": "string" },
-        "cancelledByRole": { "type": "string" },
-        "cancellationFeeInr": { "type": "number" },
-        "refundAmountInr": { "type": "number" },
-        "statusHistory": { "type": "array" },
         "customerRating": { "type": "integer" },
         "invoiceEmail": { "type": "string" },
-        "routeProvider": { "type": "string" },
-        "pickupZoneId": { "type": "string" },
-        "dropoffZoneId": { "type": "string" },
-        "assignedByOpsUid": { "type": "string" },
-        "opsAssignmentNote": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -346,22 +321,14 @@
     },
     "RatingRecord": {
       "title": "RatingRecord",
-      "description": "Multi-criteria post-ride customer rating, bidirectional rider feedback, and Admin moderation",
+      "description": "Post-ride customer rating and feedback",
       "type": "object",
       "properties": {
         "bookingId": { "type": "string" },
         "customerId": { "type": "string" },
         "driverId": { "type": "string" },
         "stars": { "type": "integer" },
-        "behaviourStars": { "type": "integer" },
-        "vehicleStars": { "type": "integer" },
-        "punctualityStars": { "type": "integer" },
-        "safetyStars": { "type": "integer" },
         "review": { "type": "string" },
-        "riderToCustomerStars": { "type": "integer" },
-        "riderToCustomerNote": { "type": "string" },
-        "moderationStatus": { "type": "string", "enum": ["active", "flagged", "hidden"] },
-        "flaggedReason": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["bookingId", "customerId", "driverId", "stars", "createdAt"]
@@ -377,9 +344,6 @@
         "description": { "type": "string" },
         "status": { "type": "string", "enum": ["open", "investigating", "resolved"] },
         "resolutionNote": { "type": "string" },
-        "lat": { "type": "number" },
-        "lng": { "type": "number" },
-        "locationLabel": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -446,7 +410,7 @@
     },
     "AdminRoleDoc": {
       "title": "AdminRoleDoc",
-      "description": "Authoritative Owner Admin allowlist entry",
+      "description": "Authoritative admin allowlist entry",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -454,21 +418,6 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "email", "createdAt"]
-    },
-    "OperationsStaff": {
-      "title": "OperationsStaff",
-      "description": "Operations Portal staff allowlist (live dispatch & monitoring without Owner Admin permissions)",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string" },
-        "displayName": { "type": "string" },
-        "phoneOrEmail": { "type": "string" },
-        "isActive": { "type": "boolean" },
-        "assignedDistrict": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "displayName", "isActive", "createdAt", "updatedAt"]
     },
     "PlatformSettings": {
       "title": "PlatformSettings",
@@ -492,171 +441,6 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["updatedAt"]
-    },
-    "FcmTokenRecord": {
-      "title": "FcmTokenRecord",
-      "description": "Authenticated user FCM device registration tokens",
-      "type": "object",
-      "properties": {
-        "userId": { "type": "string" },
-        "role": { "type": "string", "enum": ["customer", "driver", "admin"] },
-        "token": { "type": "string" },
-        "platform": { "type": "string" },
-        "appPackage": { "type": "string" },
-        "active": { "type": "boolean" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "role", "token", "platform", "active", "updatedAt"]
-    },
-    "DisputeRecord": {
-      "title": "DisputeRecord",
-      "description": "Formal ride or bus ticket dispute with optional refund claim and Admin resolution",
-      "type": "object",
-      "properties": {
-        "bookingId": { "type": "string" },
-        "busBookingId": { "type": "string" },
-        "reporterId": { "type": "string" },
-        "reporterRole": { "type": "string", "enum": ["customer", "driver"] },
-        "targetUserId": { "type": "string" },
-        "category": { "type": "string" },
-        "description": { "type": "string" },
-        "requestedRefundInr": { "type": "number" },
-        "status": { "type": "string", "enum": ["open", "under_review", "resolved_refund", "resolved_closed"] },
-        "adminResolutionNote": { "type": "string" },
-        "resolvedBy": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["reporterId", "reporterRole", "category", "description", "status", "createdAt", "updatedAt"]
-    },
-    "BusOperator": {
-      "title": "BusOperator",
-      "description": "Private stage-carriage / contract bus operator profile and permit KYC",
-      "type": "object",
-      "properties": {
-        "operatorId": { "type": "string" },
-        "ownerUid": { "type": "string" },
-        "companyName": { "type": "string" },
-        "contactPhone": { "type": "string" },
-        "operatorLicenseNumber": { "type": "string" },
-        "permitNumber": { "type": "string" },
-        "district": { "type": "string" },
-        "upiOrBankRef": { "type": "string" },
-        "documents": { "type": "array" },
-        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
-        "rejectionReason": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["operatorId", "companyName", "permitNumber", "district", "verificationStatus", "createdAt", "updatedAt"]
-    },
-    "BusVehicle": {
-      "title": "BusVehicle",
-      "description": "Registered private bus fleet vehicle subject to Admin KYC verification",
-      "type": "object",
-      "properties": {
-        "operatorId": { "type": "string" },
-        "busName": { "type": "string" },
-        "registrationNumber": { "type": "string" },
-        "busType": { "type": "string" },
-        "totalSeats": { "type": "integer" },
-        "layoutCols": { "type": "integer" },
-        "documents": { "type": "array" },
-        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected"] },
-        "rejectionReason": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["operatorId", "busName", "registrationNumber", "totalSeats", "verificationStatus", "createdAt", "updatedAt"]
-    },
-    "BusRoute": {
-      "title": "BusRoute",
-      "description": "Bus route and source-backed fare tariff requiring Admin approval before customer sale",
-      "type": "object",
-      "properties": {
-        "operatorId": { "type": "string" },
-        "routeName": { "type": "string" },
-        "originTown": { "type": "string" },
-        "destinationTown": { "type": "string" },
-        "stops": { "type": "array" },
-        "distanceKm": { "type": "number" },
-        "farePerSeatInr": { "type": "number" },
-        "fareSource": { "type": "string" },
-        "authorityRef": { "type": "string" },
-        "effectiveDateIso": { "type": "string" },
-        "fareApprovalStatus": { "type": "string", "enum": ["pending_fare_approval", "approved", "rejected"] },
-        "fareRejectionReason": { "type": "string" },
-        "gstPercent": { "type": "number" },
-        "commissionPercent": { "type": "number" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["operatorId", "routeName", "originTown", "destinationTown", "farePerSeatInr", "fareSource", "authorityRef", "fareApprovalStatus", "createdAt", "updatedAt"]
-    },
-    "BusSchedule": {
-      "title": "BusSchedule",
-      "description": "Scheduled bus departure inheriting route fare governance and tracking booked seats",
-      "type": "object",
-      "properties": {
-        "routeId": { "type": "string" },
-        "operatorId": { "type": "string" },
-        "busId": { "type": "string" },
-        "busName": { "type": "string" },
-        "busType": { "type": "string" },
-        "routeLabel": { "type": "string" },
-        "originTown": { "type": "string" },
-        "destinationTown": { "type": "string" },
-        "stops": { "type": "array" },
-        "departureDateIso": { "type": "string" },
-        "departureTimeLabel": { "type": "string" },
-        "arrivalTimeLabel": { "type": "string" },
-        "totalSeats": { "type": "integer" },
-        "bookedSeatIds": { "type": "array" },
-        "farePerSeatInr": { "type": "number" },
-        "fareApprovalStatus": { "type": "string", "enum": ["pending_fare_approval", "approved", "rejected"] },
-        "status": { "type": "string", "enum": ["scheduled", "boarding", "departed", "cancelled"] },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["routeId", "operatorId", "busId", "departureDateIso", "totalSeats", "farePerSeatInr", "fareApprovalStatus", "status", "createdAt", "updatedAt"]
-    },
-    "BusSeatLock": {
-      "title": "BusSeatLock",
-      "description": "Transactional seat reservation lock preventing concurrent double booking",
-      "type": "object",
-      "properties": {
-        "scheduleId": { "type": "string" },
-        "seatId": { "type": "string" },
-        "lockedByUid": { "type": "string" },
-        "lockedUntilEpochMs": { "type": "integer" },
-        "status": { "type": "string", "enum": ["locked", "booked"] }
-      },
-      "required": ["scheduleId", "seatId", "lockedByUid", "lockedUntilEpochMs", "status"]
-    },
-    "BusBooking": {
-      "title": "BusBooking",
-      "description": "Confirmed passenger bus ticket with ISO-18004 QR verification token",
-      "type": "object",
-      "properties": {
-        "customerId": { "type": "string" },
-        "customerName": { "type": "string" },
-        "scheduleId": { "type": "string" },
-        "routeId": { "type": "string" },
-        "operatorId": { "type": "string" },
-        "busName": { "type": "string" },
-        "routeLabel": { "type": "string" },
-        "departureDateIso": { "type": "string" },
-        "departureTimeLabel": { "type": "string" },
-        "seatIds": { "type": "array" },
-        "seatCount": { "type": "integer" },
-        "totalPaidInr": { "type": "number" },
-        "qrToken": { "type": "string" },
-        "qrValidated": { "type": "boolean" },
-        "status": { "type": "string", "enum": ["confirmed", "boarded", "cancelled"] },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["customerId", "scheduleId", "operatorId", "seatIds", "totalPaidInr", "qrToken", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -675,22 +459,22 @@
     "/commissions/{commissionId}": { "schema": { "$ref": "#/entities/CommissionRecord" }, "description": "Platform commission records" },
     "/driver_settlements/{settlementId}": { "schema": { "$ref": "#/entities/DriverSettlement" }, "description": "Driver payout requests" },
     "/refunds/{refundId}": { "schema": { "$ref": "#/entities/RefundRecord" }, "description": "Customer refund requests" },
-    "/ratings/{ratingId}": { "schema": { "$ref": "#/entities/RatingRecord" }, "description": "Ride ratings & moderation" },
-    "/complaints/{complaintId}": { "schema": { "$ref": "#/entities/ComplaintRecord" }, "description": "Legacy complaints" },
-    "/disputes/{disputeId}": { "schema": { "$ref": "#/entities/DisputeRecord" }, "description": "Formal ride & bus disputes" },
-    "/fcm_tokens/{tokenId}": { "schema": { "$ref": "#/entities/FcmTokenRecord" }, "description": "Authenticated user FCM push notification tokens" },
-    "/bus_operators/{operatorId}": { "schema": { "$ref": "#/entities/BusOperator" }, "description": "Private bus operator registrations" },
-    "/bus_vehicles/{busId}": { "schema": { "$ref": "#/entities/BusVehicle" }, "description": "Private bus fleet records" },
-    "/bus_routes/{routeId}": { "schema": { "$ref": "#/entities/BusRoute" }, "description": "Bus routes & tariff sources" },
-    "/bus_schedules/{scheduleId}": { "schema": { "$ref": "#/entities/BusSchedule" }, "description": "Bus schedules & booked seats" },
-    "/bus_seat_locks/{lockId}": { "schema": { "$ref": "#/entities/BusSeatLock" }, "description": "Atomic bus seat locks" },
-    "/bus_bookings/{ticketId}": { "schema": { "$ref": "#/entities/BusBooking" }, "description": "Passenger bus tickets & QR check-in" },
+    "/ratings/{ratingId}": { "schema": { "$ref": "#/entities/RatingRecord" }, "description": "Ride ratings" },
+    "/complaints/{complaintId}": { "schema": { "$ref": "#/entities/ComplaintRecord" }, "description": "Complaints and disputes" },
     "/emergency_events/{eventId}": { "schema": { "$ref": "#/entities/EmergencyEvent" }, "description": "SOS safety incidents" },
     "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/AppNotification" }, "description": "User notifications" },
     "/support_requests/{requestId}": { "schema": { "$ref": "#/entities/SupportRequest" }, "description": "Support, privacy, and deletion requests" },
     "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Immutable admin audit logs" },
-    "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Owner Admin role documents" },
-    "/operations_staff/{staffUid}": { "schema": { "$ref": "#/entities/OperationsStaff" }, "description": "Operations Portal staff allowlist" },
-    "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" }
+    "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Admin role documents" },
+    "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" },
+    "/booking_chats/{bookingId}/messages/{messageId}": { "description": "Two-way real-time chat scoped to assigned booking participants" },
+    "/booking_contacts/{bookingId}": { "description": "Restricted active-trip participant call contact bridge" },
+    "/driver_verification_history/{entryId}": { "description": "Admin driver KYC decision history" },
+    "/cancellation_appeals/{appealId}": { "description": "Customer and driver cancellation dispute appeals" },
+    "/user_tokens/{tokenId}": { "description": "FCM push notification device tokens" },
+    "/bus_operators/{operatorId}": { "description": "Private bus transport operators" },
+    "/bus_routes/{routeId}": { "description": "Regulated bus routes requiring official tariff source" },
+    "/bus_schedules/{scheduleId}": { "description": "Scheduled private buses with atomic seat tracking" },
+    "/bus_bookings/{bookingId}": { "description": "Customer bus seat reservations and digital QR tickets" }
   }
 }

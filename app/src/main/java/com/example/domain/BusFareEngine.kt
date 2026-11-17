@@ -1,102 +1,91 @@
 package com.example.domain
 
 import com.example.data.model.BusRoute
-import com.example.data.model.BusSchedule
+import kotlin.math.max
 import kotlin.math.round
 
-data class BusFareBreakdown(
+data class BusFareQuote(
     val seatCount: Int,
     val farePerSeatInr: Double,
-    val baseFareInr: Double,
+    val subTotalInr: Double,
     val gstInr: Double,
-    val totalCustomerPayableInr: Double,
+    val totalFareInr: Double,
     val platformCommissionInr: Double,
-    val netOperatorPayoutInr: Double
+    val operatorNetPayoutInr: Double,
+    val fareSource: String,
+    val effectiveDateLabel: String
 )
 
 object BusFareEngine {
 
-    val ALLOWED_FARE_SOURCES = setOf("government_gazette", "rto_tariff", "operator_submitted")
+    fun isRoutePricingConfigured(route: BusRoute): Boolean {
+        return route.fareSource.trim().isNotBlank() &&
+            route.effectiveDateLabel.trim().isNotBlank() &&
+            route.baseSeatFareInr > 0.0 &&
+            route.distanceKm > 0.0
+    }
 
-    fun calculateBreakdown(
+    fun resolveRouteStatusForAdmin(route: BusRoute, requestedActive: Boolean): String {
+        if (!requestedActive) return "suspended"
+        return if (isRoutePricingConfigured(route)) "active" else "pending_pricing"
+    }
+
+    fun calculateSeatFareInr(route: BusRoute): Double {
+        require(isRoutePricingConfigured(route)) {
+            "Route pricing requires official fareSource, effectiveDateLabel, positive base fare, and distance."
+        }
+        val raw = route.baseSeatFareInr + max(0.0, route.distanceKm) * max(0.0, route.perKmSeatRateInr)
+        return round(max(route.baseSeatFareInr, raw))
+    }
+
+    fun calculateBookingQuote(
         farePerSeatInr: Double,
         seatCount: Int,
-        gstPercent: Double = 5.0,
-        commissionPercent: Double = 8.0
-    ): BusFareBreakdown {
-        require(farePerSeatInr > 0.0) { "Bus fare per seat must be positive." }
-        require(seatCount in 1..6) { "Select between 1 and 6 seats per booking." }
+        gstPercent: Double,
+        commissionPercent: Double,
+        fareSource: String,
+        effectiveDateLabel: String
+    ): BusFareQuote {
+        require(fareSource.isNotBlank()) { "Bus route cannot be booked without an approved tariff source." }
+        require(effectiveDateLabel.isNotBlank()) { "Bus route effective date is required." }
+        require(seatCount in 1..6) { "You can book between 1 and 6 seats per bus transaction." }
+        require(farePerSeatInr >= 10.0) { "Bus per-seat fare must be configured before booking." }
 
-        val base = round(farePerSeatInr * seatCount * 100.0) / 100.0
-        val gst = round(base * (gstPercent / 100.0) * 100.0) / 100.0
-        val total = round((base + gst) * 100.0) / 100.0
-        val commission = round(base * (commissionPercent / 100.0) * 100.0) / 100.0
-        val netOperator = round((base - commission) * 100.0) / 100.0
+        val subTotal = round(farePerSeatInr * seatCount)
+        val gst = round(subTotal * (gstPercent / 100.0) * 100.0) / 100.0
+        val total = round(subTotal + gst)
+        val commission = round(subTotal * (commissionPercent / 100.0) * 100.0) / 100.0
+        val netOperator = round((total - gst - commission) * 100.0) / 100.0
 
-        return BusFareBreakdown(
+        return BusFareQuote(
             seatCount = seatCount,
-            farePerSeatInr = round(farePerSeatInr * 100.0) / 100.0,
-            baseFareInr = base,
+            farePerSeatInr = farePerSeatInr,
+            subTotalInr = subTotal,
             gstInr = gst,
-            totalCustomerPayableInr = total,
+            totalFareInr = total,
             platformCommissionInr = commission,
-            netOperatorPayoutInr = netOperator
+            operatorNetPayoutInr = max(0.0, netOperator),
+            fareSource = fareSource,
+            effectiveDateLabel = effectiveDateLabel
         )
     }
 
-    fun validateFareSubmission(
-        farePerSeatInr: Double,
-        fareSource: String,
-        authorityRef: String,
-        effectiveDateIso: String
-    ): String? {
-        if (farePerSeatInr <= 0.0 || farePerSeatInr > 15_000.0) {
-            return "Bus fare per seat must be between ₹1 and ₹15,000."
-        }
-        if (fareSource !in ALLOWED_FARE_SOURCES) {
-            return "Invalid fare source. Choose Government Gazette, RTO Tariff, or Operator Tariff."
-        }
-        if (authorityRef.trim().length < 3) {
-            return "Tariff or Gazette reference number/label is required for fare transparency."
-        }
-        if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(effectiveDateIso.trim())) {
-            return "Effective date must follow YYYY-MM-DD format."
-        }
-        return null
+    fun buildQrTicketPayload(
+        bookingId: String,
+        bookingRef: String,
+        scheduleId: String,
+        seatNumbers: List<String>
+    ): String {
+        val seatsJoined = seatNumbers.sorted().joinToString(",")
+        return "GOLOCAL-BUS|v1|$bookingId|$bookingRef|$scheduleId|$seatsJoined"
     }
 
-    fun canBookSchedule(schedule: BusSchedule, route: BusRoute? = null): Boolean {
-        val routeApproved = route == null || route.fareApprovalStatus == "approved"
-        return schedule.status in setOf("scheduled", "boarding") &&
-            schedule.fareApprovalStatus == "approved" &&
-            routeApproved &&
-            schedule.farePerSeatInr > 0.0 &&
-            schedule.totalSeats > 0
-    }
-
-    fun evaluateBusCancellationRefund(
-        totalPaidInr: Double,
-        hoursBeforeDeparture: Int = 6
-    ): Pair<Double, Double> {
-        // Policy: >=12h before -> 10% fee; <12h before -> 25% fee; 0 negative refund
-        val feePct = if (hoursBeforeDeparture >= 12) 0.10 else 0.25
-        val fee = round(totalPaidInr * feePct * 100.0) / 100.0
-        val refund = round((totalPaidInr - fee).coerceAtLeast(0.0) * 100.0) / 100.0
-        return fee to refund
-    }
-
-    fun generateSeatIds(totalSeats: Int): List<String> {
-        val count = totalSeats.coerceIn(8, 60)
-        val rows = (count + 3) / 4
-        val ids = mutableListOf<String>()
-        val cols = listOf("A", "B", "C", "D")
-        for (r in 1..rows) {
-            for (c in cols) {
-                if (ids.size < count) {
-                    ids.add("$r$c")
-                }
-            }
-        }
-        return ids
+    fun isValidQrTicketPayload(payload: String, bookingId: String, scheduleId: String): Boolean {
+        val parts = payload.split("|")
+        return parts.size >= 6 &&
+            parts[0] == "GOLOCAL-BUS" &&
+            parts[2] == bookingId &&
+            parts[4] == scheduleId &&
+            parts[5].isNotBlank()
     }
 }

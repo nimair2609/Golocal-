@@ -1,23 +1,27 @@
 package com.example.viewmodel
 
-import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
+import com.example.data.repository.BusRepository
+import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
-import com.example.data.tracking.RealtimeTrackingRepository
+import com.example.domain.AbuseDetectionEngine
+import com.example.domain.DriverAbuseAdvisory
 import com.example.domain.FareCalculator
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -38,9 +42,11 @@ data class AdminDashboardMetrics(
     val activeEmergenciesCount: Int = 0
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AdminViewModel(
     private val repository: GolocalRepository,
-    private var realtimeTrackingRepository: RealtimeTrackingRepository? = null
+    private val communicationRepository: CommunicationRepository? = null,
+    private val busRepository: BusRepository? = null
 ) : ViewModel() {
 
     private val _message = MutableStateFlow<String?>(null)
@@ -49,31 +55,8 @@ class AdminViewModel(
     private val _sosEmergencyContacts = MutableStateFlow<Map<String, PrivateEmergencyContact?>>(emptyMap())
     val sosEmergencyContacts: StateFlow<Map<String, PrivateEmergencyContact?>> = _sosEmergencyContacts.asStateFlow()
 
-    private val _liveDriversRtdb = MutableStateFlow<List<LiveDriverRtdbLocation>>(emptyList())
-    val liveDriversRtdb: StateFlow<List<LiveDriverRtdbLocation>> = _liveDriversRtdb.asStateFlow()
-
-    private var rtdbWatchJob: Job? = null
-
-    init {
-        realtimeTrackingRepository?.let { startLiveDriversObservation(it) }
-    }
-
-    fun attachContext(context: Context) {
-        if (realtimeTrackingRepository == null) {
-            val repo = RealtimeTrackingRepository(context.applicationContext)
-            realtimeTrackingRepository = repo
-            startLiveDriversObservation(repo)
-        }
-    }
-
-    private fun startLiveDriversObservation(repo: RealtimeTrackingRepository) {
-        if (rtdbWatchJob != null) return
-        rtdbWatchJob = viewModelScope.launch {
-            repo.observeAllLiveDriversForOps().collect { list ->
-                _liveDriversRtdb.value = list
-            }
-        }
-    }
+    private val _inspectedChatBookingId = MutableStateFlow<String?>(null)
+    val inspectedChatBookingId: StateFlow<String?> = _inspectedChatBookingId.asStateFlow()
 
     val users: StateFlow<List<UserAccount>> = repository.observeAdminUsers()
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin users", it) }
@@ -84,8 +67,9 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin drivers", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    val driverDirectoryEntries: StateFlow<List<DriverDirectoryEntry>> = repository.observeAllDriverDirectoryEntries()
-        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Driver directory", it) }
+    val verificationHistory: StateFlow<List<DriverVerificationHistoryEntry>> = repository.observeAllVerificationHistory()
+        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val bookings: StateFlow<List<Booking>> = repository.observeAdminBookings()
@@ -93,8 +77,21 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin bookings", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    val tripLocations: StateFlow<List<TripLocation>> = repository.observeAllTripLocations()
-        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Trip locations", it) }
+    val cancellationAdvisories: StateFlow<List<DriverAbuseAdvisory>> = bookings
+        .map { list -> AbuseDetectionEngine.evaluateCancellationAdvisories(list) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val cancellationAppeals: StateFlow<List<CancellationAppeal>> = repository.observeAdminCancellationAppeals()
+        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val inspectedChatMessages: StateFlow<List<BookingChatMessage>> = _inspectedChatBookingId
+        .flatMapLatest { bid ->
+            val comm = communicationRepository
+            if (comm == null || bid.isNullOrBlank()) flowOf(emptyList())
+            else comm.observeMessages(bid).catch { emit(emptyList()) }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val payments: StateFlow<List<PaymentRecord>> = repository.observeAdminPayments()
@@ -152,14 +149,28 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    val operationsStaff: StateFlow<List<OperationsStaffEntry>> = repository.observeOperationsStaff()
-        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
-
     val platformSettings: StateFlow<PlatformSettings> = repository.observePlatformSettings()
         .map { it ?: PlatformSettings() }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), PlatformSettings())
+
+    // Private Bus Admin Streams
+    val busOperators: StateFlow<List<BusOperator>> = (busRepository?.observeBusOperatorsAdmin() ?: flowOf(emptyList()))
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val busRoutes: StateFlow<List<BusRoute>> = (busRepository?.observeAllBusRoutesAdmin() ?: flowOf(emptyList()))
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val busSchedules: StateFlow<List<BusSchedule>> = (busRepository?.observeBusSchedules() ?: flowOf(emptyList()))
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val busBookings: StateFlow<List<BusBooking>> = (busRepository?.observeAdminBusBookings() ?: flowOf(emptyList()))
+        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val metrics: StateFlow<AdminDashboardMetrics> = combine(
         users,
@@ -186,11 +197,59 @@ class AdminViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), AdminDashboardMetrics())
 
+    fun inspectBookingChat(bookingId: String?) {
+        _inspectedChatBookingId.value = bookingId
+    }
+
     fun verifyDriver(driverId: String, status: String, reason: String = "") {
         viewModelScope.launch {
             repository.adminVerifyOrUpdateDriver(driverId, status, reason)
-                .onSuccess { _message.value = "Rider status updated to $status." }
+                .onSuccess { _message.value = "Rider KYC updated to $status." }
                 .onFailure { _message.value = it.localizedMessage ?: "Failed to update rider" }
+        }
+    }
+
+    fun resolveCancellationAppeal(appealId: String, decision: String, note: String) {
+        viewModelScope.launch {
+            repository.adminResolveCancellationAppeal(appealId, decision, note)
+                .onSuccess { _message.value = "Appeal marked $decision." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to resolve appeal" }
+        }
+    }
+
+    fun saveBusOperator(operator: BusOperator) {
+        val busRepo = busRepository ?: return
+        viewModelScope.launch {
+            busRepo.adminSaveBusOperator(operator)
+                .onSuccess { _message.value = "Saved bus operator ${operator.operatorName}." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed saving operator" }
+        }
+    }
+
+    fun saveBusRoute(route: BusRoute, activateRequested: Boolean) {
+        val busRepo = busRepository ?: return
+        viewModelScope.launch {
+            busRepo.adminSaveBusRoute(route, activateRequested)
+                .onSuccess { _message.value = "Saved bus route ${route.routeName}." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed saving route" }
+        }
+    }
+
+    fun createBusSchedule(schedule: BusSchedule, approvedRoute: BusRoute) {
+        val busRepo = busRepository ?: return
+        viewModelScope.launch {
+            busRepo.adminCreateBusSchedule(schedule, approvedRoute)
+                .onSuccess { _message.value = "Published schedule for ${approvedRoute.routeName}." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed publishing schedule" }
+        }
+    }
+
+    fun releaseCancelledBusSeats(booking: BusBooking) {
+        val busRepo = busRepository ?: return
+        viewModelScope.launch {
+            busRepo.adminReleaseCancelledBusSeats(booking)
+                .onSuccess { _message.value = "Released seats & refunded ${booking.bookingRef}." }
+                .onFailure { _message.value = it.localizedMessage ?: "Seat release failed" }
         }
     }
 
@@ -219,30 +278,6 @@ class AdminViewModel(
                 )
             ).onSuccess { _message.value = "Service area $name added." }
                 .onFailure { _message.value = it.localizedMessage ?: "Failed to add service area" }
-        }
-    }
-
-    fun saveOrUpdateServiceArea(area: ServiceArea) {
-        if (area.name.isBlank() || area.district.isBlank()) {
-            _message.value = "Zone name and district are required."
-            return
-        }
-        viewModelScope.launch {
-            val res = if (area.id.isBlank()) {
-                repository.adminAddServiceArea(area).map { Unit }
-            } else {
-                repository.adminUpdateServiceArea(area)
-            }
-            res.onSuccess { _message.value = "Service zone '${area.name}' saved." }
-                .onFailure { _message.value = it.localizedMessage ?: "Failed to save service zone" }
-        }
-    }
-
-    fun seedBoraiDefaultZone() {
-        viewModelScope.launch {
-            repository.adminSeedBoraiDefaultZone()
-                .onSuccess { _message.value = "Borai (PIN 721457, Mohanpur) default zone saved to Firestore." }
-                .onFailure { _message.value = it.localizedMessage ?: "Failed to seed Borai default zone" }
         }
     }
 
@@ -289,7 +324,7 @@ class AdminViewModel(
         }
         viewModelScope.launch {
             repository.adminGrantAdminAccess(uid, email, name)
-                .onSuccess { _message.value = "Owner Admin access granted to $email." }
+                .onSuccess { _message.value = "Admin access granted to $email." }
                 .onFailure { _message.value = it.localizedMessage ?: "Only primary bootstrapped admin can manage admin accounts." }
         }
     }
@@ -297,49 +332,8 @@ class AdminViewModel(
     fun revokeAdminAccess(uid: String) {
         viewModelScope.launch {
             repository.adminRevokeAdminAccess(uid)
-                .onSuccess { _message.value = "Owner Admin access revoked." }
+                .onSuccess { _message.value = "Admin access revoked." }
                 .onFailure { _message.value = it.localizedMessage ?: "Revoke failed" }
-        }
-    }
-
-    fun grantOperationsAccess(
-        uid: String,
-        displayName: String,
-        phoneOrEmail: String,
-        assignedDistrict: String = "Paschim Medinipur"
-    ) {
-        if (uid.isBlank()) {
-            _message.value = "Operations staff Firebase UID is required."
-            return
-        }
-        viewModelScope.launch {
-            repository.adminGrantOperationsAccess(uid, displayName, phoneOrEmail, assignedDistrict)
-                .onSuccess {
-                    realtimeTrackingRepository?.syncOpsRoleToRtdb(uid.trim(), true)
-                    _message.value = "Operations Staff role granted to ${displayName.ifBlank { uid }} (no Owner Admin privileges)."
-                }
-                .onFailure { _message.value = it.localizedMessage ?: "Failed to grant Operations role" }
-        }
-    }
-
-    fun revokeOperationsAccess(uid: String) {
-        viewModelScope.launch {
-            repository.adminRevokeOperationsAccess(uid)
-                .onSuccess {
-                    realtimeTrackingRepository?.syncOpsRoleToRtdb(uid.trim(), false)
-                    _message.value = "Operations Staff role revoked."
-                }
-                .onFailure { _message.value = it.localizedMessage ?: "Failed to revoke Operations role" }
-        }
-    }
-
-    fun opsAssignDriver(booking: Booking, driver: DriverDirectoryEntry, note: String = "") {
-        viewModelScope.launch {
-            repository.opsAssignDriverToBooking(booking, driver, note)
-                .onSuccess { pin ->
-                    _message.value = "Assigned ${driver.displayName} to booking #${booking.id.take(6)} (Trip PIN: $pin)."
-                }
-                .onFailure { _message.value = it.localizedMessage ?: "Ops driver assignment failed" }
         }
     }
 
