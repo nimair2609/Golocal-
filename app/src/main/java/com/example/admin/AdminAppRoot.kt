@@ -30,6 +30,7 @@ import com.example.data.repository.BusRepository
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
+import com.example.notifications.NotificationDeepLinkTarget
 import com.example.notifications.NotificationHelper
 import com.example.shared.ExperienceMode
 import com.example.shared.GolocalRoleSplashScreen
@@ -49,7 +50,12 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
 @Composable
-fun AdminAppRoot(auth: FirebaseAuth = Firebase.auth) {
+fun AdminAppRoot(
+    auth: FirebaseAuth = Firebase.auth,
+    initialDeepLinkModule: String? = null,
+    deepLinkTarget: NotificationDeepLinkTarget? = null,
+    onDeepLinkHandled: () -> Unit = {}
+) {
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     var splashDone by remember { mutableStateOf(false) }
 
@@ -75,7 +81,10 @@ fun AdminAppRoot(auth: FirebaseAuth = Firebase.auth) {
                 displayName = user.displayName ?: "GoLocal Admin",
                 email = user.email ?: "",
                 phoneNumber = user.phoneNumber ?: "",
-                photoUrl = user.photoUrl?.toString() ?: ""
+                photoUrl = user.photoUrl?.toString() ?: "",
+                initialDeepLinkModule = initialDeepLinkModule,
+                deepLinkTarget = deepLinkTarget,
+                onDeepLinkHandled = onDeepLinkHandled
             )
         }
     }
@@ -88,7 +97,10 @@ fun AdminAuthenticatedShell(
     displayName: String,
     email: String,
     phoneNumber: String = "",
-    photoUrl: String
+    photoUrl: String,
+    initialDeepLinkModule: String? = null,
+    deepLinkTarget: NotificationDeepLinkTarget? = null,
+    onDeepLinkHandled: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -205,6 +217,16 @@ fun AdminAuthenticatedShell(
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
         var selectedModule by remember { mutableStateOf("dashboard") }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+
+        LaunchedEffect(initialDeepLinkModule, deepLinkTarget) {
+            val resolved = resolveAdminDeepLinkModule(initialDeepLinkModule, deepLinkTarget)
+            if (resolved != null) {
+                selectedModule = resolved
+            }
+            if (!initialDeepLinkModule.isNullOrBlank() || deepLinkTarget != null) {
+                onDeepLinkHandled()
+            }
+        }
 
         BackHandler(enabled = selectedModule != "dashboard") { selectedModule = "dashboard" }
 
@@ -401,5 +423,36 @@ private fun AdminModuleContent(
         "payments" -> AdminPaymentsModule(adminViewModel)
         "reports" -> AdminReportsModule(adminViewModel)
         "settings" -> AdminSettingsModule(adminViewModel)
+    }
+}
+
+internal fun resolveAdminDeepLinkModule(
+    initialDeepLinkModule: String?,
+    deepLinkTarget: NotificationDeepLinkTarget?
+): String? {
+    val screenHint = deepLinkTarget?.targetScreen?.trim()?.takeIf { it.isNotBlank() }
+        ?: initialDeepLinkModule?.trim()?.takeIf { it.isNotBlank() }
+    val normalizedScreen = screenHint?.lowercase()
+    val fromScreen = when (normalizedScreen) {
+        "dashboard", "home" -> "dashboard"
+        "customers", "users", "support" -> "customers"
+        "riders", "drivers", "kyc" -> "riders"
+        "bookings", "trips", "rides", "sos", "emergency", "complaints", "appeals" -> "bookings"
+        "buses", "bus" -> "buses"
+        "services", "fares", "service_areas" -> "services"
+        "payments", "settlements", "refunds" -> "payments"
+        "reports", "notifications", "analytics" -> "reports"
+        "settings", "admins", "staff", "operations_staff", "audit", "updates" -> "settings"
+        else -> null
+    }
+    if (fromScreen != null) return fromScreen
+
+    return when (deepLinkTarget?.type?.trim()?.lowercase()) {
+        "sos", "emergency", "booking", "complaint", "appeal" -> "bookings"
+        "kyc", "driver" -> "riders"
+        "payment", "settlement", "refund" -> "payments"
+        "bus", "bus_booking" -> "buses"
+        "update" -> "settings"
+        else -> null
     }
 }

@@ -419,6 +419,24 @@
       },
       "required": ["userId", "email", "createdAt"]
     },
+    "OperationsStaffEntry": {
+      "title": "OperationsStaffEntry",
+      "description": "Admin-managed scoped operations staff allowlist without Owner Admin privileges",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "contactIdentifier": { "type": "string" },
+        "assignedDistrict": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "grantedBy": { "type": "string" },
+        "grantedByEmail": { "type": "string" },
+        "revokedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "assignedDistrict", "isActive", "createdAt", "updatedAt"]
+    },
     "PlatformSettings": {
       "title": "PlatformSettings",
       "description": "Global platform configuration and in-app APK update manifest managed by Administrators",
@@ -466,6 +484,7 @@
     "/support_requests/{requestId}": { "schema": { "$ref": "#/entities/SupportRequest" }, "description": "Support, privacy, and deletion requests" },
     "/audit_logs/{logId}": { "schema": { "$ref": "#/entities/AuditLog" }, "description": "Immutable admin audit logs" },
     "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Admin role documents" },
+    "/operations_staff/{staffUid}": { "schema": { "$ref": "#/entities/OperationsStaffEntry" }, "description": "Scoped operations staff allowlist managed by admins" },
     "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" },
     "/booking_chats/{bookingId}/messages/{messageId}": { "description": "Two-way real-time chat scoped to assigned booking participants" },
     "/booking_contacts/{bookingId}": { "description": "Restricted active-trip participant call contact bridge" },

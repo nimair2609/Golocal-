@@ -31,6 +31,12 @@ service cloud.firestore {
              (isSignedIn() && exists(/databases/$(database)/documents/emergency_personnel/$(request.auth.uid)));
     }
 
+    function isOperationsStaff() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/operations_staff/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/operations_staff/$(request.auth.uid)).data.isActive == true;
+    }
+
     function isVerifiedDriver() {
       return isSignedIn() &&
              exists(/databases/$(database)/documents/driver_profiles/$(request.auth.uid)) &&
@@ -398,6 +404,19 @@ service cloud.firestore {
              isValidTimestamp(data.updatedAt);
     }
 
+    function isValidOperationsStaff(data) {
+      return data.userId is string && isValidId(data.userId) &&
+             data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 100 &&
+             isOptionalString(data, 'contactIdentifier', 100) &&
+             data.assignedDistrict is string && data.assignedDistrict.size() >= 2 && data.assignedDistrict.size() <= 80 &&
+             data.isActive is bool &&
+             isOptionalString(data, 'grantedBy', 128) &&
+             isOptionalString(data, 'grantedByEmail', 150) &&
+             isOptionalString(data, 'revokedBy', 128) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
     // --- Collection Rules ---
 
     // 1. User accounts (PII isolated to owner or Admin; self-assigning 'admin' or mutating role blocked)
@@ -514,11 +533,12 @@ service cloud.firestore {
     // 4. Public verified driver discovery directory (no PII)
     match /driver_directory/{driverId} {
       allow get: if isSignedIn() && isValidId(driverId) &&
-                    (existing().verificationStatus == 'verified' || request.auth.uid == driverId || isAdmin());
+                    (existing().verificationStatus == 'verified' || request.auth.uid == driverId || isAdmin() || isOperationsStaff());
       allow list: if isSignedIn() &&
                      (resource.data.verificationStatus == 'verified' ||
                       resource.data.driverId == request.auth.uid ||
-                      isAdmin());
+                      isAdmin() ||
+                      isOperationsStaff());
       allow create: if isSignedIn() &&
                        isValidId(driverId) &&
                        isValidDriverDirectory(incoming()) && (
@@ -565,11 +585,13 @@ service cloud.firestore {
                     (existing().customerId == request.auth.uid ||
                      existing().assignedDriverId == request.auth.uid ||
                      (existing().status == 'searching' && isVerifiedDriver()) ||
+                     isOperationsStaff() ||
                      isAdmin());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.assignedDriverId == request.auth.uid ||
                       (resource.data.status == 'searching' && isVerifiedDriver()) ||
+                      isOperationsStaff() ||
                       isAdmin());
       allow create: if isSignedIn() &&
                        isValidId(bookingId) &&
@@ -712,10 +734,11 @@ service cloud.firestore {
     // 10. Live trip driver locations (strictly bound to assigned driver of the booking)
     match /trip_locations/{bookingId} {
       allow get: if isSignedIn() && isValidId(bookingId) &&
-                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isAdmin());
+                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isOperationsStaff() || isAdmin());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.driverId == request.auth.uid ||
+                      isOperationsStaff() ||
                       isAdmin());
       allow create, update: if isSignedIn() &&
                                isValidId(bookingId) &&
@@ -832,17 +855,19 @@ service cloud.firestore {
     // 17. Emergency SOS events
     match /emergency_events/{eventId} {
       allow get: if isSignedIn() && isValidId(eventId) &&
-                    (existing().userId == request.auth.uid || isAuthorizedEmergencyPersonnel());
+                    (existing().userId == request.auth.uid || isAuthorizedEmergencyPersonnel() || isOperationsStaff());
       allow list: if isSignedIn() &&
-                     (resource.data.userId == request.auth.uid || isAuthorizedEmergencyPersonnel());
+                     (resource.data.userId == request.auth.uid || isAuthorizedEmergencyPersonnel() || isOperationsStaff());
       allow create: if isSignedIn() &&
                        isValidId(eventId) &&
                        incoming().userId == request.auth.uid &&
                        incoming().status == 'active' &&
                        isValidEmergencyEvent(incoming());
-      allow update: if isAuthorizedEmergencyPersonnel() &&
+      allow update: if (isAuthorizedEmergencyPersonnel() || isOperationsStaff()) &&
                        isValidId(eventId) &&
-                       isValidEmergencyEvent(incoming());
+                       isValidEmergencyEvent(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt;
       allow delete: if false;
     }
 
@@ -894,6 +919,22 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
       allow list: if isAdmin();
       allow create, update, delete: if isBootstrappedAdmin();
+    }
+
+    // 21b. Operations staff allowlist (Admin-managed; NO default access and NO Owner Admin privileges)
+    match /operations_staff/{staffUid} {
+      allow get: if isSignedIn() && isValidId(staffUid) && (request.auth.uid == staffUid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() &&
+                       isValidId(staffUid) &&
+                       incoming().userId == staffUid &&
+                       isValidOperationsStaff(incoming());
+      allow update: if isAdmin() &&
+                       isValidId(staffUid) &&
+                       isValidOperationsStaff(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(staffUid);
     }
 
     // 22. Global platform settings (signed-in read, admin-only write)

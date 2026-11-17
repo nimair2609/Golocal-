@@ -1,9 +1,11 @@
 package com.example.data.model
 
+import androidx.annotation.Keep
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 
 enum class AppRole(val wire: String) {
@@ -432,6 +434,24 @@ data class AdminAccountEntry(
     val displayName: String = "",
     val addedBy: String = "",
     @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class OperationsStaffEntry(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val displayName: String = "",
+    val contactIdentifier: String = "",
+    val assignedDistrict: String = "",
+    @get:PropertyName("isActive")
+    @PropertyName("isActive")
+    val isActive: Boolean = true,
+    val grantedBy: String = "",
+    val grantedByEmail: String = "",
+    val revokedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
 @IgnoreExtraProperties

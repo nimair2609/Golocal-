@@ -245,19 +245,164 @@ fun InteractiveBengalMapCanvas(
     lowNetworkMode: Boolean,
     modifier: Modifier = Modifier
 ) {
-    GoLocalOsmMapCard(
-        centerLat = pickupLat,
-        centerLng = pickupLng,
-        pickupPoint = com.example.data.model.GeoPointDto(pickupLat, pickupLng),
-        pickupLabel = pickupLabel,
-        destinationPoint = com.example.data.model.GeoPointDto(destLat, destLng),
-        destinationLabel = destLabel,
-        driverLivePoint = liveTripLocation?.let { com.example.data.model.GeoPointDto(it.lat, it.lng) },
-        onlineDrivers = onlineDrivers,
-        lowNetworkMode = lowNetworkMode,
-        height = if (lowNetworkMode) 150.dp else 210.dp,
+    val mapHeight = if (lowNetworkMode) 150.dp else 210.dp
+    val validPickup = pickupLat in -85.0..85.0 && pickupLng in -180.0..180.0 && !(pickupLat == 0.0 && pickupLng == 0.0)
+    val validDest = destLat in -85.0..85.0 && destLng in -180.0..180.0 && !(destLat == 0.0 && destLng == 0.0)
+    val validDrivers = onlineDrivers.filter {
+        it.isOnline && it.currentLat in -85.0..85.0 && it.currentLng in -180.0..180.0 && !(it.currentLat == 0.0 && it.currentLng == 0.0)
+    }
+    val validLive = liveTripLocation?.takeIf {
+        it.lat in -85.0..85.0 && it.lng in -180.0..180.0 && !(it.lat == 0.0 && it.lng == 0.0)
+    }
+
+    val surfaceBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    val routeColor = GolocalPrimaryBlue
+    val pickupColor = GolocalSuccess
+    val driverColor = GolocalDeepNavy
+    val fleetColor = GolocalPrimaryBlue.copy(alpha = 0.72f)
+
+    Surface(
         modifier = modifier
-    )
+            .fillMaxWidth()
+            .height(mapHeight)
+            .clip(RoundedCornerShape(22.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(22.dp)),
+        shape = RoundedCornerShape(22.dp),
+        color = surfaceBg
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val padX = 28.dp.toPx()
+                val padY = 28.dp.toPx()
+                val drawW = max(1f, size.width - padX * 2)
+                val drawH = max(1f, size.height - padY * 2)
+
+                for (i in 1..4) {
+                    val x = size.width * (i / 5f)
+                    val y = size.height * (i / 5f)
+                    drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
+                    drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
+                }
+
+                val coords = buildList {
+                    if (validPickup) add(pickupLat to pickupLng)
+                    if (validDest) add(destLat to destLng)
+                    validDrivers.forEach { add(it.currentLat to it.currentLng) }
+                    validLive?.let { add(it.lat to it.lng) }
+                }
+
+                if (coords.isNotEmpty()) {
+                    var minLat = coords.minOf { it.first }
+                    var maxLat = coords.maxOf { it.first }
+                    var minLng = coords.minOf { it.second }
+                    var maxLng = coords.maxOf { it.second }
+                    if (maxLat - minLat < 0.01) {
+                        minLat -= 0.005
+                        maxLat += 0.005
+                    }
+                    if (maxLng - minLng < 0.01) {
+                        minLng -= 0.005
+                        maxLng += 0.005
+                    }
+
+                    fun project(lat: Double, lng: Double): Offset {
+                        val normX = ((lng - minLng) / (maxLng - minLng)).toFloat().coerceIn(0f, 1f)
+                        val normY = (1.0 - (lat - minLat) / (maxLat - minLat)).toFloat().coerceIn(0f, 1f)
+                        return Offset(padX + normX * drawW, padY + normY * drawH)
+                    }
+
+                    val pOffset = if (validPickup) project(pickupLat, pickupLng) else null
+                    val dOffset = if (validDest) project(destLat, destLng) else null
+
+                    if (pOffset != null && dOffset != null) {
+                        drawLine(
+                            color = routeColor,
+                            start = pOffset,
+                            end = dOffset,
+                            strokeWidth = 3.5.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f)
+                        )
+                    }
+
+                    validDrivers.forEach { drv ->
+                        val pt = project(drv.currentLat, drv.currentLng)
+                        drawCircle(color = Color.White, radius = 6.dp.toPx(), center = pt)
+                        drawCircle(color = fleetColor, radius = 4.dp.toPx(), center = pt)
+                    }
+
+                    pOffset?.let { pt ->
+                        drawCircle(color = Color.White, radius = 8.dp.toPx(), center = pt)
+                        drawCircle(color = pickupColor, radius = 5.5.dp.toPx(), center = pt)
+                    }
+                    dOffset?.let { pt ->
+                        drawCircle(color = Color.White, radius = 8.dp.toPx(), center = pt)
+                        drawCircle(color = routeColor, radius = 5.5.dp.toPx(), center = pt)
+                    }
+                    validLive?.let { live ->
+                        val pt = project(live.lat, live.lng)
+                        drawCircle(color = pickupColor, radius = 9.5.dp.toPx(), center = pt)
+                        drawCircle(color = driverColor, radius = 6.5.dp.toPx(), center = pt)
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                GolocalStatusBadge(
+                    label = if (lowNetworkMode) "Lite Map (Low Data)" else "OpenStreetMap Lite",
+                    tone = if (lowNetworkMode) "warning" else "info"
+                )
+                if (validDrivers.isNotEmpty()) {
+                    GolocalStatusBadge(label = "${validDrivers.size} online", tone = "success")
+                }
+            }
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = pickupLabel.ifBlank { "Pickup" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = pickupColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(horizontal = 6.dp)
+                            .size(14.dp)
+                    )
+                    Text(
+                        text = destLabel.ifBlank { "Destination" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = routeColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

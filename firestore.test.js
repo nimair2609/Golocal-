@@ -742,3 +742,177 @@ test("FCM user tokens & Private Bus tariff gating / atomic seat reservation rule
   await assertFails(bobDb.collection("bus_bookings").doc("bus_book_1").get());
 });
 
+test("Operations Staff RBAC: no default access, admin-only grant/revoke, scoped Live Ops/SOS only (no pricing/payouts/KYC)", async () => {
+  const OPS_UID = "ops_staff_1";
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  const opsDb = testEnv.authenticatedContext(OPS_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("bookings").doc("ops_booking_1").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice Sen",
+      assignedDriverId: DRIVER_UID,
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Borai Market",
+      destinationLabel: "Mohanpur Stand",
+      distanceKm: 4.0,
+      estimatedFareInr: 60,
+      minPermittedFareInr: 50,
+      maxPermittedFareInr: 80,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "in_progress",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("trip_locations").doc("ops_booking_1").set({
+      bookingId: "ops_booking_1",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      lat: 21.8160,
+      lng: 87.3703,
+      updatedAt: nowTs(),
+    });
+    await db.collection("emergency_events").doc("sos_ops_1").set({
+      userId: CUSTOMER_UID,
+      bookingId: "ops_booking_1",
+      lat: 21.8160,
+      lng: 87.3703,
+      notes: "Urgent assistance requested",
+      status: "active",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("driver_profiles").doc(DRIVER_UID).set({
+      driverId: DRIVER_UID,
+      legalName: "Rahul Das",
+      phone: "+919800000002",
+      district: "Paschim Medinipur",
+      vehicleCategory: "toto",
+      vehicleRegNumber: "WB15E1234",
+      drivingLicenceNumber: "WB15-20210001",
+      verificationStatus: "verified",
+      isOnline: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  // 1. Unauthorized / non-ops users cannot read bookings, grant themselves ops access, or list operations_staff
+  await assertFails(opsDb.collection("bookings").doc("ops_booking_1").get());
+  await assertFails(opsDb.collection("emergency_events").doc("sos_ops_1").get());
+  await assertFails(opsDb.collection("operations_staff").get());
+  await assertFails(
+    opsDb.collection("operations_staff").doc(OPS_UID).set({
+      userId: OPS_UID,
+      displayName: "Rogue Self Grant",
+      assignedDistrict: "Paschim Medinipur",
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    custDb.collection("operations_staff").doc(OPS_UID).set({
+      userId: OPS_UID,
+      displayName: "Customer Grant Attempt",
+      assignedDistrict: "Paschim Medinipur",
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 2. Authorized Admin grants scoped operations staff access
+  await assertSucceeds(
+    adminDb.collection("operations_staff").doc(OPS_UID).set({
+      userId: OPS_UID,
+      displayName: "Subhankar Jana",
+      contactIdentifier: "+919800012345",
+      assignedDistrict: "Paschim Medinipur",
+      isActive: true,
+      grantedBy: "admin_uid",
+      grantedByEmail: ADMIN_EMAIL,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 3. Active ops staff CAN inspect their own allowlist entry, Live Ops bookings, trip locations, and handle SOS events
+  await assertSucceeds(opsDb.collection("operations_staff").doc(OPS_UID).get());
+  await assertSucceeds(opsDb.collection("bookings").doc("ops_booking_1").get());
+  await assertSucceeds(opsDb.collection("trip_locations").doc("ops_booking_1").get());
+  await assertSucceeds(opsDb.collection("emergency_events").doc("sos_ops_1").get());
+  await assertSucceeds(
+    opsDb.collection("emergency_events").doc("sos_ops_1").update({
+      status: "acknowledged",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 4. Active ops staff STILL CANNOT list operations_staff, mutate operations_staff, read private KYC, write fare_configs, or write platform_settings/admins
+  await assertFails(opsDb.collection("operations_staff").get());
+  await assertFails(
+    opsDb.collection("operations_staff").doc("other_staff").set({
+      userId: "other_staff",
+      displayName: "Unauthorized Staff",
+      assignedDistrict: "Hooghly",
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(opsDb.collection("driver_profiles").doc(DRIVER_UID).get());
+  await assertFails(
+    opsDb.collection("fare_configs").doc("toto_hack").set({
+      vehicleCategory: "toto",
+      version: 99,
+      baseFareInr: 1,
+      perKmRateInr: 1,
+      minimumFareInr: 1,
+      gstPercent: 0,
+      commissionPercent: 0,
+      allowDriverFareProposal: false,
+      isEnabled: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    opsDb.collection("platform_settings").doc("global").set({
+      helplineNumber: "+91-9999",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    opsDb.collection("admins").doc(OPS_UID).set({
+      uid: OPS_UID,
+      email: "ops@example.com",
+      createdAt: nowTs(),
+    })
+  );
+  await assertFails(bobDb.collection("operations_staff").doc(OPS_UID).get());
+
+  // 5. Unauthorized user CANNOT revoke ops access; Admin revokes -> ops staff immediately loses Live Ops/SOS access
+  await assertFails(
+    custDb.collection("operations_staff").doc(OPS_UID).update({
+      isActive: false,
+      revokedBy: CUSTOMER_UID,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("operations_staff").doc(OPS_UID).update({
+      isActive: false,
+      revokedBy: "admin_uid",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(opsDb.collection("bookings").doc("ops_booking_1").get());
+  await assertFails(opsDb.collection("emergency_events").doc("sos_ops_1").get());
+});
+

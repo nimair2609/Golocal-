@@ -5,25 +5,47 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import com.example.notifications.NotificationDeepLinks
+import androidx.compose.runtime.setValue
+import com.example.notifications.NotificationDeepLinkExtras
+import com.example.notifications.NotificationDeepLinkTarget
 
 class AdminActivity : ComponentActivity() {
-    private val deepLinkModuleState = mutableStateOf<String?>(null)
+    private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
+    private var legacyScreenState by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        deepLinkModuleState.value = intent?.getStringExtra(NotificationDeepLinks.EXTRA_TARGET_SCREEN)?.takeIf { it.isNotBlank() }
+        applyIntentDeepLink(intent)
         enableEdgeToEdge()
         setContent {
-            AdminAppRoot(initialDeepLinkModule = deepLinkModuleState.value)
+            AdminAppRoot(
+                initialDeepLinkModule = legacyScreenState,
+                deepLinkTarget = deepLinkState,
+                onDeepLinkHandled = {
+                    deepLinkState = null
+                    legacyScreenState = null
+                }
+            )
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val screen = intent.getStringExtra(NotificationDeepLinks.EXTRA_TARGET_SCREEN)?.takeIf { it.isNotBlank() }
-        if (screen != null) deepLinkModuleState.value = screen
+        applyIntentDeepLink(intent)
+    }
+
+    private fun applyIntentDeepLink(intent: Intent?) {
+        val target = NotificationDeepLinkTarget.fromIntent(intent)
+        if (target != null) {
+            deepLinkState = target
+        }
+        val screen = intent?.getStringExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN)
+            ?.takeIf { it.isNotBlank() }
+        if (screen != null) {
+            legacyScreenState = screen
+        }
     }
 }

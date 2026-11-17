@@ -2239,4 +2239,116 @@ class GolocalRepository(
             throw e
         }
     }
+
+    fun observeOperationsStaff(): Flow<List<OperationsStaffEntry>> =
+        safeQueryFlow("operations_staff", db.collection("operations_staff")) {
+            it.toObject(OperationsStaffEntry::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    suspend fun adminGrantOperationsAccess(
+        targetUid: String,
+        displayName: String,
+        contactIdentifier: String,
+        assignedDistrict: String
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanUid = targetUid.trim()
+        val cleanName = displayName.trim()
+        val cleanContact = contactIdentifier.trim()
+        val cleanDistrict = assignedDistrict.trim()
+        require(cleanUid.matches(Regex("^[a-zA-Z0-9_\\-]{2,128}$"))) {
+            "Enter a valid Firebase UID (letters, numbers, _ or -)."
+        }
+        require(cleanName.length in 2..100) {
+            "Staff name must be between 2 and 100 characters."
+        }
+        require(cleanDistrict.length in 2..80) {
+            "Assigned district must be between 2 and 80 characters."
+        }
+        require(cleanContact.length <= 100) {
+            "Contact identifier must be 100 characters or fewer."
+        }
+        val ref = db.collection("operations_staff").document(cleanUid)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runTransaction { tx ->
+                val existing = tx.get(ref)
+                val payload = buildMap<String, Any> {
+                    put("userId", cleanUid)
+                    put("displayName", cleanName)
+                    if (cleanContact.isNotBlank()) put("contactIdentifier", cleanContact)
+                    put("assignedDistrict", cleanDistrict)
+                    put("isActive", true)
+                    put("grantedBy", actorUid)
+                    if (actorEmail.isNotBlank()) put("grantedByEmail", actorEmail)
+                    val existingCreatedAt = existing.getTimestamp("createdAt")
+                    if (existing.exists() && existingCreatedAt != null) {
+                        put("createdAt", existingCreatedAt)
+                    } else {
+                        put("createdAt", FieldValue.serverTimestamp())
+                    }
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                tx.set(ref, payload)
+                tx.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "GRANT_OPERATIONS_STAFF",
+                        "targetCollection" to "operations_staff",
+                        "targetId" to cleanUid,
+                        "summary" to "Granted scoped operations access to $cleanName ($cleanDistrict)",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, ref.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun adminRevokeOperationsAccess(targetUid: String): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanUid = targetUid.trim()
+        require(cleanUid.matches(Regex("^[a-zA-Z0-9_\\-]{2,128}$"))) {
+            "Invalid staff UID."
+        }
+        val ref = db.collection("operations_staff").document(cleanUid)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    ref,
+                    mapOf(
+                        "isActive" to false,
+                        "revokedBy" to actorUid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "REVOKE_OPERATIONS_STAFF",
+                        "targetCollection" to "operations_staff",
+                        "targetId" to cleanUid,
+                        "summary" to "Revoked scoped operations access for $cleanUid",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            throw e
+        }
+    }
 }

@@ -149,6 +149,11 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val operationsStaff: StateFlow<List<OperationsStaffEntry>> = repository.observeOperationsStaff()
+        .map { list -> list.sortedByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin ops staff", it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     val platformSettings: StateFlow<PlatformSettings> = repository.observePlatformSettings()
         .map { it ?: PlatformSettings() }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it }
@@ -334,6 +339,36 @@ class AdminViewModel(
             repository.adminRevokeAdminAccess(uid)
                 .onSuccess { _message.value = "Admin access revoked." }
                 .onFailure { _message.value = it.localizedMessage ?: "Revoke failed" }
+        }
+    }
+
+    fun grantOperationsAccess(
+        uid: String,
+        displayName: String,
+        contact: String,
+        assignedDistrict: String
+    ) {
+        val cleanUid = uid.trim()
+        val cleanName = displayName.trim()
+        val cleanDistrict = assignedDistrict.trim()
+        if (cleanUid.isBlank() || cleanName.isBlank() || cleanDistrict.isBlank()) {
+            _message.value = "Staff UID, name, and assigned district are required."
+            return
+        }
+        viewModelScope.launch {
+            repository.adminGrantOperationsAccess(cleanUid, cleanName, contact.trim(), cleanDistrict)
+                .onSuccess { _message.value = "Scoped operations access granted to $cleanName ($cleanDistrict)." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to grant operations access." }
+        }
+    }
+
+    fun revokeOperationsAccess(uid: String) {
+        val cleanUid = uid.trim()
+        if (cleanUid.isBlank()) return
+        viewModelScope.launch {
+            repository.adminRevokeOperationsAccess(cleanUid)
+                .onSuccess { _message.value = "Operations access revoked." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to revoke operations access." }
         }
     }
 
