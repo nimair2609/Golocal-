@@ -79,7 +79,7 @@ class DriverViewModel(
         repository.observeOpenBookingsForDrivers(),
         _dismissedRequestIds
     ) { list, dismissed ->
-        list.filter { it.customerId != currentUserId && it.id !in dismissed }
+        list.filter { !it.isTestRide && !it.testMode && it.customerId != currentUserId && it.id !in dismissed }
             .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
     }
         .catch { error ->
@@ -117,7 +117,10 @@ class DriverViewModel(
         )
 
     val assignedBookings: StateFlow<List<Booking>> = repository.observeDriverAssignedBookings(currentUserId)
-        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .map { list ->
+            list.filter { !it.isTestRide && !it.testMode }
+                .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+        }
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
             Log.w(TAG, "Error observing assigned bookings", error)

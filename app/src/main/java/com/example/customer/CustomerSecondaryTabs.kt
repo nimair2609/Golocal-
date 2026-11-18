@@ -85,16 +85,26 @@ fun CustomerBookingsHistoryTab(
                                     .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        GolocalStatusBadge(
-                                            label = booking.status.uppercase(),
-                                            tone = when (booking.status) {
-                                                "completed" -> "success"
-                                                "cancelled" -> "error"
-                                                "searching" -> "warning"
-                                                else -> "info"
+                                    val isTestRide = booking.isTestRide || booking.testMode
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            if (isTestRide) {
+                                                GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
                                             }
-                                        )
+                                            GolocalStatusBadge(
+                                                label = booking.status.uppercase(),
+                                                tone = when (booking.status) {
+                                                    "completed" -> "success"
+                                                    "cancelled" -> "error"
+                                                    "searching" -> "warning"
+                                                    else -> "info"
+                                                }
+                                            )
+                                        }
                                         val fare = if (booking.agreedFareInr > 0) booking.agreedFareInr else booking.estimatedFareInr
                                         Text("₹${fare.toInt()}", fontFamily = JetBrainsMono, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                                     }
@@ -110,8 +120,10 @@ fun CustomerBookingsHistoryTab(
                                             } else {
                                                 GolocalStatusBadge(label = "Rated ★ ${booking.customerRating}", tone = "success")
                                             }
-                                            TextButton(onClick = { refundTarget = booking }) { Text("Refund") }
-                                            TextButton(onClick = { complaintTarget = booking }) { Text("Dispute", color = GolocalError) }
+                                            if (!isTestRide) {
+                                                TextButton(onClick = { refundTarget = booking }) { Text("Refund") }
+                                                TextButton(onClick = { complaintTarget = booking }) { Text("Dispute", color = GolocalError) }
+                                            }
                                         }
                                     }
                                     if (booking.status == "cancelled") {
@@ -123,18 +135,20 @@ fun CustomerBookingsHistoryTab(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        if (existingAppeal != null) {
-                                            GolocalStatusBadge(
-                                                label = "APPEAL: ${existingAppeal.status.uppercase()}",
-                                                tone = if (existingAppeal.status == "approved") "success" else "warning"
-                                            )
-                                        } else {
-                                            OutlinedButton(onClick = { appealTarget = booking }) {
-                                                Text("Appeal Cancellation")
+                                        if (!isTestRide) {
+                                            if (existingAppeal != null) {
+                                                GolocalStatusBadge(
+                                                    label = "APPEAL: ${existingAppeal.status.uppercase()}",
+                                                    tone = if (existingAppeal.status == "approved") "success" else "warning"
+                                                )
+                                            } else {
+                                                OutlinedButton(onClick = { appealTarget = booking }) {
+                                                    Text("Appeal Cancellation")
+                                                }
                                             }
                                         }
                                     }
-                                    if (booking.assignedDriverId.isNotBlank() && booking.status in setOf("completed", "cancelled")) {
+                                    if (!isTestRide && booking.assignedDriverId.isNotBlank() && booking.status in setOf("completed", "cancelled")) {
                                         TextButton(
                                             onClick = {
                                                 customerViewModel.openChatArchive(booking.id)

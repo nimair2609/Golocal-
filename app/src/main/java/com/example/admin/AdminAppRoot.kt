@@ -131,10 +131,13 @@ fun AdminAuthenticatedShell(
 
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     val isAdmin by sessionViewModel.isAdmin.collectAsStateWithLifecycle()
+    val isOpsStaff by sessionViewModel.isOperationsStaff.collectAsStateWithLifecycle()
     val isAdminChecked by sessionViewModel.isAdminChecked.collectAsStateWithLifecycle()
+    val canEnterPortal = isAdmin || isOpsStaff
+    val actorRoleLabel = if (isAdmin) "admin" else "ops_staff"
 
-    LaunchedEffect(currentUserId, isAdmin) {
-        if (isAdmin) {
+    LaunchedEffect(currentUserId, canEnterPortal) {
+        if (canEnterPortal) {
             NotificationHelper.registerCurrentFcmToken(
                 context = context,
                 userId = currentUserId,
@@ -156,7 +159,7 @@ fun AdminAuthenticatedShell(
             return@GolocalTheme
         }
 
-        if (!isAdmin) {
+        if (!canEnterPortal) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -214,13 +217,44 @@ fun AdminAuthenticatedShell(
 
         val adminMsg by adminViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
+        val testBookings by adminViewModel.testBookings.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
-        var selectedModule by remember { mutableStateOf("dashboard") }
+        val defaultModule = if (isAdmin) "dashboard" else "test_rides"
+        var selectedModule by remember(isAdmin) { mutableStateOf(defaultModule) }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-        LaunchedEffect(initialDeepLinkModule, deepLinkTarget) {
+        LaunchedEffect(testBookings.size, platformSettings.testRideModeEnabled, platformSettings.testAutoAssignEnabled) {
+            if (platformSettings.testRideModeEnabled && platformSettings.testAutoAssignEnabled) {
+                adminViewModel.tryAutoAssignPendingTestRides(actorRoleLabel)
+            }
+        }
+
+        val modules = remember(isAdmin) {
+            if (isAdmin) {
+                listOf(
+                    Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
+                    Triple("test_rides", "Test Rides", Icons.Filled.Science),
+                    Triple("customers", "Customers", Icons.Filled.People),
+                    Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi),
+                    Triple("bookings", "Bookings", Icons.Filled.DirectionsCar),
+                    Triple("buses", "Private Bus", Icons.Filled.DirectionsBus),
+                    Triple("services", "Services & Fares", Icons.Filled.Tune),
+                    Triple("payments", "Payments", Icons.Filled.AccountBalance),
+                    Triple("reports", "Reports", Icons.Filled.Analytics),
+                    Triple("settings", "Settings", Icons.Filled.Settings)
+                )
+            } else {
+                listOf(
+                    Triple("test_rides", "Test Rides", Icons.Filled.Science),
+                    Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
+                    Triple("bookings", "Bookings", Icons.Filled.DirectionsCar)
+                )
+            }
+        }
+
+        LaunchedEffect(initialDeepLinkModule, deepLinkTarget, isAdmin) {
             val resolved = resolveAdminDeepLinkModule(initialDeepLinkModule, deepLinkTarget)
-            if (resolved != null) {
+            if (resolved != null && modules.any { it.first == resolved }) {
                 selectedModule = resolved
             }
             if (!initialDeepLinkModule.isNullOrBlank() || deepLinkTarget != null) {
@@ -228,19 +262,7 @@ fun AdminAuthenticatedShell(
             }
         }
 
-        BackHandler(enabled = selectedModule != "dashboard") { selectedModule = "dashboard" }
-
-        val modules = listOf(
-            Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
-            Triple("customers", "Customers", Icons.Filled.People),
-            Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi),
-            Triple("bookings", "Bookings", Icons.Filled.DirectionsCar),
-            Triple("buses", "Private Bus", Icons.Filled.DirectionsBus),
-            Triple("services", "Services & Fares", Icons.Filled.Tune),
-            Triple("payments", "Payments", Icons.Filled.AccountBalance),
-            Triple("reports", "Reports", Icons.Filled.Analytics),
-            Triple("settings", "Settings", Icons.Filled.Settings)
-        )
+        BackHandler(enabled = selectedModule != defaultModule) { selectedModule = defaultModule }
 
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val wideScreen = maxWidth >= 700.dp
@@ -270,7 +292,12 @@ fun AdminAuthenticatedShell(
                                 onDismiss = { adminViewModel.clearMessage() },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                             )
-                            AdminModuleContent(selectedModule, adminViewModel)
+                            AdminModuleContent(
+                                selectedModule = selectedModule,
+                                adminViewModel = adminViewModel,
+                                isOwnerAdmin = isAdmin,
+                                actorRoleLabel = actorRoleLabel
+                            )
                         }
                     }
                 }
@@ -318,7 +345,12 @@ fun AdminAuthenticatedShell(
                                 onDismiss = { adminViewModel.clearMessage() },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
-                            AdminModuleContent(selectedModule, adminViewModel)
+                            AdminModuleContent(
+                                selectedModule = selectedModule,
+                                adminViewModel = adminViewModel,
+                                isOwnerAdmin = isAdmin,
+                                actorRoleLabel = actorRoleLabel
+                            )
                         }
                     }
                 }
@@ -411,10 +443,17 @@ private fun AdminSidebar(
 @Composable
 private fun AdminModuleContent(
     selectedModule: String,
-    adminViewModel: AdminViewModel
+    adminViewModel: AdminViewModel,
+    isOwnerAdmin: Boolean,
+    actorRoleLabel: String
 ) {
     when (selectedModule) {
         "dashboard" -> AdminDashboardModule(adminViewModel)
+        "test_rides" -> AdminTestRideModule(
+            adminViewModel = adminViewModel,
+            isOwnerAdmin = isOwnerAdmin,
+            actorRoleLabel = actorRoleLabel
+        )
         "customers" -> AdminCustomersModule(adminViewModel)
         "riders" -> AdminRidersModule(adminViewModel)
         "bookings" -> AdminBookingsModule(adminViewModel)
@@ -435,6 +474,7 @@ internal fun resolveAdminDeepLinkModule(
     val normalizedScreen = screenHint?.lowercase()
     val fromScreen = when (normalizedScreen) {
         "dashboard", "home" -> "dashboard"
+        "test_rides", "test_ride", "test_otp" -> "test_rides"
         "customers", "users", "support" -> "customers"
         "riders", "drivers", "kyc" -> "riders"
         "bookings", "trips", "rides", "sos", "emergency", "complaints", "appeals" -> "bookings"
@@ -449,6 +489,7 @@ internal fun resolveAdminDeepLinkModule(
 
     return when (deepLinkTarget?.type?.trim()?.lowercase()) {
         "sos", "emergency", "booking", "complaint", "appeal" -> "bookings"
+        "test_ride", "test_otp" -> "test_rides"
         "kyc", "driver" -> "riders"
         "payment", "settlement", "refund" -> "payments"
         "bus", "bus_booking" -> "buses"

@@ -32,14 +32,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -50,8 +54,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Booking
@@ -69,6 +76,7 @@ import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.RideOffer
 import com.example.data.model.TripLocation
 import com.example.domain.FareCalculator
+import com.example.domain.TestRideOtpUtil
 import com.example.map.GolocalMapContainer
 import com.example.shared.BookingCommunicationBar
 import com.example.shared.CircularBackButton
@@ -78,7 +86,10 @@ import com.example.ui.theme.GolocalError
 import com.example.ui.theme.GolocalLightBlue
 import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.GolocalSuccess
+import com.example.ui.theme.GolocalWarning
+import com.example.ui.theme.GolocalWarningContainer
 import com.example.ui.theme.JetBrainsMono
+import kotlinx.coroutines.delay
 import java.util.Locale
 
 @Composable
@@ -97,8 +108,13 @@ fun CustomerActiveRideView(
     onShareTrip: () -> Unit,
     onOpenSos: () -> Unit,
     onOpenComplaint: () -> Unit,
-    onOpenCancel: () -> Unit
+    onOpenCancel: () -> Unit,
+    isVerifyingTestOtp: Boolean = false,
+    testOtpError: String? = null,
+    onVerifyTestOtp: (String) -> Unit = {},
+    onClearTestOtpError: () -> Unit = {}
 ) {
+    val isTestRide = booking.isTestRide || booking.testMode
     var declinedOfferIds by remember(booking.id) { mutableStateOf<Set<String>>(emptySet()) }
     val visibleOffers = remember(offers, declinedOfferIds) {
         offers.filter { it.id !in declinedOfferIds }
@@ -201,11 +217,23 @@ fun CustomerActiveRideView(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (visibleOffers.isEmpty()) "Locating rider nearby..." else "${visibleOffers.size} rider offer(s) ready",
+                                text = if (isTestRide) {
+                                    "Test Ride queued — assigning simulated driver"
+                                } else if (visibleOffers.isEmpty()) {
+                                    "Locating rider nearby..."
+                                } else {
+                                    "${visibleOffers.size} rider offer(s) ready"
+                                },
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
                             )
-                            GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (isTestRide) {
+                                    GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
+                                }
+                                GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
+                            }
                         }
 
                         LinearProgressIndicator(
@@ -331,10 +359,10 @@ fun CustomerActiveRideView(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(GolocalSuccess)
+                            .background(if (isTestRide) GolocalWarning else GolocalSuccess)
                     )
                     Text(
-                        text = stageHeadline,
+                        text = if (isTestRide) "TEST RIDE • $stageHeadline" else stageHeadline,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         color = GolocalDeepNavy
@@ -360,47 +388,114 @@ fun CustomerActiveRideView(
                     .padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (booking.tripPin.isNotBlank() && booking.status in setOf("assigned", "arriving", "arrived")) {
+                if (isTestRide) {
                     Surface(
-                        color = GolocalLightBlue.copy(alpha = 0.7f),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("customer_trip_pin_card")
+                        shape = RoundedCornerShape(14.dp),
+                        color = GolocalWarningContainer,
+                        modifier = Modifier.fillMaxWidth().testTag("customer_test_ride_banner")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Share 4-Digit Trip PIN", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    text = "Verify rider before sharing PIN at pickup",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Icon(Icons.Filled.Science, contentDescription = null, tint = GolocalDeepNavy, modifier = Modifier.size(18.dp))
                             Text(
-                                text = booking.tripPin,
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontFamily = JetBrainsMono,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = GolocalPrimaryBlue
+                                text = "TEST RIDE — Admin-Controlled Live Simulation",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = GolocalDeepNavy
                             )
                         }
                     }
-                }
 
-                if (booking.assignedDriverId.isNotBlank()) {
-                    BookingCommunicationBar(
+                    if (booking.assignedDriverId.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = GolocalLightBlue.copy(alpha = 0.65f),
+                            modifier = Modifier.fillMaxWidth().testTag("customer_test_driver_card")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = booking.assignedDriverName.ifBlank { "Simulated Test Driver" },
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = GolocalDeepNavy
+                                    )
+                                    GolocalStatusBadge(label = "TEST DRIVER", tone = "warning")
+                                }
+                                Text(
+                                    text = booking.assignedVehicleLabel.ifBlank { "TEST VEHICLE" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = GolocalPrimaryBlue
+                                )
+                                Text(
+                                    text = "Simulated Driver • Controlled via Admin Portal",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    CustomerTestPickupOtpCard(
                         booking = booking,
-                        viewerRole = "customer",
-                        callContact = callContact,
-                        unreadCount = unreadChatCount,
-                        onCallClick = onOpenCall,
-                        onChatClick = onOpenChat
+                        isVerifying = isVerifyingTestOtp,
+                        errorMessage = testOtpError,
+                        onVerifyOtp = onVerifyTestOtp,
+                        onClearError = onClearTestOtpError
                     )
+                } else {
+                    if (booking.tripPin.isNotBlank() && booking.status in setOf("assigned", "arriving", "arrived")) {
+                        Surface(
+                            color = GolocalLightBlue.copy(alpha = 0.7f),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("customer_trip_pin_card")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Share 4-Digit Trip PIN", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        text = "Verify rider before sharing PIN at pickup",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Text(
+                                    text = booking.tripPin,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontFamily = JetBrainsMono,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = GolocalPrimaryBlue
+                                )
+                            }
+                        }
+                    }
+
+                    if (booking.assignedDriverId.isNotBlank()) {
+                        BookingCommunicationBar(
+                            booking = booking,
+                            viewerRole = "customer",
+                            callContact = callContact,
+                            unreadCount = unreadChatCount,
+                            onCallClick = onOpenCall,
+                            onChatClick = onOpenChat
+                        )
+                    }
                 }
 
                 Surface(
@@ -661,6 +756,9 @@ fun RideCompletedReceiptDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (booking.isTestRide || booking.testMode) {
+                    GolocalStatusBadge(label = "TEST RIDE • SIMULATED RECEIPT", tone = "warning")
+                }
                 Text("${booking.pickupLabel} -> ${booking.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -733,3 +831,135 @@ private fun RatingChipSelector(label: String, selected: Int, onSelect: (Int) -> 
         }
     }
 }
+
+@Composable
+private fun CustomerTestPickupOtpCard(
+    booking: Booking,
+    isVerifying: Boolean,
+    errorMessage: String?,
+    onVerifyOtp: (String) -> Unit,
+    onClearError: () -> Unit
+) {
+    var otpInput by remember(booking.id) { mutableStateOf("") }
+    var remainingSec by remember(booking.id, booking.testOtpExpiresAtMs, booking.testOtpStatus) {
+        mutableLongStateOf(TestRideOtpUtil.remainingSeconds(booking.testOtpExpiresAtMs))
+    }
+    LaunchedEffect(booking.id, booking.testOtpExpiresAtMs, booking.testOtpStatus) {
+        while (booking.testOtpExpiresAtMs > 0L && booking.testOtpStatus == "pending") {
+            remainingSec = TestRideOtpUtil.remainingSeconds(booking.testOtpExpiresAtMs)
+            if (remainingSec <= 0L) break
+            delay(1000L)
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.5.dp, GolocalPrimaryBlue, RoundedCornerShape(16.dp))
+            .testTag("customer_test_otp_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.VerifiedUser, contentDescription = null, tint = GolocalPrimaryBlue, modifier = Modifier.size(18.dp))
+                    Text("Pickup OTP Verification", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                }
+                if (booking.testOtpStatus.isNotBlank()) {
+                    GolocalStatusBadge(
+                        label = booking.testOtpStatus.uppercase(),
+                        tone = when (booking.testOtpStatus) {
+                            "verified", "overridden" -> "success"
+                            "expired", "reset" -> "error"
+                            else -> "warning"
+                        }
+                    )
+                }
+            }
+
+            when {
+                booking.testOtpStatus == "verified" -> {
+                    Text(
+                        text = "Pickup OTP verified. Your simulated test ride is in progress.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = GolocalSuccess
+                    )
+                }
+                booking.testOtpStatus == "overridden" -> {
+                    Text(
+                        text = "Started via authorized Admin OTP Override.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = GolocalSuccess
+                    )
+                }
+                booking.status in setOf("assigned", "arriving") -> {
+                    Text(
+                        text = "OTP entry unlocks automatically once your Test Driver arrives at pickup.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                booking.status == "arrived" -> {
+                    Text(
+                        text = if (remainingSec > 0) {
+                            "Enter the 6-digit Test OTP shared from the Admin Portal (valid for ${remainingSec}s)."
+                        } else {
+                            "Test OTP expired — ask Admin Portal to re-assign or reset this test ride."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (remainingSec > 0) MaterialTheme.colorScheme.onSurfaceVariant else GolocalError
+                    )
+                    OutlinedTextField(
+                        value = otpInput,
+                        onValueChange = { raw ->
+                            val digits = raw.filter { it.isDigit() }.take(6)
+                            otpInput = digits
+                            if (!errorMessage.isNullOrBlank()) onClearError()
+                        },
+                        label = { Text("6-Digit Pickup Test OTP") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("customer_test_otp_input")
+                    )
+                    if (!errorMessage.isNullOrBlank()) {
+                        Text(
+                            text = errorMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = GolocalError,
+                            modifier = Modifier.testTag("customer_test_otp_error")
+                        )
+                    }
+                    Button(
+                        onClick = { onVerifyOtp(otpInput) },
+                        enabled = otpInput.length == 6 && !isVerifying && remainingSec > 0,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("verify_test_otp_button")
+                    ) {
+                        if (isVerifying) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Verify OTP & Start Ride")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

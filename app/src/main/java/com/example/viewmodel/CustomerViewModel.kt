@@ -13,6 +13,7 @@ import com.example.data.model.CancellationAppeal
 import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.FareConfig
 import com.example.data.model.PaymentRecord
+import com.example.data.model.PlatformSettings
 import com.example.data.model.RatingRecord
 import com.example.data.model.RideOffer
 import com.example.data.model.ServiceArea
@@ -77,7 +78,24 @@ class CustomerViewModel(
     private val _isSubmitting = MutableStateFlow(false)
     val isSubmitting: StateFlow<Boolean> = _isSubmitting.asStateFlow()
 
+    private val _isVerifyingTestOtp = MutableStateFlow(false)
+    val isVerifyingTestOtp: StateFlow<Boolean> = _isVerifyingTestOtp.asStateFlow()
+
+    private val _testOtpError = MutableStateFlow<String?>(null)
+    val testOtpError: StateFlow<String?> = _testOtpError.asStateFlow()
+
     private val _archiveBookingId = MutableStateFlow<String?>(null)
+
+    val platformSettings: StateFlow<PlatformSettings?> = repository.observePlatformSettings()
+        .catch { error ->
+            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+            emit(null)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null
+        )
 
     val fareConfigs: StateFlow<List<FareConfig>> = repository.observeFareConfigs()
         .map { remote ->
@@ -188,7 +206,13 @@ class CustomerViewModel(
     val activeChatMessages: StateFlow<List<BookingChatMessage>> = activeBooking
         .flatMapLatest { booking ->
             val comm = communicationRepository
-            if (comm == null || booking == null || booking.assignedDriverId.isBlank() || !BookingChatValidator.isChatReadAllowed(booking.status)) {
+            if (comm == null ||
+                booking == null ||
+                booking.isTestRide ||
+                booking.testMode ||
+                booking.assignedDriverId.isBlank() ||
+                !BookingChatValidator.isChatReadAllowed(booking.status)
+            ) {
                 flowOf(emptyList())
             } else {
                 comm.observeMessages(booking.id)
@@ -216,7 +240,13 @@ class CustomerViewModel(
     val activeCallContact: StateFlow<BookingCallContact?> = activeBooking
         .flatMapLatest { booking ->
             val comm = communicationRepository
-            if (comm == null || booking == null || booking.assignedDriverId.isBlank() || !BookingChatValidator.isChatWriteAllowed(booking.status)) {
+            if (comm == null ||
+                booking == null ||
+                booking.isTestRide ||
+                booking.testMode ||
+                booking.assignedDriverId.isBlank() ||
+                !BookingChatValidator.isChatWriteAllowed(booking.status)
+            ) {
                 flowOf(null)
             } else {
                 comm.observeParticipantCallContact(booking)
@@ -466,6 +496,7 @@ class CustomerViewModel(
         }
 
         val quote = currentQuote.value
+        val isTestRideActive = platformSettings.value?.testRideModeEnabled == true
         _isSubmitting.value = true
         viewModelScope.launch {
             val booking = Booking(
@@ -496,18 +527,46 @@ class CustomerViewModel(
                 familyMemberName = d.familyMemberName,
                 familyConsentConfirmed = d.familyConsentConfirmed,
                 isRoundTrip = d.isRoundTrip,
-                invoiceEmail = invoiceEmail.trim()
+                invoiceEmail = invoiceEmail.trim(),
+                isTestRide = isTestRideActive,
+                testMode = isTestRideActive,
+                testOtpStatus = if (isTestRideActive) "awaiting_assignment" else ""
             )
             repository.createBooking(booking)
                 .onSuccess { id ->
                     prefsRepository.clearDraftBooking()
-                    _actionMessage.value = "Booking #$id created. Verified local drivers can now submit fare proposals."
+                    _actionMessage.value = if (isTestRideActive) {
+                        "TEST RIDE #$id created. Waiting for Admin/Ops Test Driver assignment."
+                    } else {
+                        "Booking #$id created. Verified local drivers can now submit fare proposals."
+                    }
                 }
                 .onFailure { exc ->
                     _actionMessage.value = exc.localizedMessage ?: "Failed to create booking"
                 }
             _isSubmitting.value = false
         }
+    }
+
+    fun verifyTestRideOtp(booking: Booking, enteredOtp: String) {
+        if (_isVerifyingTestOtp.value) return
+        _isVerifyingTestOtp.value = true
+        _testOtpError.value = null
+        viewModelScope.launch {
+            repository.verifyTestRideOtpByCustomer(booking, enteredOtp)
+                .onSuccess {
+                    _testOtpError.value = null
+                    _actionMessage.value = "TEST OTP verified! Simulated test trip started."
+                }
+                .onFailure { exc ->
+                    _testOtpError.value = exc.localizedMessage ?: "Invalid or expired Test OTP."
+                }
+            _isVerifyingTestOtp.value = false
+        }
+    }
+
+    fun clearTestOtpError() {
+        _testOtpError.value = null
     }
 
     fun confirmOffer(bookingId: String, offer: RideOffer) {

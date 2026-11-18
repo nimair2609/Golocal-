@@ -149,6 +149,9 @@ fun CustomerBookRideScreen(
     val customerProfile by sessionViewModel.customerProfileState.collectAsStateWithLifecycle()
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
     val isSubmitting by customerViewModel.isSubmitting.collectAsStateWithLifecycle()
+    val platformSettings by customerViewModel.platformSettings.collectAsStateWithLifecycle()
+    val isVerifyingTestOtp by customerViewModel.isVerifyingTestOtp.collectAsStateWithLifecycle()
+    val testOtpError by customerViewModel.testOtpError.collectAsStateWithLifecycle()
 
     val customerAccount = (accountState as? UiState.Success)?.data
     val customerInvoiceEmail = customerAccount?.email.orEmpty()
@@ -168,7 +171,8 @@ fun CustomerBookRideScreen(
     var routeUiState by remember { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
 
     LaunchedEffect(activeBooking?.id, customerPhone) {
-        if (activeBooking != null && customerPhone.isNotBlank()) {
+        val active = activeBooking
+        if (active != null && !active.isTestRide && !active.testMode && customerPhone.isNotBlank()) {
             customerViewModel.syncMyContactForActiveBooking(customerPhone)
         }
     }
@@ -234,7 +238,11 @@ fun CustomerBookRideScreen(
             },
             onOpenSos = { showSosDialog = true },
             onOpenComplaint = { showComplaintDialog = true },
-            onOpenCancel = { showCancelDialog = true }
+            onOpenCancel = { showCancelDialog = true },
+            isVerifyingTestOtp = isVerifyingTestOtp,
+            testOtpError = testOtpError,
+            onVerifyTestOtp = { otp -> customerViewModel.verifyTestRideOtp(currentBooking, otp) },
+            onClearTestOtpError = { customerViewModel.clearTestOtpError() }
         )
     } else {
         // Route Preview & Vehicle Selection Screen (modeled on Image 1 Panels 1 & 2)
@@ -388,11 +396,23 @@ fun CustomerBookRideScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Choose a ride:",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Choose a ride:",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (platformSettings?.testRideModeEnabled == true) {
+                                GolocalStatusBadge(
+                                    label = "TEST RIDE MODE",
+                                    tone = "warning",
+                                    modifier = Modifier.testTag("booking_test_ride_mode_pill")
+                                )
+                            }
+                        }
                         Surface(
                             onClick = { showServiceOptionsSheet = true },
                             shape = RoundedCornerShape(999.dp),

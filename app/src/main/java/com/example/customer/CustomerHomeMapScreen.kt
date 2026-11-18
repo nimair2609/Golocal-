@@ -205,10 +205,15 @@ fun CustomerHomeMapScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+                            val activeSubtitle = when {
+                                platformSettings?.testRideModeEnabled == true -> "Test Ride Mode Active • Controlled Simulation"
+                                onlineCount > 0 -> "$onlineCount verified riders nearby"
+                                else -> "West Bengal Local Mobility"
+                            }
                             Text(
-                                text = if (onlineCount > 0) "$onlineCount verified riders nearby" else "West Bengal Local Mobility",
+                                text = activeSubtitle,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (onlineCount > 0) GolocalSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (platformSettings?.testRideModeEnabled == true) GolocalPrimaryBlue else if (onlineCount > 0) GolocalSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -435,6 +440,7 @@ fun CustomerHomeMapScreen(
 
                 // Active Trip Quick Card
                 if (activeBooking != null) {
+                    val isTestRide = activeBooking.isTestRide || activeBooking.testMode
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
@@ -452,11 +458,16 @@ fun CustomerHomeMapScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                GolocalStatusBadge(
-                                    label = "ACTIVE: ${activeBooking.status.uppercase()}",
-                                    tone = if (activeBooking.status == "searching") "warning" else "success"
-                                )
-                                if (activeBooking.tripPin.isNotBlank()) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    if (isTestRide) {
+                                        GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
+                                    }
+                                    GolocalStatusBadge(
+                                        label = "ACTIVE: ${activeBooking.status.uppercase()}",
+                                        tone = if (activeBooking.status == "searching") "warning" else "success"
+                                    )
+                                }
+                                if (!isTestRide && activeBooking.tripPin.isNotBlank()) {
                                     Text(
                                         text = "PIN ${activeBooking.tripPin}",
                                         style = MaterialTheme.typography.titleSmall,
@@ -472,17 +483,25 @@ fun CustomerHomeMapScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             if (activeBooking.assignedDriverId.isNotBlank()) {
-                                BookingCommunicationBar(
-                                    booking = activeBooking,
-                                    viewerRole = "customer",
-                                    callContact = activeCallContact,
-                                    unreadCount = unreadChatCount,
-                                    onCallClick = { showCallDialog = true },
-                                    onChatClick = {
-                                        onMarkChatRead()
-                                        showChatSheet = true
-                                    }
-                                )
+                                if (isTestRide) {
+                                    Text(
+                                        text = "TEST DRIVER: ${activeBooking.assignedDriverName} (${activeBooking.assignedVehicleLabel.ifBlank { "TEST VEHICLE" }})",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = GolocalDeepNavy
+                                    )
+                                } else {
+                                    BookingCommunicationBar(
+                                        booking = activeBooking,
+                                        viewerRole = "customer",
+                                        callContact = activeCallContact,
+                                        unreadCount = unreadChatCount,
+                                        onCallClick = { showCallDialog = true },
+                                        onChatClick = {
+                                            onMarkChatRead()
+                                            showChatSheet = true
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -610,7 +629,7 @@ fun CustomerHomeMapScreen(
         }
     }
 
-    if (showCallDialog && activeBooking != null && activeCallContact != null && activeCallContact.driverPhone.isNotBlank()) {
+    if (showCallDialog && activeBooking != null && !activeBooking.isTestRide && !activeBooking.testMode && activeCallContact != null && activeCallContact.driverPhone.isNotBlank()) {
         CallPeerConfirmDialog(
             peerLabel = activeBooking.assignedDriverName.ifBlank { "Driver" },
             phoneNumber = activeCallContact.driverPhone,
@@ -622,7 +641,7 @@ fun CustomerHomeMapScreen(
         )
     }
 
-    if (showChatSheet && activeBooking != null) {
+    if (showChatSheet && activeBooking != null && !activeBooking.isTestRide && !activeBooking.testMode) {
         BookingChatModalSheet(
             booking = activeBooking,
             viewerUid = currentUserId,

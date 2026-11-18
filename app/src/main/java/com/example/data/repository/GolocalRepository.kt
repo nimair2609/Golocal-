@@ -4,9 +4,14 @@ import android.content.Context
 import com.example.R
 import com.example.data.model.*
 import com.example.domain.FareCalculator
+import com.example.domain.SimulatedTestDriver
+import com.example.domain.TestRideOtpUtil
+import com.example.domain.TestRideRouteSimulator
+import com.example.domain.TestRideStateMachine
 import com.example.ui.auth.AuthDiagnostics
 import com.example.ui.auth.AuthStage
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -23,6 +28,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import java.util.Date
 import kotlin.random.Random
 
 class GolocalRepository(
@@ -778,6 +784,10 @@ class GolocalRepository(
             put("familyConsentConfirmed", booking.familyConsentConfirmed)
             put("isRoundTrip", booking.isRoundTrip)
             if (booking.invoiceEmail.isNotBlank()) put("invoiceEmail", booking.invoiceEmail.trim().take(150))
+            put("is_test_ride", booking.isTestRide)
+            put("test_mode", booking.testMode)
+            if (booking.testOtpStatus.isNotBlank()) put("test_otp_status", booking.testOtpStatus)
+            if (booking.testOtpExpiresAtMs > 0L) put("test_otp_expires_at_ms", booking.testOtpExpiresAtMs)
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -1366,7 +1376,12 @@ class GolocalRepository(
     }
 
     fun observeOpenBookingsForDrivers(): Flow<List<Booking>> =
-        safeQueryFlow("bookings", db.collection("bookings").whereEqualTo("status", "searching")) {
+        safeQueryFlow(
+            "bookings",
+            db.collection("bookings")
+                .whereEqualTo("status", "searching")
+                .whereEqualTo("is_test_ride", false)
+        ) {
             it.toObject(Booking::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
         }
 
@@ -2197,6 +2212,13 @@ class GolocalRepository(
                         "releaseNotes" to settings.releaseNotes.trim(),
                         "isMandatoryUpdate" to settings.isMandatoryUpdate,
                         "updateManifestUrl" to settings.updateManifestUrl.trim(),
+                        "testRideModeEnabled" to settings.testRideModeEnabled,
+                        "testAutoAssignEnabled" to settings.testAutoAssignEnabled,
+                        "testManualAssignEnabled" to settings.testManualAssignEnabled,
+                        "testDriverSpeedKmph" to settings.testDriverSpeedKmph.coerceIn(5.0, 120.0),
+                        "testOtpValiditySeconds" to settings.testOtpValiditySeconds.coerceIn(60L, 1800L),
+                        "testAllowAdminOtpOverride" to settings.testAllowAdminOtpOverride,
+                        "testAutoCompleteEnabled" to settings.testAutoCompleteEnabled,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2208,7 +2230,7 @@ class GolocalRepository(
                         "action" to "UPDATE_PLATFORM_SETTINGS",
                         "targetCollection" to "platform_settings",
                         "targetId" to "global",
-                        "summary" to "Updated global platform settings",
+                        "summary" to "Updated platform settings (testRideMode=${settings.testRideModeEnabled})",
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2399,5 +2421,506 @@ class GolocalRepository(
             handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
             throw e
         }
+    }
+
+    // --- Admin-Controlled Live Test Ride Mode ---
+
+    suspend fun checkIsOperationsStaff(uid: String): Boolean {
+        return try {
+            val snap = db.collection("operations_staff").document(uid).get().await()
+            snap.exists() && snap.getBoolean("isActive") == true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun observeTestRideTripLocations(): Flow<List<TripLocation>> =
+        safeQueryFlow("trip_locations", db.collection("trip_locations")) {
+            it.toObject(TripLocation::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    fun observeTestRideOtpSecrets(): Flow<List<TestRideOtpSecret>> =
+        safeQueryFlow("test_ride_otp_secrets", db.collection("test_ride_otp_secrets")) {
+            it.toObject(TestRideOtpSecret::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    suspend fun assignTestDriverToBooking(
+        booking: Booking,
+        testDriver: SimulatedTestDriver,
+        otpValiditySeconds: Long,
+        notifyCustomer: Boolean = true,
+        actorRole: String = "admin"
+    ): Result<String> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(booking.isTestRide || booking.testMode) {
+            "Only TEST RIDE bookings can be assigned a simulated test driver."
+        }
+        val otpPlaintext = TestRideOtpUtil.generateSixDigitOtp()
+        val otpHash = TestRideOtpUtil.sha256Hex(booking.id, otpPlaintext)
+        val expiresAtMs = TestRideOtpUtil.computeExpiresAtMs(System.currentTimeMillis(), otpValiditySeconds)
+        val expiresAtTs = Timestamp(Date(expiresAtMs))
+        val initialPt = TestRideRouteSimulator.initialApproachPoint(booking.pickupLat, booking.pickupLng)
+
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val otpChallengeRef = db.collection("test_ride_otps").document(booking.id)
+        val otpSecretRef = db.collection("test_ride_otp_secrets").document(booking.id)
+        val locationRef = db.collection("trip_locations").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "assigned",
+                        "assignedDriverId" to testDriver.id,
+                        "assignedDriverName" to testDriver.displayName,
+                        "assignedVehicleLabel" to testDriver.vehicleLabel,
+                        "agreedFareInr" to booking.estimatedFareInr.coerceAtLeast(1.0),
+                        "test_otp_status" to "pending",
+                        "test_otp_expires_at_ms" to expiresAtMs,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    otpChallengeRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "otpHash" to otpHash,
+                        "submittedHash" to "",
+                        "used" to false,
+                        "overridden" to false,
+                        "overrideReason" to "",
+                        "verifiedByUid" to "",
+                        "attempts" to 0L,
+                        "maxAttempts" to 5L,
+                        "expiresAt" to expiresAtTs,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    otpSecretRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "otpPlaintext" to otpPlaintext,
+                        "status" to "pending",
+                        "issuedByUid" to actorUid,
+                        "issuedByRole" to actorRole,
+                        "expiresAt" to expiresAtTs,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    locationRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "driverId" to testDriver.id,
+                        "lat" to initialPt.lat,
+                        "lng" to initialPt.lng,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                if (notifyCustomer) {
+                    val notifRef = db.collection("notifications").document()
+                    batch.set(
+                        notifRef,
+                        mapOf(
+                            "userId" to booking.customerId,
+                            "title" to "TEST RIDE Assigned • Test OTP Ready",
+                            "body" to "TEST DRIVER ${testDriver.displayName} assigned. TEST OTP: $otpPlaintext (enter at pickup).",
+                            "type" to "test_otp",
+                            "read" to false,
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "TEST_RIDE_ASSIGN_DRIVER",
+                        "targetCollection" to "bookings",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Assigned ${testDriver.displayName} to TEST RIDE ${booking.id}",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, bookingRef.path, auth)
+            throw e
+        }
+        otpPlaintext
+    }
+
+    suspend fun updateTestRideStatus(
+        booking: Booking,
+        nextStatus: String,
+        reason: String = "",
+        actorRole: String = "admin"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(booking.isTestRide || booking.testMode) { "Only TEST RIDE bookings can use test controls." }
+        require(TestRideStateMachine.isValidTransition(booking.status, nextStatus)) {
+            "Invalid test ride transition from ${booking.status} to $nextStatus."
+        }
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                val updates = buildMap<String, Any> {
+                    put("status", nextStatus)
+                    if (nextStatus == "cancelled") {
+                        put("cancellationReason", reason.ifBlank { "Cancelled from Admin Test Ride Control" }.take(250))
+                        put("cancelledBy", actorUid)
+                        put("cancelledByRole", "admin")
+                    }
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                batch.update(bookingRef, updates)
+                if (nextStatus in setOf("arriving", "arrived", "completed", "cancelled")) {
+                    val notifRef = db.collection("notifications").document()
+                    val (title, body) = when (nextStatus) {
+                        "arriving" -> "TEST DRIVER En Route" to "Simulated test driver is heading to ${booking.pickupLabel}."
+                        "arrived" -> "TEST DRIVER Arrived" to "Simulated test driver arrived at pickup. Verify Test OTP to start ride."
+                        "completed" -> "TEST RIDE Completed" to "Test ride ended (${booking.pickupLabel} -> ${booking.destinationLabel}). No production charge recorded."
+                        else -> "TEST RIDE Cancelled" to reason.ifBlank { "Test ride cancelled by Admin/Ops." }.take(250)
+                    }
+                    batch.set(
+                        notifRef,
+                        mapOf(
+                            "userId" to booking.customerId,
+                            "title" to title,
+                            "body" to body,
+                            "type" to "test_ride",
+                            "read" to false,
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "TEST_RIDE_STATUS_${nextStatus.uppercase()}",
+                        "targetCollection" to "bookings",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Changed TEST RIDE ${booking.id} from ${booking.status} to $nextStatus",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, bookingRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun updateTestRideTripLocation(
+        booking: Booking,
+        lat: Double,
+        lng: Double
+    ): Result<Unit> = runCatching {
+        requireUserId()
+        require(booking.isTestRide || booking.testMode) { "Not a test ride." }
+        val locRef = db.collection("trip_locations").document(booking.id)
+        try {
+            locRef.set(
+                mapOf(
+                    "bookingId" to booking.id,
+                    "customerId" to booking.customerId,
+                    "driverId" to booking.assignedDriverId.ifBlank { "test_driver_toto_01" },
+                    "lat" to lat,
+                    "lng" to lng,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, locRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun sendTestOtpNotificationToCustomer(
+        booking: Booking,
+        otpPlaintext: String,
+        actorRole: String = "admin"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(TestRideOtpUtil.isValidOtpFormat(otpPlaintext)) { "Valid 6-digit test OTP required." }
+        val notifRef = db.collection("notifications").document()
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.set(
+                    notifRef,
+                    mapOf(
+                        "userId" to booking.customerId,
+                        "title" to "TEST OTP • Pickup Verification",
+                        "body" to "TEST OTP for ${booking.pickupLabel}: $otpPlaintext (Test Ride Only)",
+                        "type" to "test_otp",
+                        "read" to false,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "TEST_OTP_SENT",
+                        "targetCollection" to "notifications",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Dispatched TEST OTP notification for TEST RIDE ${booking.id}",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, notifRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun verifyTestRideOtpByCustomer(
+        booking: Booking,
+        enteredOtp: String
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val cleanOtp = enteredOtp.trim()
+        require(booking.isTestRide || booking.testMode) { "Not a Test Ride booking." }
+        require(booking.status == "arrived") { "Pickup OTP can only be verified once Test Driver has arrived." }
+        require(TestRideOtpUtil.isValidOtpFormat(cleanOtp)) { "Enter the exact 6-digit numeric Test OTP." }
+        if (booking.testOtpExpiresAtMs > 0L && TestRideOtpUtil.isExpired(booking.testOtpExpiresAtMs)) {
+            throw IllegalStateException("Test OTP has expired. Ask Admin or Operations Staff to regenerate OTP.")
+        }
+
+        val submittedHash = TestRideOtpUtil.sha256Hex(booking.id, cleanOtp)
+        val otpRef = db.collection("test_ride_otps").document(booking.id)
+        val bookingRef = db.collection("bookings").document(booking.id)
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    otpRef,
+                    mapOf(
+                        "used" to true,
+                        "submittedHash" to submittedHash,
+                        "verifiedByUid" to uid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "in_progress",
+                        "test_otp_status" to "verified",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val fe = e.unwrapFirestoreError() as? FirebaseFirestoreException
+            if (fe?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                runCatching {
+                    otpRef.update(
+                        mapOf(
+                            "attempts" to FieldValue.increment(1L),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
+                val message = if (booking.testOtpExpiresAtMs > 0L &&
+                    TestRideOtpUtil.isExpired(booking.testOtpExpiresAtMs)
+                ) {
+                    "Test OTP expired. Ask Admin/Ops to regenerate or override."
+                } else {
+                    "Incorrect Test OTP or attempt limit reached."
+                }
+                throw IllegalArgumentException(message)
+            }
+            handleFirestoreError(e, OperationType.WRITE, otpRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun adminOverrideTestOtpAndStartRide(
+        booking: Booking,
+        reason: String,
+        actorRole: String = "admin"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanReason = reason.trim()
+        require(booking.isTestRide || booking.testMode) { "Only TEST RIDE bookings support OTP override." }
+        require(booking.status == "arrived") { "Ride must be in 'arrived' state to override pickup OTP." }
+        require(cleanReason.length >= 4) { "Provide an audit reason (at least 4 characters)." }
+
+        val otpRef = db.collection("test_ride_otps").document(booking.id)
+        val secretRef = db.collection("test_ride_otp_secrets").document(booking.id)
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    otpRef,
+                    mapOf(
+                        "used" to true,
+                        "overridden" to true,
+                        "overrideReason" to cleanReason.take(250),
+                        "verifiedByUid" to actorUid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    secretRef,
+                    mapOf(
+                        "status" to "overridden",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "in_progress",
+                        "test_otp_status" to "overridden",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "TEST_OTP_ADMIN_OVERRIDE",
+                        "targetCollection" to "test_ride_otps",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Overrode Test OTP for ${booking.id}: $cleanReason",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, otpRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun resetTestRideBooking(
+        booking: Booking,
+        actorRole: String = "admin"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        require(booking.isTestRide || booking.testMode) { "Only TEST RIDE bookings can be reset." }
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val otpRef = db.collection("test_ride_otps").document(booking.id)
+        val secretRef = db.collection("test_ride_otp_secrets").document(booking.id)
+        val locRef = db.collection("trip_locations").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "searching",
+                        "assignedDriverId" to "",
+                        "assignedDriverName" to "",
+                        "assignedVehicleLabel" to "",
+                        "test_otp_status" to "reset",
+                        "test_otp_expires_at_ms" to 0L,
+                        "cancellationReason" to "",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.delete(otpRef)
+                batch.delete(secretRef)
+                batch.delete(locRef)
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "TEST_RIDE_RESET",
+                        "targetCollection" to "bookings",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Reset TEST RIDE ${booking.id} back to Pending",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, bookingRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun clearCompletedTestRideRecords(actorRole: String = "admin"): Result<Int> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val snap = db.collection("bookings")
+            .whereEqualTo("is_test_ride", true)
+            .get()
+            .await()
+
+        val targets = snap.documents.filter { doc ->
+            doc.getString("status") in setOf("completed", "cancelled")
+        }
+        if (targets.isEmpty()) return@runCatching 0
+
+        targets.chunked(40).forEach { chunk ->
+            db.runBatch { batch ->
+                chunk.forEach { doc ->
+                    val id = doc.id
+                    batch.delete(db.collection("bookings").document(id))
+                    batch.delete(db.collection("test_ride_otps").document(id))
+                    batch.delete(db.collection("test_ride_otp_secrets").document(id))
+                    batch.delete(db.collection("trip_locations").document(id))
+                }
+            }.await()
+        }
+
+        val auditRef = db.collection("audit_logs").document()
+        auditRef.set(
+            mapOf(
+                "actorId" to actorUid,
+                "actorEmail" to actorEmail,
+                "action" to "CLEAR_TEST_RIDE_RECORDS",
+                "targetCollection" to "bookings",
+                "targetId" to "test_cleanup",
+                "summary" to "[$actorRole] Cleared ${targets.size} completed/cancelled TEST RIDE records",
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+
+        targets.size
     }
 }

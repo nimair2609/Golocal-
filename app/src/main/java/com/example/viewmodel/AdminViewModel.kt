@@ -10,10 +10,19 @@ import com.example.data.repository.GolocalRepository
 import com.example.domain.AbuseDetectionEngine
 import com.example.domain.DriverAbuseAdvisory
 import com.example.domain.FareCalculator
+import com.example.domain.SimulatedTestDriver
+import com.example.domain.TestDriverCatalog
+import com.example.domain.TestRideRouteSimulator
+import com.example.domain.TestRideSeparation
+import com.example.map.GeoPoint
+import com.example.map.OsrmRouteService
+import com.example.map.RouteUiState
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +67,15 @@ class AdminViewModel(
     private val _inspectedChatBookingId = MutableStateFlow<String?>(null)
     val inspectedChatBookingId: StateFlow<String?> = _inspectedChatBookingId.asStateFlow()
 
+    private val _simulatingBookingId = MutableStateFlow<String?>(null)
+    val simulatingBookingId: StateFlow<String?> = _simulatingBookingId.asStateFlow()
+
+    private val _simulationPhase = MutableStateFlow<String?>(null)
+    val simulationPhase: StateFlow<String?> = _simulationPhase.asStateFlow()
+
+    private var simulationJob: Job? = null
+    private val autoAssignedIds = mutableSetOf<String>()
+
     val users: StateFlow<List<UserAccount>> = repository.observeAdminUsers()
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin users", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
@@ -72,10 +90,28 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    val bookings: StateFlow<List<Booking>> = repository.observeAdminBookings()
+    val allBookings: StateFlow<List<Booking>> = repository.observeAdminBookings()
         .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin bookings", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val bookings: StateFlow<List<Booking>> = allBookings
+        .map { list -> TestRideSeparation.filterProductionBookings(list) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val testBookings: StateFlow<List<Booking>> = allBookings
+        .map { list -> TestRideSeparation.filterTestBookings(list) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val testTripLocations: StateFlow<Map<String, TripLocation>> = repository.observeTestRideTripLocations()
+        .map { list -> list.associateBy { it.bookingId } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyMap()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
+
+    val testOtpSecrets: StateFlow<Map<String, TestRideOtpSecret>> = repository.observeTestRideOtpSecrets()
+        .map { list -> list.associateBy { it.bookingId } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyMap()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
 
     val cancellationAdvisories: StateFlow<List<DriverAbuseAdvisory>> = bookings
         .map { list -> AbuseDetectionEngine.evaluateCancellationAdvisories(list) }
@@ -430,6 +466,271 @@ class AdminViewModel(
 
     fun clearMessage() {
         _message.value = null
+    }
+
+    // --- Admin-Controlled Live Test Ride Mode Controls ---
+
+    fun toggleTestRideMode(enabled: Boolean) {
+        val current = platformSettings.value
+        val updated = current.copy(testRideModeEnabled = enabled)
+        viewModelScope.launch {
+            repository.adminSavePlatformSettings(updated)
+                .onSuccess {
+                    _message.value = if (enabled) {
+                        "TEST RIDE MODE enabled. Customer bookings are now marked TEST RIDE."
+                    } else {
+                        "TEST RIDE MODE disabled. Platform returned to standard production bookings."
+                    }
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to toggle Test Ride Mode." }
+        }
+    }
+
+    fun updateTestRideSettings(
+        autoAssignEnabled: Boolean,
+        manualAssignEnabled: Boolean,
+        speedKmph: Double,
+        otpValiditySeconds: Long,
+        allowAdminOtpOverride: Boolean,
+        autoCompleteEnabled: Boolean
+    ) {
+        val updated = platformSettings.value.copy(
+            testAutoAssignEnabled = autoAssignEnabled,
+            testManualAssignEnabled = manualAssignEnabled,
+            testDriverSpeedKmph = speedKmph.coerceIn(5.0, 120.0),
+            testOtpValiditySeconds = otpValiditySeconds.coerceIn(60L, 1800L),
+            testAllowAdminOtpOverride = allowAdminOtpOverride,
+            testAutoCompleteEnabled = autoCompleteEnabled
+        )
+        viewModelScope.launch {
+            repository.adminSavePlatformSettings(updated)
+                .onSuccess { _message.value = "Test Ride simulation settings saved." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to save Test Ride settings." }
+        }
+    }
+
+    fun assignTestDriver(
+        booking: Booking,
+        testDriver: SimulatedTestDriver = TestDriverCatalog.defaultForCategory(booking.vehicleCategory),
+        notifyCustomer: Boolean = true,
+        actorRole: String = "admin"
+    ) {
+        val validity = platformSettings.value.testOtpValiditySeconds.coerceIn(60L, 1800L)
+        viewModelScope.launch {
+            repository.assignTestDriverToBooking(booking, testDriver, validity, notifyCustomer, actorRole)
+                .onSuccess { otp ->
+                    _message.value = "Assigned ${testDriver.displayName} to TEST RIDE #${booking.id.take(6)}. TEST OTP: $otp"
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to assign Test Driver." }
+        }
+    }
+
+    fun tryAutoAssignPendingTestRides(actorRole: String = "admin") {
+        val settings = platformSettings.value
+        if (!settings.testRideModeEnabled || !settings.testAutoAssignEnabled) return
+        val pending = testBookings.value.filter {
+            it.status == "searching" && it.assignedDriverId.isBlank() && it.id !in autoAssignedIds
+        }
+        pending.forEach { booking ->
+            autoAssignedIds.add(booking.id)
+            assignTestDriver(
+                booking = booking,
+                testDriver = TestDriverCatalog.defaultForCategory(booking.vehicleCategory),
+                notifyCustomer = true,
+                actorRole = actorRole
+            )
+        }
+    }
+
+    fun advanceTestRideStatus(
+        booking: Booking,
+        nextStatus: String,
+        reason: String = "",
+        actorRole: String = "admin"
+    ) {
+        if (nextStatus in setOf("completed", "cancelled") && _simulatingBookingId.value == booking.id) {
+            stopMovementSimulation()
+        }
+        viewModelScope.launch {
+            repository.updateTestRideStatus(booking, nextStatus, reason, actorRole)
+                .onSuccess {
+                    _message.value = "TEST RIDE #${booking.id.take(6)} updated to $nextStatus."
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to update Test Ride status." }
+        }
+    }
+
+    fun sendTestOtpToCustomer(booking: Booking, actorRole: String = "admin") {
+        val secret = testOtpSecrets.value[booking.id]
+        if (secret == null || secret.otpPlaintext.length != 6) {
+            _message.value = "Assign a Test Driver first to generate a Test OTP."
+            return
+        }
+        viewModelScope.launch {
+            repository.sendTestOtpNotificationToCustomer(booking, secret.otpPlaintext, actorRole)
+                .onSuccess { _message.value = "Sent TEST OTP alert to customer (${secret.otpPlaintext})." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to send TEST OTP alert." }
+        }
+    }
+
+    fun overrideTestOtpAndStartRide(
+        booking: Booking,
+        reason: String,
+        actorRole: String = "admin"
+    ) {
+        if (!platformSettings.value.testAllowAdminOtpOverride) {
+            _message.value = "Admin OTP override is disabled in Testing Settings."
+            return
+        }
+        viewModelScope.launch {
+            repository.adminOverrideTestOtpAndStartRide(booking, reason, actorRole)
+                .onSuccess { _message.value = "Authorized override verified TEST RIDE #${booking.id.take(6)} -> in_progress." }
+                .onFailure { _message.value = it.localizedMessage ?: "OTP override failed." }
+        }
+    }
+
+    fun resetTestRide(booking: Booking, actorRole: String = "admin") {
+        if (_simulatingBookingId.value == booking.id) stopMovementSimulation()
+        autoAssignedIds.remove(booking.id)
+        viewModelScope.launch {
+            repository.resetTestRideBooking(booking, actorRole)
+                .onSuccess { _message.value = "Reset TEST RIDE #${booking.id.take(6)} back to Pending." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to reset Test Ride." }
+        }
+    }
+
+    fun clearCompletedTestRecords(actorRole: String = "admin") {
+        viewModelScope.launch {
+            repository.clearCompletedTestRideRecords(actorRole)
+                .onSuccess { count ->
+                    _message.value = if (count == 0) {
+                        "No completed or cancelled TEST RIDE records to clear."
+                    } else {
+                        "Cleared $count completed/cancelled TEST RIDE record(s)."
+                    }
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to clear Test Ride records." }
+        }
+    }
+
+    fun startMovementSimulation(
+        booking: Booking,
+        phase: String,
+        actorRole: String = "admin"
+    ) {
+        stopMovementSimulation()
+        _simulatingBookingId.value = booking.id
+        _simulationPhase.value = phase
+        val speedKmph = platformSettings.value.testDriverSpeedKmph
+
+        simulationJob = viewModelScope.launch {
+            try {
+                if (phase == "to_pickup") {
+                    if (booking.status == "assigned") {
+                        repository.updateTestRideStatus(booking, "arriving", actorRole = actorRole)
+                    }
+                    val currentLoc = testTripLocations.value[booking.id]
+                    val startPt = if (currentLoc != null && currentLoc.lat != 0.0) {
+                        GeoPoint(currentLoc.lat, currentLoc.lng)
+                    } else {
+                        val initPt = TestRideRouteSimulator.initialApproachPoint(booking.pickupLat, booking.pickupLng)
+                        GeoPoint(initPt.lat, initPt.lng)
+                    }
+                    val endPt = GeoPoint(booking.pickupLat, booking.pickupLng)
+                    val waypoints = resolveWaypoints(startPt, endPt, steps = 14)
+                    val distKm = TestRideRouteSimulator.haversineKm(startPt.lat, startPt.lng, endPt.lat, endPt.lng)
+                    val delayMs = TestRideRouteSimulator.stepDelayMs(distKm, speedKmph, waypoints.size)
+
+                    waypoints.forEach { wp ->
+                        repository.updateTestRideTripLocation(booking, wp.lat, wp.lng)
+                        delay(delayMs)
+                    }
+                    val latestStatus = testBookings.value.firstOrNull { it.id == booking.id }?.status ?: booking.status
+                    if (latestStatus in setOf("assigned", "arriving")) {
+                        repository.updateTestRideStatus(
+                            booking.copy(status = latestStatus),
+                            "arrived",
+                            actorRole = actorRole
+                        )
+                    }
+                    _message.value = "TEST DRIVER arrived at pickup for #${booking.id.take(6)}. Waiting for Pickup OTP verification."
+                } else if (phase == "to_drop") {
+                    if (booking.status != "in_progress") {
+                        _message.value = "Verify Pickup OTP first (ride must be In Progress) before simulating trip to drop."
+                        return@launch
+                    }
+                    val currentLoc = testTripLocations.value[booking.id]
+                    val startPt = if (currentLoc != null && currentLoc.lat != 0.0) {
+                        GeoPoint(currentLoc.lat, currentLoc.lng)
+                    } else {
+                        GeoPoint(booking.pickupLat, booking.pickupLng)
+                    }
+                    val endPt = GeoPoint(booking.destinationLat, booking.destinationLng)
+                    val waypoints = resolveWaypoints(startPt, endPt, steps = 18)
+                    val distKm = booking.distanceKm.coerceAtLeast(1.0)
+                    val delayMs = TestRideRouteSimulator.stepDelayMs(distKm, speedKmph, waypoints.size)
+
+                    waypoints.forEach { wp ->
+                        repository.updateTestRideTripLocation(booking, wp.lat, wp.lng)
+                        delay(delayMs)
+                    }
+                    if (platformSettings.value.testAutoCompleteEnabled) {
+                        val latestStatus = testBookings.value.firstOrNull { it.id == booking.id }?.status ?: booking.status
+                        if (latestStatus == "in_progress") {
+                            repository.updateTestRideStatus(
+                                booking.copy(status = "in_progress"),
+                                "completed",
+                                actorRole = actorRole
+                            )
+                        }
+                        _message.value = "Simulated trip reached destination and auto-completed TEST RIDE #${booking.id.take(6)}."
+                    } else {
+                        _message.value = "TEST DRIVER reached destination. Tap Complete Ride to finalize."
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _message.value = e.localizedMessage ?: "Simulation interrupted."
+            } finally {
+                if (_simulatingBookingId.value == booking.id) {
+                    _simulatingBookingId.value = null
+                    _simulationPhase.value = null
+                }
+            }
+        }
+    }
+
+    fun stopMovementSimulation() {
+        simulationJob?.cancel()
+        simulationJob = null
+        _simulatingBookingId.value = null
+        _simulationPhase.value = null
+    }
+
+    private suspend fun resolveWaypoints(
+        start: GeoPoint,
+        end: GeoPoint,
+        steps: Int
+    ): List<com.example.domain.SimulationWaypoint> {
+        return when (val route = OsrmRouteService.fetchDrivingRoute(start, end)) {
+            is RouteUiState.Ready -> TestRideRouteSimulator.resamplePolyline(
+                route.points.map { it.lat to it.lng },
+                targetSteps = steps
+            )
+            else -> TestRideRouteSimulator.interpolateWaypoints(
+                start.lat,
+                start.lng,
+                end.lat,
+                end.lng,
+                steps = steps
+            )
+        }
+    }
+
+    override fun onCleared() {
+        simulationJob?.cancel()
+        super.onCleared()
     }
 
     private companion object {

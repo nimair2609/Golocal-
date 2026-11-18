@@ -196,6 +196,10 @@
         "cancellationReason": { "type": "string" },
         "customerRating": { "type": "integer" },
         "invoiceEmail": { "type": "string" },
+        "is_test_ride": { "type": "boolean" },
+        "test_mode": { "type": "boolean" },
+        "test_otp_status": { "type": "string" },
+        "test_otp_expires_at_ms": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -456,9 +460,54 @@
         "releaseNotes": { "type": "string" },
         "isMandatoryUpdate": { "type": "boolean" },
         "updateManifestUrl": { "type": "string" },
+        "testRideModeEnabled": { "type": "boolean" },
+        "testAutoAssignEnabled": { "type": "boolean" },
+        "testManualAssignEnabled": { "type": "boolean" },
+        "testDriverSpeedKmph": { "type": "number" },
+        "testOtpValiditySeconds": { "type": "integer" },
+        "testAllowAdminOtpOverride": { "type": "boolean" },
+        "testAutoCompleteEnabled": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["updatedAt"]
+    },
+    "TestRideOtpChallenge": {
+      "title": "TestRideOtpChallenge",
+      "description": "Server-validated SHA-256 OTP challenge document for Admin Test Ride pickup verification",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "otpHash": { "type": "string" },
+        "submittedHash": { "type": "string" },
+        "used": { "type": "boolean" },
+        "overridden": { "type": "boolean" },
+        "overrideReason": { "type": "string" },
+        "verifiedByUid": { "type": "string" },
+        "attempts": { "type": "integer" },
+        "maxAttempts": { "type": "integer" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "otpHash", "used", "overridden", "attempts", "maxAttempts", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "TestRideOtpSecret": {
+      "title": "TestRideOtpSecret",
+      "description": "Admin and active Operations Staff only test ride plaintext OTP monitor document",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "otpPlaintext": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "verified", "overridden", "expired", "reset"] },
+        "issuedByUid": { "type": "string" },
+        "issuedByRole": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "otpPlaintext", "status", "expiresAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -486,6 +535,8 @@
     "/admins/{adminUid}": { "schema": { "$ref": "#/entities/AdminRoleDoc" }, "description": "Admin role documents" },
     "/operations_staff/{staffUid}": { "schema": { "$ref": "#/entities/OperationsStaffEntry" }, "description": "Scoped operations staff allowlist managed by admins" },
     "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" },
+    "/test_ride_otps/{bookingId}": { "schema": { "$ref": "#/entities/TestRideOtpChallenge" }, "description": "Admin Test Ride hashed OTP challenge" },
+    "/test_ride_otp_secrets/{bookingId}": { "schema": { "$ref": "#/entities/TestRideOtpSecret" }, "description": "Admin/Ops plaintext test ride OTP monitor" },
     "/booking_chats/{bookingId}/messages/{messageId}": { "description": "Two-way real-time chat scoped to assigned booking participants" },
     "/booking_contacts/{bookingId}": { "description": "Restricted active-trip participant call contact bridge" },
     "/driver_verification_history/{entryId}": { "description": "Admin driver KYC decision history" },

@@ -57,6 +57,9 @@ class AppSessionViewModel(
     private val _isAdmin = MutableStateFlow(false)
     val isAdmin: StateFlow<Boolean> = _isAdmin.asStateFlow()
 
+    private val _isOperationsStaff = MutableStateFlow(false)
+    val isOperationsStaff: StateFlow<Boolean> = _isOperationsStaff.asStateFlow()
+
     private val _isAdminChecked = MutableStateFlow(false)
     val isAdminChecked: StateFlow<Boolean> = _isAdminChecked.asStateFlow()
 
@@ -198,6 +201,7 @@ class AppSessionViewModel(
                             }
                         }
                     _isAdmin.value = repository.checkIsAdmin(currentUserId, userEmail)
+                    _isOperationsStaff.value = repository.checkIsOperationsStaff(currentUserId)
                     true
                 }
                 if (synced == null) {

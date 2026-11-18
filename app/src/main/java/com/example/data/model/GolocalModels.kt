@@ -262,6 +262,18 @@ data class Booking(
     val customerRating: Long? = null,
     val customerFeedbackRating: Long? = null,
     val customerFeedbackNote: String = "",
+    @get:PropertyName("is_test_ride")
+    @PropertyName("is_test_ride")
+    val isTestRide: Boolean = false,
+    @get:PropertyName("test_mode")
+    @PropertyName("test_mode")
+    val testMode: Boolean = false,
+    @get:PropertyName("test_otp_status")
+    @PropertyName("test_otp_status")
+    val testOtpStatus: String = "",
+    @get:PropertyName("test_otp_expires_at_ms")
+    @PropertyName("test_otp_expires_at_ms")
+    val testOtpExpiresAtMs: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -471,6 +483,47 @@ data class PlatformSettings(
     val releaseNotes: String = "",
     val isMandatoryUpdate: Boolean = false,
     val updateManifestUrl: String = "",
+    val testRideModeEnabled: Boolean = false,
+    val testAutoAssignEnabled: Boolean = false,
+    val testManualAssignEnabled: Boolean = true,
+    val testDriverSpeedKmph: Double = 35.0,
+    val testOtpValiditySeconds: Long = 300L,
+    val testAllowAdminOtpOverride: Boolean = true,
+    val testAutoCompleteEnabled: Boolean = false,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class TestRideOtpChallenge(
+    @DocumentId val id: String = "",
+    val bookingId: String = "",
+    val customerId: String = "",
+    val otpHash: String = "",
+    val submittedHash: String = "",
+    val used: Boolean = false,
+    val overridden: Boolean = false,
+    val overrideReason: String = "",
+    val verifiedByUid: String = "",
+    val attempts: Long = 0L,
+    val maxAttempts: Long = 5L,
+    val expiresAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class TestRideOtpSecret(
+    @DocumentId val id: String = "",
+    val bookingId: String = "",
+    val customerId: String = "",
+    val otpPlaintext: String = "",
+    val status: String = "pending", // pending, verified, overridden, expired, reset
+    val issuedByUid: String = "",
+    val issuedByRole: String = "admin",
+    val expiresAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 

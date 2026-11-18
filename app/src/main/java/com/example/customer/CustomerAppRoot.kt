@@ -271,7 +271,8 @@ fun CustomerAuthenticatedShell(
         }
 
         LaunchedEffect(activeBooking?.id, verifiedPhone) {
-            if (activeBooking != null && verifiedPhone.isNotBlank()) {
+            val active = activeBooking
+            if (active != null && !active.isTestRide && !active.testMode && verifiedPhone.isNotBlank()) {
                 customerViewModel.syncMyContactForActiveBooking(verifiedPhone)
             }
         }

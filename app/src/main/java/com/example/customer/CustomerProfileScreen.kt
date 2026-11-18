@@ -127,7 +127,9 @@ fun CustomerProfileScreen(
 
     val verifiedPhone = account?.effectiveMobileNumber().orEmpty()
     val hasEmergency = account?.hasEmergencyContact == true || privateEmergency != null
-    val completedTripsCount = remember(bookings) { bookings.count { it.status == "completed" } }
+    val completedTripsCount = remember(bookings) {
+        bookings.count { it.status == "completed" && !it.isTestRide && !it.testMode }
+    }
     val avgRatingText = remember(ratingsGiven) {
         if (ratingsGiven.isEmpty()) "—"
         else String.format(Locale.US, "%.1f ★", ratingsGiven.map { it.stars }.average())
