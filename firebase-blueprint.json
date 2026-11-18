@@ -539,6 +539,86 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["bookingId", "customerId", "otpPlaintext", "status", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "TestRiderRequest": {
+      "title": "TestRiderRequest",
+      "description": "Non-commercial Test Rider onboarding and Admin approval workflow request",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "email": { "type": "string" },
+        "vehicleCategory": { "type": "string", "enum": ["bike", "auto", "toto", "cab"] },
+        "testPurpose": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "suspended", "revoked"] },
+        "rejectionReason": { "type": "string" },
+        "reviewedByUid": { "type": "string" },
+        "reviewedByRole": { "type": "string" },
+        "reviewNote": { "type": "string" },
+        "opsRecommendation": { "type": "string", "enum": ["", "recommend_approve", "recommend_reject"] },
+        "opsRecommendedByUid": { "type": "string" },
+        "opsRecommendedNote": { "type": "string" },
+        "deviceInfoSummary": { "type": "string" },
+        "isOnline": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "reviewedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "mobileNumber", "vehicleCategory", "testPurpose", "status", "createdAt", "updatedAt"]
+    },
+    "TestRiderProfile": {
+      "title": "TestRiderProfile",
+      "description": "Approved isolated Test Rider live profile separated from commercial driver_profiles KYC",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "mobileNumber": { "type": "string" },
+        "vehicleCategory": { "type": "string", "enum": ["bike", "auto", "toto", "cab"] },
+        "vehicleLabel": { "type": "string" },
+        "status": { "type": "string", "enum": ["approved", "suspended", "revoked"] },
+        "isOnline": { "type": "boolean" },
+        "currentLat": { "type": "number" },
+        "currentLng": { "type": "number" },
+        "completedTestRides": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "vehicleCategory", "status", "isOnline", "updatedAt"]
+    },
+    "TestRiderAuditLog": {
+      "title": "TestRiderAuditLog",
+      "description": "Immutable Test Rider review, recommendation, suspension, and revocation audit entry",
+      "type": "object",
+      "properties": {
+        "targetUid": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "action": { "type": "string" },
+        "previousStatus": { "type": "string" },
+        "newStatus": { "type": "string" },
+        "reason": { "type": "string" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["targetUid", "actorUid", "actorRole", "action", "newStatus", "createdAt"]
+    },
+    "RideOtpSecret": {
+      "title": "RideOtpSecret",
+      "description": "Customer-visible pickup OTP display document isolated from drivers and strangers",
+      "type": "object",
+      "properties": {
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "otpPlaintext": { "type": "string" },
+        "isTestRide": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending", "verified", "overridden", "expired", "reset"] },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookingId", "customerId", "otpPlaintext", "status", "expiresAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -569,6 +649,10 @@
     "/platform_settings/{settingId}": { "schema": { "$ref": "#/entities/PlatformSettings" }, "description": "Global platform configuration" },
     "/test_ride_otps/{bookingId}": { "schema": { "$ref": "#/entities/TestRideOtpChallenge" }, "description": "Admin Test Ride hashed OTP challenge" },
     "/test_ride_otp_secrets/{bookingId}": { "schema": { "$ref": "#/entities/TestRideOtpSecret" }, "description": "Admin/Ops plaintext test ride OTP monitor" },
+    "/ride_otp_secrets/{bookingId}": { "schema": { "$ref": "#/entities/RideOtpSecret" }, "description": "Customer-visible pickup OTP display secret" },
+    "/test_rider_requests/{uid}": { "schema": { "$ref": "#/entities/TestRiderRequest" }, "description": "Test Rider onboarding applications and approval status" },
+    "/test_riders/{uid}": { "schema": { "$ref": "#/entities/TestRiderProfile" }, "description": "Approved Test Rider active mode & online availability" },
+    "/test_rider_audit_logs/{logId}": { "schema": { "$ref": "#/entities/TestRiderAuditLog" }, "description": "Immutable Test Rider management audit history" },
     "/booking_chats/{bookingId}/messages/{messageId}": { "description": "Two-way real-time chat scoped to assigned booking participants" },
     "/booking_contacts/{bookingId}": { "description": "Restricted active-trip participant call contact bridge" },
     "/driver_verification_history/{entryId}": { "description": "Admin driver KYC decision history" },

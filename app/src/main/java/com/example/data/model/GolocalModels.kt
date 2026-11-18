@@ -740,3 +740,81 @@ data class BusBooking(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
+
+@Keep
+@IgnoreExtraProperties
+data class TestRiderRequest(
+    @DocumentId val id: String = "",
+    val uid: String = "",
+    val fullName: String = "",
+    val mobileNumber: String = "",
+    val email: String = "",
+    val vehicleCategory: String = "toto", // bike, auto, toto, cab
+    val testPurpose: String = "",
+    val notes: String = "",
+    val status: String = "pending", // pending, approved, rejected, suspended, revoked
+    val rejectionReason: String = "",
+    val reviewedByUid: String = "",
+    val reviewedByRole: String = "",
+    val reviewNote: String = "",
+    val opsRecommendation: String = "", // "", recommend_approve, recommend_reject
+    val opsRecommendedByUid: String = "",
+    val opsRecommendedNote: String = "",
+    val deviceInfoSummary: String = "",
+    @get:PropertyName("isOnline")
+    @PropertyName("isOnline")
+    val isOnline: Boolean = false,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+    @ServerTimestamp val reviewedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class TestRiderProfile(
+    @DocumentId val id: String = "",
+    val uid: String = "",
+    val displayName: String = "",
+    val mobileNumber: String = "",
+    val vehicleCategory: String = "toto",
+    val vehicleLabel: String = "",
+    val status: String = "approved", // approved, suspended, revoked
+    @get:PropertyName("isOnline")
+    @PropertyName("isOnline")
+    val isOnline: Boolean = false,
+    val currentLat: Double = 0.0,
+    val currentLng: Double = 0.0,
+    val completedTestRides: Long = 0L,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class TestRiderAuditLog(
+    @DocumentId val id: String = "",
+    val targetUid: String = "",
+    val actorUid: String = "",
+    val actorRole: String = "",
+    val action: String = "",
+    val previousStatus: String = "",
+    val newStatus: String = "",
+    val reason: String = "",
+    val note: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class RideOtpSecret(
+    @DocumentId val id: String = "",
+    val bookingId: String = "",
+    val customerId: String = "",
+    val otpPlaintext: String = "",
+    @get:PropertyName("isTestRide")
+    @PropertyName("isTestRide")
+    val isTestRide: Boolean = false,
+    val status: String = "pending", // pending, verified, overridden, expired, reset
+    val expiresAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)

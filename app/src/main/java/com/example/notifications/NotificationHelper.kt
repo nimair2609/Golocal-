@@ -114,10 +114,21 @@ object NotificationHelper {
         channels.forEach { manager.createNotificationChannel(it) }
     }
 
-    fun channelForType(type: String): String = when (type.lowercase()) {
-        "chat", "booking_chat" -> CHANNEL_CHAT
-        "sos", "emergency" -> CHANNEL_SOS
-        "booking", "ride_offer", "driver_assigned", "trip_status", "bus_booking" -> CHANNEL_RIDES
+    fun channelForType(type: String): String = when {
+        type.equals("chat", true) || type.equals("booking_chat", true) -> CHANNEL_CHAT
+        type.equals("sos", true) || type.equals("emergency", true) || type.equals("sos_alert", true) -> CHANNEL_SOS
+        type.startsWith("booking", true) ||
+            type.startsWith("driver_booking", true) ||
+            type.startsWith("test_driver_booking", true) ||
+            type.equals("new_ride_request", true) ||
+            type.equals("ride_offer", true) ||
+            type.equals("driver_assigned", true) ||
+            type.equals("trip_status", true) ||
+            type.equals("test_booking_confirmation", true) ||
+            type.equals("test_otp", true) ||
+            type.equals("test_rider_status", true) ||
+            type.equals("test_rider_request", true) ||
+            type.startsWith("bus_", true) -> CHANNEL_RIDES
         else -> CHANNEL_GENERAL
     }
 

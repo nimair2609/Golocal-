@@ -21,7 +21,8 @@ data class ClientPreferences(
     val draftDestinationId: String = "",
     val draftCategory: String = "toto",
     val customerOnboarded: Boolean = false,
-    val riderOnboarded: Boolean = false
+    val riderOnboarded: Boolean = false,
+    val testRiderIntent: Boolean = false
 )
 
 class PreferencesRepository(private val context: Context) {
@@ -34,6 +35,7 @@ class PreferencesRepository(private val context: Context) {
     private val keyDraftCat = stringPreferencesKey("draft_category")
     private val keyCustomerOnboarded = booleanPreferencesKey("customer_onboarded")
     private val keyRiderOnboarded = booleanPreferencesKey("rider_onboarded")
+    private val keyTestRiderIntent = booleanPreferencesKey("test_rider_intent")
 
     val preferencesFlow: Flow<ClientPreferences> = context.golocalPrefs.data.map { prefs ->
         ClientPreferences(
@@ -44,7 +46,8 @@ class PreferencesRepository(private val context: Context) {
             draftDestinationId = prefs[keyDraftDest] ?: "",
             draftCategory = prefs[keyDraftCat] ?: "toto",
             customerOnboarded = prefs[keyCustomerOnboarded] ?: false,
-            riderOnboarded = prefs[keyRiderOnboarded] ?: false
+            riderOnboarded = prefs[keyRiderOnboarded] ?: false,
+            testRiderIntent = prefs[keyTestRiderIntent] ?: false
         )
     }
 
@@ -66,6 +69,10 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun setRiderOnboarded(done: Boolean) {
         context.golocalPrefs.edit { it[keyRiderOnboarded] = done }
+    }
+
+    suspend fun setTestRiderIntent(enabled: Boolean) {
+        context.golocalPrefs.edit { it[keyTestRiderIntent] = enabled }
     }
 
     suspend fun saveDraftBooking(pickupId: String, destId: String, category: String) {

@@ -10,7 +10,9 @@ data class LocationSample(
     val lat: Double,
     val lng: Double,
     val accuracyMeters: Float = 15f,
-    val timestampMs: Long = System.currentTimeMillis()
+    val timestampMs: Long = System.currentTimeMillis(),
+    val speedMps: Float = 0f,
+    val headingDeg: Float = 0f
 )
 
 class GpsBroadcastThrottle(
@@ -45,6 +47,8 @@ class GpsBroadcastThrottle(
         return false
     }
 
+    fun lastAccepted(): LocationSample? = lastSample
+
     fun reset() {
         lastSample = null
     }
@@ -64,6 +68,52 @@ class GpsBroadcastThrottle(
                 cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2).pow(2)
             val c = 2 * atan2(sqrt(a), sqrt(1 - a))
             return earthRadiusMeters * c
+        }
+
+        fun bearingDegrees(fromLat: Double, fromLng: Double, toLat: Double, toLng: Double): Float {
+            if (!isValidCoordinate(fromLat, fromLng) || !isValidCoordinate(toLat, toLng)) return 0f
+            if (fromLat == toLat && fromLng == toLng) return 0f
+            val phi1 = Math.toRadians(fromLat)
+            val phi2 = Math.toRadians(toLat)
+            val dLambda = Math.toRadians(toLng - fromLng)
+            val y = sin(dLambda) * cos(phi2)
+            val x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dLambda)
+            val raw = Math.toDegrees(atan2(y, x))
+            return (((raw % 360.0) + 360.0) % 360.0).toFloat()
+        }
+
+        fun distanceFromRouteMeters(lat: Double, lng: Double, route: List<GeoPoint>): Double {
+            if (!isValidCoordinate(lat, lng) || route.isEmpty()) return Double.MAX_VALUE
+            if (route.size == 1) return haversineMeters(lat, lng, route.first().lat, route.first().lng)
+            var minMeters = Double.MAX_VALUE
+            for (i in 0 until route.lastIndex) {
+                val dist = distancePointToSegmentMeters(lat, lng, route[i], route[i + 1])
+                if (dist < minMeters) minMeters = dist
+            }
+            return minMeters
+        }
+
+        fun distancePointToSegmentMeters(
+            lat: Double,
+            lng: Double,
+            a: GeoPoint,
+            b: GeoPoint
+        ): Double {
+            val refLat = Math.toRadians(lat)
+            val metersPerDegLat = 111_132.0
+            val metersPerDegLng = 111_320.0 * cos(refLat).coerceAtLeast(0.1)
+            val ax = (a.lng - lng) * metersPerDegLng
+            val ay = (a.lat - lat) * metersPerDegLat
+            val bx = (b.lng - lng) * metersPerDegLng
+            val by = (b.lat - lat) * metersPerDegLat
+            val dx = bx - ax
+            val dy = by - ay
+            val lenSq = dx * dx + dy * dy
+            if (lenSq <= 1e-6) return sqrt(ax * ax + ay * ay)
+            val t = (-(ax * dx + ay * dy) / lenSq).coerceIn(0.0, 1.0)
+            val projX = ax + t * dx
+            val projY = ay + t * dy
+            return sqrt(projX * projX + projY * projY)
         }
     }
 }

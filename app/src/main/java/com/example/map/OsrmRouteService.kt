@@ -28,42 +28,30 @@ sealed interface RouteUiState {
     data class Fallback(
         val points: List<GeoPoint>,
         val distanceKm: Double,
-        val reason: String
+        val reason: String,
+        val estimatedDurationMin: Long = max(1L, ((distanceKm / 24.0) * 60.0).roundToLong()),
+        val providerName: String = "Direct Fallback"
     ) : RouteUiState
 }
 
-object OsrmRouteService {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .callTimeout(8, TimeUnit.SECONDS)
-        .build()
+/**
+ * Pluggable navigation route provider abstraction so GoLocal can use OSRM by default
+ * or swap in a licensed commercial routing provider at runtime without hardcoding keys.
+ */
+interface RoutingProvider {
+    val providerName: String
+    suspend fun computeDrivingRoute(origin: GeoPoint, destination: GeoPoint): RouteUiState
+}
 
-    private val routeCache: MutableMap<String, RouteUiState.Ready> = Collections.synchronizedMap(
-        object : LinkedHashMap<String, RouteUiState.Ready>(24, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, RouteUiState.Ready>?): Boolean =
-                size > 24
-        }
-    )
+class OsrmRoutingProvider(
+    private val client: OkHttpClient = defaultHttpClient
+) : RoutingProvider {
+    override val providerName: String = "OSRM Driving"
 
-    fun cacheKey(p1: GeoPoint, p2: GeoPoint): String {
-        fun fmt(v: Double) = String.format(java.util.Locale.US, "%.4f", v)
-        return "${fmt(p1.lat)},${fmt(p1.lng)}->${fmt(p2.lat)},${fmt(p2.lng)}"
-    }
-
-    suspend fun fetchDrivingRoute(
+    override suspend fun computeDrivingRoute(
         origin: GeoPoint,
         destination: GeoPoint
     ): RouteUiState {
-        if (!GpsBroadcastThrottle.isValidCoordinate(origin.lat, origin.lng) ||
-            !GpsBroadcastThrottle.isValidCoordinate(destination.lat, destination.lng)
-        ) {
-            return RouteUiState.Idle
-        }
-
-        val key = cacheKey(origin, destination)
-        routeCache[key]?.let { return it }
-
         val straightKm = GpsBroadcastThrottle.haversineMeters(
             origin.lat,
             origin.lng,
@@ -91,19 +79,18 @@ object OsrmRouteService {
                     if (!response.isSuccessful) {
                         return@withContext RouteUiState.Fallback(
                             points = listOf(origin, destination),
-                            distanceKm = straightKm,
+                            distanceKm = (straightKm * 10.0).roundToLong() / 10.0,
                             reason = "Routing server HTTP ${response.code}; showing direct line"
                         )
                     }
                     val body = response.body?.string().orEmpty()
-                    val parsed = parseOsrmGeoJsonResponse(body)
+                    val parsed = OsrmRouteService.parseOsrmGeoJsonResponse(body)
                     if (parsed != null) {
-                        routeCache[key] = parsed
                         parsed
                     } else {
                         RouteUiState.Fallback(
                             points = listOf(origin, destination),
-                            distanceKm = straightKm,
+                            distanceKm = (straightKm * 10.0).roundToLong() / 10.0,
                             reason = "Route geometry unavailable; showing direct line"
                         )
                     }
@@ -111,13 +98,109 @@ object OsrmRouteService {
             }
         } catch (ce: CancellationException) {
             throw ce
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             RouteUiState.Fallback(
                 points = listOf(origin, destination),
-                distanceKm = straightKm,
+                distanceKm = (straightKm * 10.0).roundToLong() / 10.0,
                 reason = "Offline or slow route lookup; showing direct line"
             )
         }
+    }
+
+    private companion object {
+        val defaultHttpClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .build()
+    }
+}
+
+object RouteNavigationMath {
+    const val DEFAULT_DEVIATION_THRESHOLD_METERS = 75.0
+    const val REROUTE_DEBOUNCE_MS = 12_000L
+
+    fun shouldRecalculateRoute(
+        currentLat: Double,
+        currentLng: Double,
+        activeRoute: List<GeoPoint>,
+        lastRerouteEpochMs: Long,
+        nowEpochMs: Long = System.currentTimeMillis(),
+        deviationThresholdMeters: Double = DEFAULT_DEVIATION_THRESHOLD_METERS
+    ): Boolean {
+        if (!GpsBroadcastThrottle.isValidCoordinate(currentLat, currentLng)) return false
+        if (activeRoute.size < 2) return false
+        if (nowEpochMs - lastRerouteEpochMs < REROUTE_DEBOUNCE_MS) return false
+        val deviationMeters = GpsBroadcastThrottle.distanceFromRouteMeters(currentLat, currentLng, activeRoute)
+        return deviationMeters > deviationThresholdMeters
+    }
+
+    fun estimateEtaMinutes(
+        distanceKm: Double,
+        speedMps: Double = 0.0,
+        vehicleCategory: String = "toto"
+    ): Int {
+        if (distanceKm <= 0.05) return 1
+        val observedKmph = if (speedMps > 1.2) speedMps * 3.6 else 0.0
+        val categoryFallbackKmph = when (vehicleCategory.lowercase()) {
+            "bike" -> 28.0
+            "cab" -> 32.0
+            "auto" -> 24.0
+            else -> 20.0
+        }
+        val effectiveKmph = if (observedKmph > 5.0) {
+            ((observedKmph * 0.6) + (categoryFallbackKmph * 0.4)).coerceIn(8.0, 75.0)
+        } else {
+            categoryFallbackKmph
+        }
+        return max(1, ((distanceKm / effectiveKmph) * 60.0).roundToLong().toInt())
+    }
+}
+
+object OsrmRouteService {
+    @Volatile
+    private var activeProvider: RoutingProvider = OsrmRoutingProvider()
+
+    private val routeCache: MutableMap<String, RouteUiState.Ready> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, RouteUiState.Ready>(24, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, RouteUiState.Ready>?): Boolean =
+                size > 24
+        }
+    )
+
+    fun configureProvider(provider: RoutingProvider) {
+        activeProvider = provider
+        routeCache.clear()
+    }
+
+    fun activeProviderName(): String = activeProvider.providerName
+
+    fun cacheKey(p1: GeoPoint, p2: GeoPoint): String {
+        fun fmt(v: Double) = String.format(java.util.Locale.US, "%.4f", v)
+        return "${fmt(p1.lat)},${fmt(p1.lng)}->${fmt(p2.lat)},${fmt(p2.lng)}"
+    }
+
+    suspend fun fetchDrivingRoute(
+        origin: GeoPoint,
+        destination: GeoPoint,
+        bypassCache: Boolean = false
+    ): RouteUiState {
+        if (!GpsBroadcastThrottle.isValidCoordinate(origin.lat, origin.lng) ||
+            !GpsBroadcastThrottle.isValidCoordinate(destination.lat, destination.lng)
+        ) {
+            return RouteUiState.Idle
+        }
+
+        val key = cacheKey(origin, destination)
+        if (!bypassCache) {
+            routeCache[key]?.let { return it }
+        }
+
+        val result = activeProvider.computeDrivingRoute(origin, destination)
+        if (result is RouteUiState.Ready) {
+            routeCache[key] = result
+        }
+        return result
     }
 
     internal fun parseOsrmGeoJsonResponse(rawJson: String): RouteUiState.Ready? {

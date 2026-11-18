@@ -48,15 +48,18 @@ async function sendToUserIds(userIds, payload) {
       },
       data: {
         eventId: payload.eventId,
+        dedupeKey: payload.dedupeKey || payload.eventId,
         type: payload.type,
+        targetApp: payload.targetApp || payload.targetRole || "customer",
         targetRole: payload.targetRole || "customer",
         targetScreen: payload.targetScreen || "notifications",
+        bookingId: payload.bookingId || payload.entityId || "",
         entityId: payload.entityId || "",
       },
       android: {
         priority: "high",
         notification: {
-          channelId: payload.channelId || "golocal_bookings",
+          channelId: payload.channelId || "golocal_rides",
         },
       },
     });
@@ -103,6 +106,27 @@ exports.onBookingWriteNotify = onDocumentWritten(
       });
       // Test rides NEVER broadcast publicly to production online drivers
       if (isTestRide) {
+        const testRiders = await db
+          .collection("test_riders")
+          .where("status", "==", "approved")
+          .where("isOnline", "==", true)
+          .limit(35)
+          .get();
+        await sendToUserIds(
+          testRiders.docs.map((d) => d.data().uid || d.id),
+          {
+            eventId: `test_rider_new_req_${bookingId}`,
+            type: "new_ride_request",
+            targetApp: "rider",
+            targetRole: "driver",
+            targetScreen: "test_rider_dashboard",
+            bookingId,
+            entityId: bookingId,
+            channelId: "golocal_rides",
+            title: "[TEST RIDE] New Test Request",
+            body: `${after.pickupLabel} -> ${after.destinationLabel} (₹0 Test Simulation)`,
+          }
+        );
         return;
       }
       const onlineDrivers = await db
@@ -117,10 +141,12 @@ exports.onBookingWriteNotify = onDocumentWritten(
         {
           eventId: `driver_new_req_${bookingId}`,
           type: "new_ride_request",
+          targetApp: "rider",
           targetRole: "driver",
           targetScreen: "requests",
+          bookingId,
           entityId: bookingId,
-          channelId: "golocal_driver_dispatch",
+          channelId: "golocal_rides",
           title: "New Nearby Ride Request",
           body: `${after.pickupLabel} -> ${after.destinationLabel} (Est. ₹${Math.round(after.estimatedFareInr || 0)})`,
         }
@@ -132,15 +158,15 @@ exports.onBookingWriteNotify = onDocumentWritten(
 
     const customerMessages = isTestRide
       ? {
-          assigned: [`${prefix}Test Rider Dispatched`, `${after.assignedDriverName || "Test Partner"} assigned. Wait at pickup for OTP verification.`],
+          assigned: [`${prefix}Test Rider Dispatched`, `${after.assignedDriverName || "Test Partner"} assigned. Show your 6-digit Test Ride OTP at pickup.`],
           arriving: [`${prefix}Rider Approaching Pickup`, `${after.assignedDriverName || "Test Partner"} is on the way.`],
-          arrived: [`${prefix}Rider Arrived at Pickup`, "Verify your 6-digit Test Ride OTP in the app to start."],
+          arrived: [`${prefix}Rider Arrived at Pickup`, "Share your 6-digit Test Ride OTP with the Test Rider (or verify in-app) to start."],
           in_progress: [`${prefix}Test Ride Started`, `Trip to ${after.destinationLabel} is underway.`],
           completed: [`${prefix}Test Ride Completed`, "Simulation completed with ₹0 commercial impact."],
           cancelled: [`${prefix}Test Ride Cancelled`, `Booking cancelled (${after.cancellationReason || "no reason provided"}).`],
         }
       : {
-          assigned: ["Rider Assigned", `${after.assignedDriverName || "Your driver"} confirmed. Trip PIN: ${after.tripPin}.`],
+          assigned: ["Rider Assigned", `${after.assignedDriverName || "Your driver"} confirmed. Share Trip PIN ${after.tripPin} at pickup.`],
           arriving: ["Rider Approaching Pickup", `${after.assignedDriverName || "Driver"} is on the way.`],
           arrived: ["Rider Arrived at Pickup", `Share Trip PIN ${after.tripPin} to start your ride.`],
           in_progress: ["Ride Started", `Trip to ${after.destinationLabel} is underway.`],
@@ -153,9 +179,12 @@ exports.onBookingWriteNotify = onDocumentWritten(
       await sendToUserIds([after.customerId], {
         eventId: `booking_${newStatus}_${bookingId}`,
         type: `booking_${newStatus}`,
+        targetApp: "customer",
         targetRole: "customer",
         targetScreen: "bookings",
+        bookingId,
         entityId: bookingId,
+        channelId: "golocal_rides",
         title: msg[0],
         body: msg[1],
       });
@@ -165,10 +194,12 @@ exports.onBookingWriteNotify = onDocumentWritten(
       await sendToUserIds([after.assignedDriverId], {
         eventId: `driver_booking_${newStatus}_${bookingId}`,
         type: isTestRide ? `test_driver_booking_${newStatus}` : `driver_booking_${newStatus}`,
+        targetApp: "rider",
         targetRole: "driver",
-        targetScreen: "home",
+        targetScreen: isTestRide ? "test_rider_dashboard" : "home",
+        bookingId,
         entityId: bookingId,
-        channelId: "golocal_driver_dispatch",
+        channelId: "golocal_rides",
         title: newStatus === "cancelled" ? `${prefix}Trip Cancelled` : `${prefix}Trip Status Updated`,
         body: `${prefix}Booking #${bookingId.slice(0, 6)} is now ${newStatus.replace("_", " ")}.`,
       });
@@ -189,10 +220,11 @@ exports.onDriverProfileWriteNotify = onDocumentWritten(
       await sendToUserIds(admins, {
         eventId: `admin_kyc_${driverId}_${after.verificationStatus}`,
         type: "pending_verification",
+        targetApp: "admin",
         targetRole: "admin",
         targetScreen: "riders",
         entityId: driverId,
-        channelId: "golocal_safety_alerts",
+        channelId: "golocal_general",
         title: "Rider KYC Verification Pending",
         body: `${after.legalName} (${after.vehicleCategory.toUpperCase()}) submitted documents for review.`,
       });
@@ -200,10 +232,11 @@ exports.onDriverProfileWriteNotify = onDocumentWritten(
       await sendToUserIds([driverId], {
         eventId: `rider_kyc_${driverId}_${after.verificationStatus}`,
         type: "kyc_status_update",
+        targetApp: "rider",
         targetRole: "driver",
         targetScreen: "profile",
         entityId: driverId,
-        channelId: "golocal_driver_dispatch",
+        channelId: "golocal_rides",
         title: `KYC Status: ${after.verificationStatus.toUpperCase()}`,
         body:
           after.verificationStatus === "verified"
@@ -269,10 +302,89 @@ exports.dailyDocumentExpiryReminder = onSchedule("every 24 hours", async () => {
         targetRole: "driver",
         targetScreen: "profile",
         entityId: doc.id,
-        channelId: "golocal_driver_dispatch",
+        channelId: "golocal_rides",
         title: "Vehicle Document Expiring Soon",
         body: `${expiring.map((e) => e.docType).join(", ")} expires soon. Renew to stay online.`,
       });
     }
   }
 });
+
+exports.onTestRiderRequestWriteNotify = onDocumentWritten(
+  { document: "test_rider_requests/{uid}", database: DATABASE_ID },
+  async (event) => {
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    if (!after) return;
+
+    const uid = event.params.uid;
+    const prevStatus = before?.status || "";
+    const newStatus = after.status || "pending";
+
+    if (!before || (prevStatus !== "pending" && newStatus === "pending")) {
+      const admins = await getAdminUserIds();
+      const opsSnap = await db.collection("operations_staff").where("isActive", "==", true).get();
+      const opsUids = opsSnap.docs.map((d) => d.data().userId || d.id);
+      await sendToUserIds([...admins, ...opsUids], {
+        eventId: `test_rider_pending_${uid}_${Date.now()}`,
+        dedupeKey: `test_rider_pending_${uid}`,
+        type: "test_rider_request",
+        targetApp: "admin",
+        targetRole: "admin",
+        targetScreen: "test_riders",
+        entityId: uid,
+        channelId: "golocal_rides",
+        title: "[TEST RIDER] New Access Request",
+        body: `${after.fullName} requested Test Rider access (${(after.vehicleCategory || "").toUpperCase()}).`,
+      });
+      return;
+    }
+
+    if (prevStatus !== newStatus && ["approved", "rejected", "suspended", "revoked"].includes(newStatus)) {
+      const reasonSuffix = after.rejectionReason ? ` Reason: ${after.rejectionReason}` : "";
+      const bodyMap = {
+        approved: "Your Test Rider access is approved! Open GoLocal Rider to go online in Test Mode.",
+        rejected: `Your Test Rider request was rejected.${reasonSuffix}`,
+        suspended: `Your Test Rider access has been suspended.${reasonSuffix}`,
+        revoked: `Your Test Rider access has been revoked.${reasonSuffix}`,
+      };
+      await sendToUserIds([uid], {
+        eventId: `test_rider_decision_${uid}_${newStatus}`,
+        dedupeKey: `test_rider_decision_${uid}_${newStatus}`,
+        type: "test_rider_status",
+        targetApp: "rider",
+        targetRole: "driver",
+        targetScreen: "test_rider_dashboard",
+        entityId: uid,
+        channelId: "golocal_rides",
+        title: `[TEST RIDER] Access ${newStatus.toUpperCase()}`,
+        body: bodyMap[newStatus] || `Status updated to ${newStatus}.`,
+      });
+    }
+  }
+);
+
+exports.onEmergencyEventNotifyAdmins = onDocumentWritten(
+  { document: "emergency_events/{eventId}", database: DATABASE_ID },
+  async (event) => {
+    if (event.data?.before?.exists) return;
+    const after = event.data?.after?.data();
+    if (!after) return;
+    const admins = await getAdminUserIds();
+    const opsSnap = await db.collection("operations_staff").where("isActive", "==", true).get();
+    const opsUids = opsSnap.docs.map((d) => d.data().userId || d.id);
+    await sendToUserIds([...admins, ...opsUids], {
+      eventId: `sos_${event.params.eventId}`,
+      dedupeKey: `sos_${event.params.eventId}`,
+      type: "sos_alert",
+      targetApp: "admin",
+      targetRole: "admin",
+      targetScreen: "safety",
+      bookingId: after.bookingId || "",
+      entityId: event.params.eventId,
+      channelId: "golocal_sos",
+      title: "URGENT SOS Alert Triggered",
+      body: after.notes || "Emergency assistance requested.",
+    });
+  }
+);
