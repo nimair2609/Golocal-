@@ -62,6 +62,8 @@ import com.example.ui.theme.GolocalError
 import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.GolocalPureWhite
 import com.example.ui.theme.GolocalSuccess
+import com.example.ui.theme.GolocalWarning
+import com.example.ui.theme.GolocalWarningContainer
 import com.example.ui.theme.JetBrainsMono
 import java.util.Locale
 
@@ -91,11 +93,12 @@ fun RiderActiveTripSheet(
     val mapDestLng = if (navigateToDrop) booking.destinationLng else booking.pickupLng
     val mapDestLabel = if (navigateToDrop) booking.destinationLabel else booking.pickupLabel
 
+    val isTestRide = booking.isTestRide || booking.testMode
     val phaseTitle = when (booking.status) {
-        "assigned" -> "Ride Assigned • Go to Pickup"
-        "arriving" -> "En Route to Pickup"
-        "arrived" -> "Arrived • Verify Trip PIN"
-        "in_progress" -> "Trip in Progress"
+        "assigned" -> if (isTestRide) "TEST RIDE • Go to Pickup" else "Ride Assigned • Go to Pickup"
+        "arriving" -> if (isTestRide) "TEST RIDE • En Route" else "En Route to Pickup"
+        "arrived" -> if (isTestRide) "TEST RIDE • Await Customer OTP" else "Arrived • Verify Trip PIN"
+        "in_progress" -> if (isTestRide) "TEST RIDE • In Progress" else "Trip in Progress"
         else -> booking.status.replace('_', ' ').uppercase()
     }
 
@@ -236,13 +239,22 @@ fun RiderActiveTripSheet(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${booking.distanceKm} km",
+                            text = if (isTestRide) {
+                                "TEST RIDE • ₹0 Commercial • ${booking.distanceKm} km"
+                            } else {
+                                "₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${booking.distanceKm} km"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = JetBrainsMono,
                             color = GolocalPrimaryBlue
                         )
                     }
-                    GolocalStatusBadge(label = booking.status.replace('_', ' ').uppercase(), tone = "success")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (isTestRide) {
+                            GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
+                        }
+                        GolocalStatusBadge(label = booking.status.replace('_', ' ').uppercase(), tone = "success")
+                    }
                 }
 
                 BookingCommunicationBar(
@@ -282,26 +294,54 @@ fun RiderActiveTripSheet(
                     }
 
                     "arrived" -> {
-                        OutlinedTextField(
-                            value = enteredPin,
-                            onValueChange = { ch ->
-                                if (ch.length <= 4 && ch.all { it.isDigit() }) enteredPin = ch
-                            },
-                            label = { Text("Enter 4-Digit Passenger Trip PIN") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("rider_trip_pin_input")
-                        )
-                        Button(
-                            onClick = { onAdvanceState("in_progress", enteredPin) },
-                            contentPadding = PaddingValues(vertical = 14.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 50.dp)
-                        ) {
-                            Text("Verify PIN & Start Ride", fontWeight = FontWeight.Bold)
+                        if (isTestRide) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = GolocalWarningContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, GolocalWarning, RoundedCornerShape(14.dp))
+                                    .testTag("rider_waiting_test_otp_card")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Waiting for Customer 6-Digit Test OTP",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = GolocalDeepNavy
+                                    )
+                                    Text(
+                                        text = "Ask the passenger to enter their 6-digit TEST OTP on the Customer app (or wait for Owner Admin OTP override). Test rides cannot be started with a 4-digit PIN.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        } else {
+                            OutlinedTextField(
+                                value = enteredPin,
+                                onValueChange = { ch ->
+                                    if (ch.length <= 4 && ch.all { it.isDigit() }) enteredPin = ch
+                                },
+                                label = { Text("Enter 4-Digit Passenger Trip PIN") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("rider_trip_pin_input")
+                            )
+                            Button(
+                                onClick = { onAdvanceState("in_progress", enteredPin) },
+                                contentPadding = PaddingValues(vertical = 14.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 50.dp)
+                            ) {
+                                Text("Verify PIN & Start Ride", fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
 
@@ -326,7 +366,10 @@ fun RiderActiveTripSheet(
                                 .heightIn(min = 52.dp)
                                 .testTag("rider_complete_ride_button")
                         ) {
-                            Text("Complete Ride & Settle Fare", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (isTestRide) "Complete Test Ride (₹0)" else "Complete Ride & Settle Fare",
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
@@ -356,13 +399,19 @@ fun RiderCompletedSettlementDialog(
     var stars by remember(booking.id) { mutableIntStateOf(5) }
     var note by remember(booking.id) { mutableStateOf("") }
 
-    val gross = commission?.grossFareInr ?: booking.agreedFareInr
-    val fee = commission?.commissionAmountInr ?: (gross * (booking.commissionPercent / 100.0))
-    val net = commission?.netDriverEarningsInr ?: (gross - fee).coerceAtLeast(0.0)
+    val isTestRide = booking.isTestRide || booking.testMode
+    val gross = if (isTestRide) 0.0 else (commission?.grossFareInr ?: booking.agreedFareInr)
+    val fee = if (isTestRide) 0.0 else (commission?.commissionAmountInr ?: (gross * (booking.commissionPercent / 100.0)))
+    val net = if (isTestRide) 0.0 else (commission?.netDriverEarningsInr ?: (gross - fee).coerceAtLeast(0.0))
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Trip Completed & Settled", fontWeight = FontWeight.Bold) },
+        title = {
+            Text(
+                text = if (isTestRide) "TEST RIDE Completed" else "Trip Completed & Settled",
+                fontWeight = FontWeight.Bold
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
@@ -373,19 +422,24 @@ fun RiderCompletedSettlementDialog(
 
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    color = if (isTestRide) GolocalWarningContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                        .border(1.dp, if (isTestRide) GolocalWarning else MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        SettlementRow("Gross Fare (${booking.paymentMethod.uppercase()})", "₹${gross.toInt()}")
-                        SettlementRow("Platform Commission", "-₹${fee.toInt()}")
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-                        SettlementRow("Net Partner Earnings", "₹${net.toInt()}", highlight = true)
+                        if (isTestRide) {
+                            SettlementRow("Test Mode Impact", "NON-COMMERCIAL")
+                            SettlementRow("Commission / Payout", "₹0 (Excluded)", highlight = true)
+                        } else {
+                            SettlementRow("Gross Fare (${booking.paymentMethod.uppercase()})", "₹${gross.toInt()}")
+                            SettlementRow("Platform Commission", "-₹${fee.toInt()}")
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                            SettlementRow("Net Partner Earnings", "₹${net.toInt()}", highlight = true)
+                        }
                     }
                 }
 

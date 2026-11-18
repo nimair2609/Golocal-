@@ -59,6 +59,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -93,6 +94,8 @@ import com.example.ui.theme.GolocalError
 import com.example.ui.theme.GolocalLightBlue
 import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.GolocalSuccess
+import com.example.ui.theme.GolocalWarning
+import com.example.ui.theme.GolocalWarningContainer
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.AppSessionViewModel
 import com.example.viewmodel.CustomerViewModel
@@ -157,7 +160,15 @@ fun CustomerBookRideScreen(
     val customerInvoiceEmail = customerAccount?.email.orEmpty()
     val customerUid = customerAccount?.uid.orEmpty()
     val customerPhone = customerAccount?.effectiveMobileNumber().orEmpty()
+    val isAuthorizedTestCustomer = customerAccount?.isTestCustomer == true
+    val canSelectTestRide = platformSettings?.testRideModeEnabled == true && isAuthorizedTestCustomer
     val allBookings = (bookingsState as? UiState.Success)?.data.orEmpty()
+
+    LaunchedEffect(canSelectTestRide) {
+        if (!canSelectTestRide && draft.bookAsTestRide) {
+            customerViewModel.setBookAsTestRide(false)
+        }
+    }
 
     var searchTarget by remember { mutableStateOf<LocationFieldTarget?>(null) }
     var selectedFilter by remember { mutableStateOf(RideSortFilter.RECOMMENDED) }
@@ -632,8 +643,50 @@ fun CustomerBookRideScreen(
                                 }
                             }
 
+                            if (canSelectTestRide) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = GolocalWarningContainer,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, GolocalWarning, RoundedCornerShape(12.dp))
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "TEST RIDE MODE (Authorized Account)",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = GolocalDeepNavy
+                                            )
+                                            Text(
+                                                text = "Non-commercial ₹0 simulated or test-partner trip",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Switch(
+                                            checked = draft.bookAsTestRide,
+                                            onCheckedChange = { customerViewModel.setBookAsTestRide(it) },
+                                            modifier = Modifier.testTag("book_as_test_ride_switch")
+                                        )
+                                    }
+                                }
+                            }
+
                             Button(
-                                onClick = { customerViewModel.submitBooking(invoiceEmail = customerInvoiceEmail) },
+                                onClick = {
+                                    customerViewModel.submitBooking(
+                                        invoiceEmail = customerInvoiceEmail,
+                                        isAuthorizedTestCustomer = isAuthorizedTestCustomer
+                                    )
+                                },
                                 enabled = !isSubmitting,
                                 colors = ButtonDefaults.buttonColors(containerColor = GolocalPrimaryBlue),
                                 modifier = Modifier
@@ -649,7 +702,11 @@ fun CustomerBookRideScreen(
                                         strokeWidth = 2.dp
                                     )
                                 } else {
-                                    Text("Find Rider", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = if (canSelectTestRide && draft.bookAsTestRide) "Start Test Ride" else "Find Rider",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
                         }

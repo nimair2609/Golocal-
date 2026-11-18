@@ -103,6 +103,10 @@ class AdminViewModel(
         .map { list -> TestRideSeparation.filterTestBookings(list) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val verifiedTestPartners: StateFlow<List<DriverProfile>> = drivers
+        .map { list -> list.filter { it.verificationStatus == "verified" && it.isTestPartner } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     val testTripLocations: StateFlow<Map<String, TripLocation>> = repository.observeTestRideTripLocations()
         .map { list -> list.associateBy { it.bookingId } }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyMap()) }
@@ -112,6 +116,16 @@ class AdminViewModel(
         .map { list -> list.associateBy { it.bookingId } }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyMap()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
+
+    val testOtpChallenges: StateFlow<Map<String, TestRideOtpChallenge>> = repository.observeTestRideOtpChallenges()
+        .map { list -> list.associateBy { it.bookingId } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyMap()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
+
+    val testAuditLogs: StateFlow<List<AuditLog>> = repository.observeTestAuditLogs()
+        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     val cancellationAdvisories: StateFlow<List<DriverAbuseAdvisory>> = bookings
         .map { list -> AbuseDetectionEngine.evaluateCancellationAdvisories(list) }
@@ -247,6 +261,34 @@ class AdminViewModel(
             repository.adminVerifyOrUpdateDriver(driverId, status, reason)
                 .onSuccess { _message.value = "Rider KYC updated to $status." }
                 .onFailure { _message.value = it.localizedMessage ?: "Failed to update rider" }
+        }
+    }
+
+    fun setUserTestCustomer(targetUid: String, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.adminSetUserTestCustomer(targetUid, enabled)
+                .onSuccess {
+                    _message.value = if (enabled) {
+                        "Authorized Test Customer flag enabled."
+                    } else {
+                        "Revoked Test Customer authorization."
+                    }
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to update test customer flag" }
+        }
+    }
+
+    fun setDriverTestPartner(driverId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.adminSetDriverTestPartner(driverId, enabled)
+                .onSuccess {
+                    _message.value = if (enabled) {
+                        "Verified Partner authorized for Test Rides."
+                    } else {
+                        "Removed Test Partner authorization."
+                    }
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to update test partner flag" }
         }
     }
 
@@ -525,20 +567,48 @@ class AdminViewModel(
         }
     }
 
+    fun assignTestPartner(
+        booking: Booking,
+        partner: DriverProfile,
+        notifyCustomer: Boolean = true,
+        actorRole: String = "admin"
+    ) {
+        val validity = platformSettings.value.testOtpValiditySeconds.coerceIn(60L, 1800L)
+        viewModelScope.launch {
+            repository.assignTestPartnerToBooking(booking, partner, validity, notifyCustomer, actorRole)
+                .onSuccess { otp ->
+                    _message.value = "Assigned Test Partner ${partner.legalName} to TEST RIDE #${booking.id.take(6)}. TEST OTP: $otp"
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed to assign Test Partner." }
+        }
+    }
+
     fun tryAutoAssignPendingTestRides(actorRole: String = "admin") {
         val settings = platformSettings.value
         if (!settings.testRideModeEnabled || !settings.testAutoAssignEnabled) return
         val pending = testBookings.value.filter {
             it.status == "searching" && it.assignedDriverId.isBlank() && it.id !in autoAssignedIds
         }
+        val partners = verifiedTestPartners.value
         pending.forEach { booking ->
             autoAssignedIds.add(booking.id)
-            assignTestDriver(
-                booking = booking,
-                testDriver = TestDriverCatalog.defaultForCategory(booking.vehicleCategory),
-                notifyCustomer = true,
-                actorRole = actorRole
-            )
+            val matchingPartner = partners.firstOrNull { it.vehicleCategory == booking.vehicleCategory }
+                ?: partners.firstOrNull()
+            if (matchingPartner != null) {
+                assignTestPartner(
+                    booking = booking,
+                    partner = matchingPartner,
+                    notifyCustomer = true,
+                    actorRole = actorRole
+                )
+            } else {
+                assignTestDriver(
+                    booking = booking,
+                    testDriver = TestDriverCatalog.defaultForCategory(booking.vehicleCategory),
+                    notifyCustomer = true,
+                    actorRole = actorRole
+                )
+            }
         }
     }
 
@@ -570,6 +640,24 @@ class AdminViewModel(
             repository.sendTestOtpNotificationToCustomer(booking, secret.otpPlaintext, actorRole)
                 .onSuccess { _message.value = "Sent TEST OTP alert to customer (${secret.otpPlaintext})." }
                 .onFailure { _message.value = it.localizedMessage ?: "Failed to send TEST OTP alert." }
+        }
+    }
+
+    fun requestTestOtpOverride(
+        booking: Booking,
+        reason: String,
+        actorRole: String = "ops_staff"
+    ) {
+        if (!platformSettings.value.testAllowAdminOtpOverride) {
+            _message.value = "OTP override is disabled in Owner Testing Settings."
+            return
+        }
+        viewModelScope.launch {
+            repository.requestTestOtpOverride(booking, reason, actorRole)
+                .onSuccess {
+                    _message.value = "OTP override request logged for TEST RIDE #${booking.id.take(6)}. Awaiting Owner Admin authorization."
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "OTP override request failed." }
         }
     }
 

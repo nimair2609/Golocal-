@@ -41,6 +41,21 @@ service cloud.firestore {
       return isAdmin() || isOperationsStaff();
     }
 
+    function isAuthorizedTestCustomer() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isTestCustomer == true;
+    }
+
+    function isAuthorizedTestPartnerId(driverId) {
+      return driverId is string &&
+             driverId.size() >= 1 &&
+             (driverId.matches('^test_driver_.*') ||
+              (exists(/databases/$(database)/documents/driver_profiles/$(driverId)) &&
+               get(/databases/$(database)/documents/driver_profiles/$(driverId)).data.verificationStatus == 'verified' &&
+               get(/databases/$(database)/documents/driver_profiles/$(driverId)).data.isTestPartner == true));
+    }
+
     function isVerifiedDriver() {
       return isSignedIn() &&
              exists(/databases/$(database)/documents/driver_profiles/$(request.auth.uid)) &&
@@ -73,6 +88,7 @@ service cloud.firestore {
              (!('emailVerified' in data) || data.emailVerified is bool) &&
              (!('mobileVerified' in data) || data.mobileVerified is bool) &&
              (!('hasEmergencyContact' in data) || data.hasEmergencyContact is bool) &&
+             (!('isTestCustomer' in data) || data.isTestCustomer is bool) &&
              (!('accountCreatedAt' in data) || isValidTimestamp(data.accountCreatedAt)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
@@ -136,6 +152,7 @@ service cloud.firestore {
              data.verificationStatus in ['pending', 'verified', 'rejected', 'suspended'] &&
              isOptionalString(data, 'rejectionReason', 300) &&
              data.isOnline is bool &&
+             (!('isTestPartner' in data) || data.isTestPartner is bool) &&
              (!('ratingAvg' in data) || (data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5)) &&
              (!('completedRides' in data) || (data.completedRides is int && data.completedRides >= 0)) &&
              isValidTimestamp(data.createdAt) &&
@@ -152,6 +169,7 @@ service cloud.firestore {
              isOptionalString(data, 'block', 80) &&
              data.verificationStatus in ['pending', 'verified', 'rejected', 'suspended'] &&
              data.isOnline is bool &&
+             (!('isTestPartner' in data) || data.isTestPartner is bool) &&
              (!('currentLat' in data) || data.currentLat is number) &&
              (!('currentLng' in data) || data.currentLng is number) &&
              (!('ratingAvg' in data) || data.ratingAvg is number) &&
@@ -234,7 +252,7 @@ service cloud.firestore {
              (!('isRoundTrip' in data) || data.isRoundTrip is bool) &&
              isOptionalString(data, 'cancellationReason', 250) &&
              isOptionalString(data, 'cancelledBy', 128) &&
-             (!('cancelledByRole' in data) || data.cancelledByRole in ['', 'customer', 'driver', 'admin']) &&
+             (!('cancelledByRole' in data) || data.cancelledByRole in ['', 'customer', 'driver', 'admin', 'ops_staff']) &&
              isOptionalString(data, 'cancellationCategory', 120) &&
              isOptionalString(data, 'invoiceEmail', 150) &&
              (!('customerRating' in data) || (data.customerRating is int && data.customerRating >= 1 && data.customerRating <= 5)) &&
@@ -272,6 +290,9 @@ service cloud.firestore {
              isOptionalString(data, 'offerId', 128) &&
              data.lockedFareInr is number && data.lockedFareInr >= 1 &&
              data.status in ['active', 'completed', 'cancelled'] &&
+             (!('is_test_ride' in data) || data.is_test_ride is bool) &&
+             isOptionalString(data, 'assignedByUid', 128) &&
+             (!('assignedByRole' in data) || data.assignedByRole in ['', 'customer', 'admin', 'ops_staff']) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -281,6 +302,21 @@ service cloud.firestore {
              data.customerId is string && data.customerId.size() <= 128 &&
              data.driverId is string && data.driverId.size() <= 128 &&
              data.lat is number && data.lng is number &&
+             (!('isTestRide' in data) || data.isTestRide is bool) &&
+             (!('isSimulated' in data) || data.isSimulated is bool) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidLiveLocation(data, locationId) {
+      return data.driverId == locationId &&
+             data.driverId is string && data.driverId.size() >= 1 && data.driverId.size() <= 128 &&
+             data.bookingId is string && isValidId(data.bookingId) &&
+             data.customerId is string && data.customerId.size() >= 1 && data.customerId.size() <= 128 &&
+             data.lat is number && data.lng is number &&
+             (!('headingDeg' in data) || data.headingDeg is number) &&
+             (!('speedKmph' in data) || data.speedKmph is number) &&
+             data.isTestRide is bool &&
+             data.isSimulated is bool &&
              isValidTimestamp(data.updatedAt);
     }
 
@@ -391,6 +427,7 @@ service cloud.firestore {
              data.targetCollection is string && data.targetCollection.size() >= 2 && data.targetCollection.size() <= 80 &&
              data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
              data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 300 &&
+             (!('isTestRide' in data) || data.isTestRide is bool) &&
              isValidTimestamp(data.createdAt);
     }
 
@@ -427,6 +464,10 @@ service cloud.firestore {
              data.used is bool &&
              data.overridden is bool &&
              isOptionalString(data, 'overrideReason', 250) &&
+             isOptionalString(data, 'overrideRequestedByUid', 128) &&
+             isOptionalString(data, 'overrideRequestedReason', 250) &&
+             (!('overrideRequestedAt' in data) || data.overrideRequestedAt == null || data.overrideRequestedAt is timestamp) &&
+             isOptionalString(data, 'overriddenByUid', 128) &&
              isOptionalString(data, 'verifiedByUid', 128) &&
              data.attempts is int && data.attempts >= 0 &&
              data.maxAttempts is int && data.maxAttempts >= 1 && data.maxAttempts <= 10 &&
@@ -472,6 +513,7 @@ service cloud.firestore {
                        incoming().userId == request.auth.uid &&
                        (incoming().role in ['customer', 'driver'] || isAdmin()) &&
                        incoming().accountStatus == 'active' &&
+                       (!('isTestCustomer' in incoming()) || incoming().isTestCustomer == false || isAdmin()) &&
                        isValidUserAccount(incoming());
       allow update: if isSignedIn() &&
                        isValidId(userId) &&
@@ -482,6 +524,7 @@ service cloud.firestore {
                          (request.auth.uid == userId &&
                           incoming().role == existing().role &&
                           incoming().accountStatus == existing().accountStatus &&
+                          (!('isTestCustomer' in incoming()) || (('isTestCustomer' in existing()) && incoming().isTestCustomer == existing().isTestCustomer) || incoming().isTestCustomer == false) &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'uid', 'fullName', 'email', 'phone', 'mobileNumber', 'photoUrl',
                             'preferredLanguage', 'lowNetworkMode', 'privacyConsentAccepted',
@@ -546,6 +589,7 @@ service cloud.firestore {
                        incoming().driverId == request.auth.uid &&
                        incoming().verificationStatus == 'pending' &&
                        incoming().isOnline == false &&
+                       (!('isTestPartner' in incoming()) || incoming().isTestPartner == false || isAdmin()) &&
                        isValidDriverProfile(incoming());
       allow update: if isSignedIn() &&
                        isValidId(driverId) &&
@@ -589,7 +633,8 @@ service cloud.firestore {
                          (request.auth.uid == driverId &&
                           incoming().driverId == request.auth.uid &&
                           incoming().verificationStatus == 'pending' &&
-                          incoming().isOnline == false)
+                          incoming().isOnline == false &&
+                          (!('isTestPartner' in incoming()) || incoming().isTestPartner == false))
                        );
       allow update: if isSignedIn() &&
                        isValidId(driverId) &&
@@ -646,20 +691,40 @@ service cloud.firestore {
                         (incoming().is_test_ride == true &&
                          incoming().test_mode == true &&
                          exists(/databases/$(database)/documents/platform_settings/global) &&
-                         get(/databases/$(database)/documents/platform_settings/global).data.testRideModeEnabled == true)) &&
+                         get(/databases/$(database)/documents/platform_settings/global).data.testRideModeEnabled == true &&
+                         (isAuthorizedTestCustomer() || isStaffOrAdmin()))) &&
                        isValidBooking(incoming());
       allow update: if isSignedIn() &&
                        isValidId(bookingId) &&
                        isValidBooking(incoming()) &&
                        incoming().customerId == existing().customerId &&
                        incoming().createdAt == existing().createdAt && (
-                         isAdmin() ||
-                         // Action: Operations Staff manages Admin-controlled Test Rides ONLY (never real rides)
+                         // Action: Owner Admin manages bookings & test rides (assigning test drivers still requires authorized test partner or simulated unit, and test override requires valid challenge)
+                         (isAdmin() &&
+                          (!('is_test_ride' in existing()) ||
+                           existing().is_test_ride != true ||
+                           ((incoming().assignedDriverId == existing().assignedDriverId ||
+                             incoming().assignedDriverId == '' ||
+                             isAuthorizedTestPartnerId(incoming().assignedDriverId)) &&
+                            (existing().status != 'arrived' ||
+                             incoming().status != 'in_progress' ||
+                             (existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
+                              (getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true ||
+                               getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == true)))))) ||
+                         // Action: Operations Staff manages Admin-controlled Test Rides ONLY (cannot bypass OTP or assign unauthorized partners)
                          (isOperationsStaff() &&
                           'is_test_ride' in existing() &&
                           existing().is_test_ride == true &&
                           incoming().is_test_ride == true &&
                           incoming().test_mode == true &&
+                          (incoming().assignedDriverId == existing().assignedDriverId ||
+                           incoming().assignedDriverId == '' ||
+                           isAuthorizedTestPartnerId(incoming().assignedDriverId)) &&
+                          (existing().status != 'arrived' ||
+                           incoming().status != 'in_progress' ||
+                           (exists(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
+                            (get(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true ||
+                             get(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == true))) &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
                             'agreedFareInr', 'test_otp_status', 'test_otp_expires_at_ms',
@@ -724,13 +789,16 @@ service cloud.firestore {
                           incoming().status == 'completed' &&
                           !('customerFeedbackRating' in existing()) &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['customerFeedbackRating', 'customerFeedbackNote', 'updatedAt'])) ||
-                         // Action: Assigned driver advances active trip state
+                         // Action: Assigned driver advances active trip state (NEVER allowed to jump arrived -> in_progress on test rides!)
                          (request.auth.uid == existing().assignedDriverId &&
                           !(existing().status in ['completed', 'cancelled']) &&
                           ((existing().status == 'assigned' && incoming().status == 'arriving') ||
                            (existing().status == 'arriving' && incoming().status == 'arrived') ||
-                           (existing().status == 'arrived' && incoming().status == 'in_progress') ||
-                           (existing().status == 'in_progress' && incoming().status == 'completed')) &&
+                           (existing().status == 'arrived' && incoming().status == 'in_progress' &&
+                            (!('is_test_ride' in existing()) || existing().is_test_ride != true)) ||
+                           (existing().status == 'in_progress' && incoming().status == 'completed' &&
+                            ((!('is_test_ride' in existing()) || existing().is_test_ride != true) ||
+                             incoming().paymentStatus == existing().paymentStatus))) &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'status', 'paymentStatus', 'updatedAt'
                           ]))
@@ -785,31 +853,53 @@ service cloud.firestore {
     // 9. Ride assignments (1 doc per bookingId prevents duplicate driver assignment)
     match /ride_assignments/{assignmentId} {
       allow get: if isSignedIn() && isValidId(assignmentId) &&
-                    (existing().customerId == request.auth.uid || existing().driverId == request.auth.uid || isAdmin());
+                    (existing().customerId == request.auth.uid ||
+                     existing().driverId == request.auth.uid ||
+                     (isOperationsStaff() && 'is_test_ride' in existing() && existing().is_test_ride == true) ||
+                     isAdmin());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.driverId == request.auth.uid ||
+                      (isOperationsStaff() && resource.data.is_test_ride == true) ||
                       isAdmin());
       allow create: if isSignedIn() &&
                        isValidId(assignmentId) &&
                        assignmentId == incoming().bookingId &&
-                       incoming().customerId == request.auth.uid &&
                        incoming().status == 'active' &&
-                       isValidRideAssignment(incoming());
+                       isValidRideAssignment(incoming()) && (
+                         (incoming().customerId == request.auth.uid &&
+                          (!('is_test_ride' in incoming()) || incoming().is_test_ride == false)) ||
+                         (isStaffOrAdmin() &&
+                          incoming().is_test_ride == true &&
+                          existsAfter(/databases/$(database)/documents/bookings/$(assignmentId)) &&
+                          getAfter(/databases/$(database)/documents/bookings/$(assignmentId)).data.is_test_ride == true &&
+                          getAfter(/databases/$(database)/documents/bookings/$(assignmentId)).data.assignedDriverId == incoming().driverId &&
+                          isAuthorizedTestPartnerId(incoming().driverId))
+                       );
       allow update: if isSignedIn() &&
                        isValidId(assignmentId) &&
                        isValidRideAssignment(incoming()) &&
                        incoming().bookingId == existing().bookingId &&
                        incoming().customerId == existing().customerId &&
-                       incoming().driverId == existing().driverId &&
                        incoming().createdAt == existing().createdAt && (
-                         isAdmin() ||
+                         (isAdmin() &&
+                          (incoming().driverId == existing().driverId ||
+                           ('is_test_ride' in existing() && existing().is_test_ride == true && isAuthorizedTestPartnerId(incoming().driverId)))) ||
+                         (isOperationsStaff() &&
+                          'is_test_ride' in existing() &&
+                          existing().is_test_ride == true &&
+                          incoming().is_test_ride == true &&
+                          isAuthorizedTestPartnerId(incoming().driverId)) ||
                          ((request.auth.uid == existing().driverId || request.auth.uid == existing().customerId) &&
+                          incoming().driverId == existing().driverId &&
                           existing().status == 'active' &&
                           incoming().status in ['completed', 'cancelled'] &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
                        );
-      allow delete: if false;
+      allow delete: if isStaffOrAdmin() &&
+                       isValidId(assignmentId) &&
+                       'is_test_ride' in existing() &&
+                       existing().is_test_ride == true;
     }
 
     // 10. Live trip driver locations (bound to assigned driver OR Admin/Ops simulator for test rides)
@@ -824,14 +914,14 @@ service cloud.firestore {
       allow create, update: if isSignedIn() &&
                                isValidId(bookingId) &&
                                incoming().bookingId == bookingId &&
-                               exists(/databases/$(database)/documents/bookings/$(bookingId)) &&
+                               existsAfter(/databases/$(database)/documents/bookings/$(bookingId)) &&
                                isValidTripLocation(incoming()) && (
                                  (incoming().driverId == request.auth.uid &&
-                                  get(/databases/$(database)/documents/bookings/$(bookingId)).data.assignedDriverId == request.auth.uid) ||
+                                  getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.assignedDriverId == request.auth.uid) ||
                                  (isStaffOrAdmin() &&
-                                  'is_test_ride' in get(/databases/$(database)/documents/bookings/$(bookingId)).data &&
-                                  get(/databases/$(database)/documents/bookings/$(bookingId)).data.is_test_ride == true &&
-                                  incoming().customerId == get(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId)
+                                  'is_test_ride' in getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data &&
+                                  getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.is_test_ride == true &&
+                                  incoming().customerId == getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.customerId)
                                );
       allow delete: if isAdmin() ||
                        (isOperationsStaff() &&
@@ -839,6 +929,33 @@ service cloud.firestore {
                         (!exists(/databases/$(database)/documents/bookings/$(bookingId)) ||
                          ('is_test_ride' in get(/databases/$(database)/documents/bookings/$(bookingId)).data &&
                           get(/databases/$(database)/documents/bookings/$(bookingId)).data.is_test_ride == true)));
+    }
+
+    // 10b. Live driver coordinate stream (live_locations/{driverId}) synced with trip telemetry
+    match /live_locations/{locationId} {
+      allow get: if isSignedIn() && isValidId(locationId) &&
+                    (existing().driverId == request.auth.uid ||
+                     existing().customerId == request.auth.uid ||
+                     isOperationsStaff() ||
+                     isAdmin());
+      allow list: if isSignedIn() &&
+                     (resource.data.driverId == request.auth.uid ||
+                      resource.data.customerId == request.auth.uid ||
+                      isOperationsStaff() ||
+                      isAdmin());
+      allow create, update: if isSignedIn() &&
+                               isValidId(locationId) &&
+                               isValidLiveLocation(incoming(), locationId) &&
+                               existsAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)) && (
+                                 (locationId == request.auth.uid &&
+                                  getAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.assignedDriverId == request.auth.uid) ||
+                                 (isStaffOrAdmin() &&
+                                  incoming().isTestRide == true &&
+                                  'is_test_ride' in getAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data &&
+                                  getAfter(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.is_test_ride == true)
+                               );
+      allow delete: if isAdmin() ||
+                       (isOperationsStaff() && isValidId(locationId) && existing().isTestRide == true);
     }
 
     // 11. Idempotent payment records (keyed by bookingId; test rides strictly excluded from production payments)
@@ -1003,13 +1120,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 20. Immutable admin & operations audit logs
+    // 20. Immutable admin & operations audit logs (Ops Staff limited to test-ride audit records)
     match /audit_logs/{logId} {
-      allow get: if isAdmin() && isValidId(logId);
-      allow list: if isAdmin();
+      allow get: if isValidId(logId) &&
+                    (isAdmin() || (isOperationsStaff() && 'isTestRide' in existing() && existing().isTestRide == true));
+      allow list: if isAdmin() || (isOperationsStaff() && resource.data.isTestRide == true);
       allow create: if isStaffOrAdmin() &&
                        isValidId(logId) &&
                        incoming().actorId == request.auth.uid &&
+                       (isAdmin() || incoming().isTestRide == true) &&
                        isValidAuditLog(incoming());
       allow update, delete: if false;
     }
@@ -1044,13 +1163,13 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 22b. Admin Test Ride hashed OTP challenge (customer NEVER gets read; verifies atomically via update+getAfter)
+    // 22b. Admin Test Ride hashed OTP challenge (customer NEVER gets read; Ops can only request override; ONLY Owner Admin executes override)
     match /test_ride_otps/{bookingId} {
       allow get, list: if isStaffOrAdmin();
       allow create: if isStaffOrAdmin() &&
                        isValidId(bookingId) &&
-                       exists(/databases/$(database)/documents/bookings/$(bookingId)) &&
-                       get(/databases/$(database)/documents/bookings/$(bookingId)).data.is_test_ride == true &&
+                       existsAfter(/databases/$(database)/documents/bookings/$(bookingId)) &&
+                       getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.is_test_ride == true &&
                        incoming().overridden == false &&
                        incoming().used == false &&
                        incoming().attempts == 0 &&
@@ -1060,12 +1179,25 @@ service cloud.firestore {
                        isValidTestRideOtpChallenge(incoming(), bookingId) &&
                        incoming().bookingId == existing().bookingId &&
                        incoming().customerId == existing().customerId && (
-                         (isStaffOrAdmin() &&
+                         (isAdmin() &&
                           (incoming().overridden == false ||
                            (exists(/databases/$(database)/documents/platform_settings/global) &&
                             get(/databases/$(database)/documents/platform_settings/global).data.testAllowAdminOtpOverride == true &&
+                            incoming().overridden == true &&
+                            incoming().used == true &&
+                            incoming().overriddenByUid == request.auth.uid &&
                             incoming().overrideReason is string &&
                             incoming().overrideReason.size() >= 4))) ||
+                         (isOperationsStaff() &&
+                          incoming().overridden == false &&
+                          ((incoming().used == false &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'overrideRequestedByUid', 'overrideRequestedReason', 'overrideRequestedAt', 'updatedAt'
+                            ]) &&
+                            incoming().overrideRequestedByUid == request.auth.uid &&
+                            incoming().overrideRequestedReason is string &&
+                            incoming().overrideRequestedReason.size() >= 4) ||
+                           (incoming().used == false && incoming().overridden == false && incoming().attempts == 0))) ||
                          (existing().customerId == request.auth.uid &&
                           incoming().createdAt == existing().createdAt &&
                           existing().used == false &&

@@ -922,102 +922,23 @@ test("Operations Staff RBAC: no default access, admin-only grant/revoke, scoped 
   await assertFails(opsDb.collection("emergency_events").doc("sos_ops_1").get());
 });
 
-test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OTP verification, ops scoping, and financial exclusion", async () => {
+test("Admin-Controlled Live Test Ride Mode (13 Acceptance Scenarios): authorization, atomic dispatch, OTP security, driver bypass prevention, Ops/Owner override split, financial isolation, and mode OFF preservation", async () => {
   const OPS_UID = "ops_test_mgr";
   const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
   const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
-  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(OTHER_UID, { phone_number: "+919876543211" }).firestore();
   const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
+  const unverifiedDriverDb = testEnv.authenticatedContext(UNVERIFIED_DRIVER_UID).firestore();
   const opsDb = testEnv.authenticatedContext(OPS_UID).firestore();
 
   function sha256Otp(bookingId, otp) {
     return crypto.createHash("sha256").update(`${bookingId}:${otp}`).digest("hex");
   }
 
-  // Seed verified real driver & active operations staff
-  await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    const db = ctx.firestore();
-    await db.collection("driver_profiles").doc(DRIVER_UID).set({
-      driverId: DRIVER_UID,
-      legalName: "Rahul Das",
-      phone: "+919800000002",
-      district: "Hooghly",
-      vehicleCategory: "toto",
-      vehicleRegNumber: "WB15E1234",
-      drivingLicenceNumber: "WB15-20210001",
-      verificationStatus: "verified",
-      isOnline: true,
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    });
-    await db.collection("operations_staff").doc(OPS_UID).set({
-      userId: OPS_UID,
-      displayName: "Ops Tester",
-      assignedDistrict: "Hooghly",
-      isActive: true,
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    });
-  });
-
-  // 1. When testRideModeEnabled == false, customer CANNOT create a booking tagged is_test_ride: true
-  await assertFails(
-    custDb.collection("bookings").doc("test_ride_disabled").set({
-      customerId: CUSTOMER_UID,
-      customerName: "Alice Sen",
-      bookingType: "now",
-      vehicleCategory: "toto",
-      pickupLabel: "Bandel Station",
-      destinationLabel: "Chinsurah Court",
-      distanceKm: 4.5,
-      estimatedFareInr: 70,
-      minPermittedFareInr: 60,
-      maxPermittedFareInr: 95,
-      paymentMethod: "cash",
-      paymentStatus: "pending",
-      status: "searching",
-      is_test_ride: true,
-      test_mode: true,
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-
-  // 2. Non-admin (Customer & Operations Staff) CANNOT toggle testRideModeEnabled in platform_settings
-  await assertFails(
-    custDb.collection("platform_settings").doc("global").set({
-      testRideModeEnabled: true,
-      updatedAt: nowTs(),
-    })
-  );
-  await assertFails(
-    opsDb.collection("platform_settings").doc("global").set({
-      testRideModeEnabled: true,
-      updatedAt: nowTs(),
-    })
-  );
-
-  // 3. Admin enables Test Ride Mode
-  await assertSucceeds(
-    adminDb.collection("platform_settings").doc("global").set({
-      helplineNumber: "+91-1800-103-0000",
-      testRideModeEnabled: true,
-      testAutoAssignEnabled: false,
-      testManualAssignEnabled: true,
-      testDriverSpeedKmph: 40,
-      testOtpValiditySeconds: 300,
-      testAllowAdminOtpOverride: true,
-      testAutoCompleteEnabled: false,
-      updatedAt: nowTs(),
-    })
-  );
-
-  // 4. Customer creates a test ride booking when mode is enabled
-  const TEST_BOOKING_ID = "test_ride_001";
-  await assertSucceeds(
-    custDb.collection("bookings").doc(TEST_BOOKING_ID).set({
-      customerId: CUSTOMER_UID,
-      customerName: "Alice Sen",
+  function makeTestBookingPayload(customerId, customerName) {
+    return {
+      customerId,
+      customerName,
       bookingType: "now",
       vehicleCategory: "toto",
       pickupLabel: "Bandel Station",
@@ -1034,10 +955,120 @@ test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OT
       test_otp_status: "awaiting_assignment",
       createdAt: nowTs(),
       updatedAt: nowTs(),
+    };
+  }
+
+  // Seed users (CUSTOMER_UID authorized test customer, OTHER_UID ordinary customer),
+  // verified real driver (initially NOT a test partner), unverified driver, and active Ops staff.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
+      userId: CUSTOMER_UID,
+      fullName: "Alice Test Customer",
+      email: "alice@example.com",
+      phone: "+919876543210",
+      mobileNumber: "+919876543210",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      isTestCustomer: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("users").doc(OTHER_UID).set({
+      uid: OTHER_UID,
+      userId: OTHER_UID,
+      fullName: "Bob Ordinary Customer",
+      email: "bob@example.com",
+      phone: "+919876543211",
+      mobileNumber: "+919876543211",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      isTestCustomer: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("driver_profiles").doc(DRIVER_UID).set({
+      driverId: DRIVER_UID,
+      legalName: "Rahul Das",
+      phone: "+919800000002",
+      district: "Hooghly",
+      vehicleCategory: "toto",
+      vehicleRegNumber: "WB15E1234",
+      drivingLicenceNumber: "WB15-20210001",
+      verificationStatus: "verified",
+      isOnline: true,
+      isTestPartner: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("driver_profiles").doc(UNVERIFIED_DRIVER_UID).set({
+      driverId: UNVERIFIED_DRIVER_UID,
+      legalName: "Pending Driver",
+      phone: "+919800000003",
+      district: "Hooghly",
+      vehicleCategory: "toto",
+      vehicleRegNumber: "WB15E9999",
+      drivingLicenceNumber: "WB15-20210099",
+      verificationStatus: "pending",
+      isOnline: false,
+      isTestPartner: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("operations_staff").doc(OPS_UID).set({
+      userId: OPS_UID,
+      displayName: "Ops Tester",
+      assignedDistrict: "Hooghly",
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  // Scenario 1: Test mode OFF blocks test booking creation even for authorized test customer
+  await assertFails(
+    custDb.collection("bookings").doc("test_ride_disabled").set(makeTestBookingPayload(CUSTOMER_UID, "Alice Test Customer"))
+  );
+
+  // Non-admin (Customer & Operations Staff) CANNOT toggle testRideModeEnabled; customer CANNOT self-promote isTestCustomer
+  await assertFails(
+    custDb.collection("platform_settings").doc("global").set({ testRideModeEnabled: true, updatedAt: nowTs() })
+  );
+  await assertFails(
+    opsDb.collection("platform_settings").doc("global").set({ testRideModeEnabled: true, updatedAt: nowTs() })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(OTHER_UID).update({ isTestCustomer: true, updatedAt: nowTs() })
+  );
+
+  // Owner Admin enables Test Ride Mode
+  await assertSucceeds(
+    adminDb.collection("platform_settings").doc("global").set({
+      helplineNumber: "+91-1800-103-0000",
+      testRideModeEnabled: true,
+      testAutoAssignEnabled: false,
+      testManualAssignEnabled: true,
+      testDriverSpeedKmph: 40,
+      testOtpValiditySeconds: 300,
+      testAllowAdminOtpOverride: true,
+      testAutoCompleteEnabled: false,
+      updatedAt: nowTs(),
     })
   );
 
-  // 5. Verified real drivers CANNOT read test bookings or submit offers on test bookings
+  // Scenario 2: Test mode ON allows authorized isTestCustomer booking & blocks ordinary non-test customer
+  await assertFails(
+    bobDb.collection("bookings").doc("test_ride_unauthorized_cust").set(makeTestBookingPayload(OTHER_UID, "Bob Ordinary Customer"))
+  );
+  const TEST_BOOKING_ID = "test_ride_001";
+  await assertSucceeds(
+    custDb.collection("bookings").doc(TEST_BOOKING_ID).set(makeTestBookingPayload(CUSTOMER_UID, "Alice Test Customer"))
+  );
+
+  // Searching test rides are invisible to verified real drivers and cannot receive commercial offers
   await assertFails(driverDb.collection("bookings").doc(TEST_BOOKING_ID).get());
   await assertFails(
     driverDb.collection("ride_offers").doc("offer_on_test").set({
@@ -1054,69 +1085,154 @@ test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OT
     })
   );
 
-  // 6. Active Operations Staff CAN assign simulated test driver, publish OTP hash + secret, and update test trip location
-  const VALID_OTP = "482913";
-  const futureDate = new Date(Date.now() + 300 * 1000);
-  await assertSucceeds(
+  // Scenario 4: Unauthorized rider assignment fails (non-test verified driver & unverified driver rejected; Ops cannot flip isTestPartner)
+  await assertFails(
     opsDb.collection("bookings").doc(TEST_BOOKING_ID).update({
-      status: "arrived",
-      assignedDriverId: "test_driver_toto_01",
-      assignedDriverName: "Test Driver – Toto 01",
-      assignedVehicleLabel: "TEST VEHICLE • WB-TEST-0101",
+      status: "assigned",
+      assignedDriverId: DRIVER_UID,
+      assignedDriverName: "Rahul Das",
+      assignedVehicleLabel: "WB15E1234",
       agreedFareInr: 70,
-      test_otp_status: "pending",
-      test_otp_expires_at_ms: futureDate.getTime(),
       updatedAt: nowTs(),
     })
   );
-  await assertSucceeds(
-    opsDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).set({
-      bookingId: TEST_BOOKING_ID,
-      customerId: CUSTOMER_UID,
-      otpHash: sha256Otp(TEST_BOOKING_ID, VALID_OTP),
-      submittedHash: "",
-      used: false,
-      overridden: false,
-      overrideReason: "",
-      verifiedByUid: "",
-      attempts: 0,
-      maxAttempts: 5,
-      expiresAt: futureDate,
-      createdAt: nowTs(),
+  await assertFails(
+    opsDb.collection("bookings").doc(TEST_BOOKING_ID).update({
+      status: "assigned",
+      assignedDriverId: UNVERIFIED_DRIVER_UID,
+      assignedDriverName: "Pending Driver",
+      assignedVehicleLabel: "WB15E9999",
+      agreedFareInr: 70,
       updatedAt: nowTs(),
     })
   );
-  await assertSucceeds(
-    opsDb.collection("test_ride_otp_secrets").doc(TEST_BOOKING_ID).set({
-      bookingId: TEST_BOOKING_ID,
-      customerId: CUSTOMER_UID,
-      otpPlaintext: VALID_OTP,
-      status: "pending",
-      issuedByUid: OPS_UID,
-      issuedByRole: "ops_staff",
-      expiresAt: futureDate,
-      createdAt: nowTs(),
-      updatedAt: nowTs(),
-    })
-  );
-  await assertSucceeds(
-    opsDb.collection("trip_locations").doc(TEST_BOOKING_ID).set({
-      bookingId: TEST_BOOKING_ID,
-      customerId: CUSTOMER_UID,
-      driverId: "test_driver_toto_01",
-      lat: 22.922,
-      lng: 88.378,
-      updatedAt: nowTs(),
-    })
+  await assertFails(
+    opsDb.collection("driver_profiles").doc(DRIVER_UID).update({ isTestPartner: true, updatedAt: nowTs() })
   );
 
-  // 7. Customer & Outsiders CANNOT read test_ride_otps or test_ride_otp_secrets
+  // Owner Admin authorizes verified DRIVER_UID as Test Partner
+  await assertSucceeds(
+    adminDb.collection("driver_profiles").doc(DRIVER_UID).update({ isTestPartner: true, updatedAt: nowTs() })
+  );
+
+  // Scenario 3: Ops assignment succeeds atomically across bookings + ride_assignments + test_ride_otps + test_ride_otp_secrets + trip_locations + live_locations + audit_logs
+  const VALID_OTP = "482913";
+  const futureDate = new Date(Date.now() + 300 * 1000);
+  const assignBatch = opsDb.batch();
+  assignBatch.update(opsDb.collection("bookings").doc(TEST_BOOKING_ID), {
+    status: "assigned",
+    assignedDriverId: DRIVER_UID,
+    assignedDriverName: "Rahul Das",
+    assignedVehicleLabel: "TEST PARTNER • WB15E1234",
+    agreedFareInr: 70,
+    test_otp_status: "pending",
+    test_otp_expires_at_ms: futureDate.getTime(),
+    updatedAt: nowTs(),
+  });
+  assignBatch.set(opsDb.collection("ride_assignments").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    driverId: DRIVER_UID,
+    offerId: "admin_test_dispatch",
+    lockedFareInr: 70,
+    status: "active",
+    is_test_ride: true,
+    assignedByUid: OPS_UID,
+    assignedByRole: "ops_staff",
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  assignBatch.set(opsDb.collection("test_ride_otps").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    otpHash: sha256Otp(TEST_BOOKING_ID, VALID_OTP),
+    submittedHash: "",
+    used: false,
+    overridden: false,
+    overrideReason: "",
+    overrideRequestedByUid: "",
+    overrideRequestedReason: "",
+    overriddenByUid: "",
+    verifiedByUid: "",
+    attempts: 0,
+    maxAttempts: 5,
+    expiresAt: futureDate,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  assignBatch.set(opsDb.collection("test_ride_otp_secrets").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    otpPlaintext: VALID_OTP,
+    status: "pending",
+    issuedByUid: OPS_UID,
+    issuedByRole: "ops_staff",
+    expiresAt: futureDate,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  assignBatch.set(opsDb.collection("trip_locations").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    driverId: DRIVER_UID,
+    lat: 22.922,
+    lng: 88.378,
+    isTestRide: true,
+    isSimulated: false,
+    updatedAt: nowTs(),
+  });
+  assignBatch.set(opsDb.collection("live_locations").doc(DRIVER_UID), {
+    driverId: DRIVER_UID,
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    lat: 22.922,
+    lng: 88.378,
+    headingDeg: 0,
+    speedKmph: 0,
+    isTestRide: true,
+    isSimulated: false,
+    updatedAt: nowTs(),
+  });
+  assignBatch.set(opsDb.collection("audit_logs").doc("audit_test_assign_1"), {
+    actorId: OPS_UID,
+    actorEmail: "",
+    action: "TEST_PARTNER_ASSIGNED",
+    targetCollection: "bookings",
+    targetId: TEST_BOOKING_ID,
+    summary: "[ops_staff] Assigned verified test partner Rahul Das",
+    isTestRide: true,
+    createdAt: nowTs(),
+  });
+  await assertSucceeds(assignBatch.commit());
+
+  // Assigned Test Partner can read the test booking and advance assigned -> arriving -> arrived,
+  // and unverified driver cannot.
+  await assertSucceeds(driverDb.collection("bookings").doc(TEST_BOOKING_ID).get());
+  await assertFails(unverifiedDriverDb.collection("bookings").doc(TEST_BOOKING_ID).get());
+  await assertSucceeds(driverDb.collection("bookings").doc(TEST_BOOKING_ID).update({ status: "arriving", updatedAt: nowTs() }));
+  await assertSucceeds(driverDb.collection("bookings").doc(TEST_BOOKING_ID).update({ status: "arrived", updatedAt: nowTs() }));
+
+  // Customer & outsiders CANNOT read test_ride_otps or test_ride_otp_secrets
   await assertFails(custDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).get());
   await assertFails(custDb.collection("test_ride_otp_secrets").doc(TEST_BOOKING_ID).get());
   await assertFails(bobDb.collection("test_ride_otp_secrets").doc(TEST_BOOKING_ID).get());
   await assertFails(driverDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).get());
 
-  // 8. Customer submitting WRONG OTP hash fails; cannot advance booking directly without valid OTP
+  // Scenario 9: Driver (and Ops) CANNOT bypass OTP (arrived -> in_progress blocked on test rides)
+  await assertFails(
+    driverDb.collection("bookings").doc(TEST_BOOKING_ID).update({
+      status: "in_progress",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    opsDb.collection("bookings").doc(TEST_BOOKING_ID).update({
+      status: "in_progress",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Scenario 6: Incorrect OTP hash fails & cannot advance booking
   await assertFails(
     custDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).update({
       used: true,
@@ -1133,7 +1249,51 @@ test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OT
     })
   );
 
-  // 9. Customer submitting CORRECT OTP hash in an atomic WriteBatch updates test_ride_otps AND transitions booking -> in_progress
+  // Scenario 5: Expired OTP fails even with valid OTP hash
+  const EXPIRED_BOOKING_ID = "test_ride_expired";
+  const expiredDate = new Date(Date.now() - 60 * 1000);
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("bookings").doc(EXPIRED_BOOKING_ID).set({
+      ...makeTestBookingPayload(CUSTOMER_UID, "Alice Test Customer"),
+      status: "arrived",
+      assignedDriverId: "test_driver_toto_01",
+      assignedDriverName: "Test Driver – Toto 01",
+      assignedVehicleLabel: "TEST VEHICLE • WB-TEST-0101",
+      test_otp_status: "pending",
+      test_otp_expires_at_ms: expiredDate.getTime(),
+    });
+    await db.collection("test_ride_otps").doc(EXPIRED_BOOKING_ID).set({
+      bookingId: EXPIRED_BOOKING_ID,
+      customerId: CUSTOMER_UID,
+      otpHash: sha256Otp(EXPIRED_BOOKING_ID, "654321"),
+      submittedHash: "",
+      used: false,
+      overridden: false,
+      overrideReason: "",
+      verifiedByUid: "",
+      attempts: 0,
+      maxAttempts: 5,
+      expiresAt: expiredDate,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+  const expiredBatch = custDb.batch();
+  expiredBatch.update(custDb.collection("test_ride_otps").doc(EXPIRED_BOOKING_ID), {
+    used: true,
+    submittedHash: sha256Otp(EXPIRED_BOOKING_ID, "654321"),
+    verifiedByUid: CUSTOMER_UID,
+    updatedAt: nowTs(),
+  });
+  expiredBatch.update(custDb.collection("bookings").doc(EXPIRED_BOOKING_ID), {
+    status: "in_progress",
+    test_otp_status: "verified",
+    updatedAt: nowTs(),
+  });
+  await assertFails(expiredBatch.commit());
+
+  // Scenario 8: Valid OTP starts test ride atomically
   const validBatch = custDb.batch();
   validBatch.update(custDb.collection("test_ride_otps").doc(TEST_BOOKING_ID), {
     used: true,
@@ -1148,12 +1308,145 @@ test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OT
   });
   await assertSucceeds(validBatch.commit());
 
-  // 10. Financial isolation: payments and commissions CANNOT be created for test rides even by Admin or Customer
+  // Scenario 7: Reused OTP fails (cannot submit used OTP again)
+  await assertFails(
+    custDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).update({
+      used: true,
+      submittedHash: sha256Otp(TEST_BOOKING_ID, VALID_OTP),
+      verifiedByUid: CUSTOMER_UID,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Scenario 10: Authorized override works & is audited (Ops requests with reason -> Owner Admin executes override)
+  const OVERRIDE_BOOKING_ID = "test_ride_override";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("bookings").doc(OVERRIDE_BOOKING_ID).set({
+      ...makeTestBookingPayload(CUSTOMER_UID, "Alice Test Customer"),
+      status: "arrived",
+      assignedDriverId: "test_driver_toto_01",
+      assignedDriverName: "Test Driver – Toto 01",
+      assignedVehicleLabel: "TEST VEHICLE • WB-TEST-0101",
+      test_otp_status: "pending",
+      test_otp_expires_at_ms: futureDate.getTime(),
+    });
+    await db.collection("test_ride_otps").doc(OVERRIDE_BOOKING_ID).set({
+      bookingId: OVERRIDE_BOOKING_ID,
+      customerId: CUSTOMER_UID,
+      otpHash: sha256Otp(OVERRIDE_BOOKING_ID, "112233"),
+      submittedHash: "",
+      used: false,
+      overridden: false,
+      overrideReason: "",
+      overrideRequestedByUid: "",
+      overrideRequestedReason: "",
+      overriddenByUid: "",
+      verifiedByUid: "",
+      attempts: 0,
+      maxAttempts: 5,
+      expiresAt: futureDate,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("test_ride_otp_secrets").doc(OVERRIDE_BOOKING_ID).set({
+      bookingId: OVERRIDE_BOOKING_ID,
+      customerId: CUSTOMER_UID,
+      otpPlaintext: "112233",
+      status: "pending",
+      issuedByUid: OPS_UID,
+      issuedByRole: "ops_staff",
+      expiresAt: futureDate,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("audit_logs").doc("prod_audit_secret").set({
+      actorId: "admin_uid",
+      actorEmail: ADMIN_EMAIL,
+      action: "PROD_CONFIG_UPDATE",
+      targetCollection: "fare_configs",
+      targetId: "toto",
+      summary: "Production fare edit",
+      isTestRide: false,
+      createdAt: nowTs(),
+    });
+  });
+
+  // Ops CANNOT execute override directly
+  await assertFails(
+    opsDb.collection("test_ride_otps").doc(OVERRIDE_BOOKING_ID).update({
+      used: true,
+      overridden: true,
+      overrideReason: "Attempt direct bypass",
+      overriddenByUid: OPS_UID,
+      updatedAt: nowTs(),
+    })
+  );
+  // Ops CAN submit an audited override request
+  const opsRequestBatch = opsDb.batch();
+  opsRequestBatch.update(opsDb.collection("test_ride_otps").doc(OVERRIDE_BOOKING_ID), {
+    overrideRequestedByUid: OPS_UID,
+    overrideRequestedReason: "Customer SMS delayed during QA run",
+    overrideRequestedAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  opsRequestBatch.update(opsDb.collection("bookings").doc(OVERRIDE_BOOKING_ID), {
+    test_otp_status: "override_requested",
+    updatedAt: nowTs(),
+  });
+  opsRequestBatch.set(opsDb.collection("audit_logs").doc("audit_ops_req_1"), {
+    actorId: OPS_UID,
+    actorEmail: "",
+    action: "TEST_OTP_OVERRIDE_REQUESTED",
+    targetCollection: "test_ride_otps",
+    targetId: OVERRIDE_BOOKING_ID,
+    summary: "[ops_staff] Requested Owner OTP override",
+    isTestRide: true,
+    createdAt: nowTs(),
+  });
+  await assertSucceeds(opsRequestBatch.commit());
+
+  // Ops CAN read test audit logs, CANNOT read production audit logs
+  await assertSucceeds(opsDb.collection("audit_logs").doc("audit_ops_req_1").get());
+  await assertFails(opsDb.collection("audit_logs").doc("prod_audit_secret").get());
+
+  // Owner Admin executes audited OTP override
+  const adminOverrideBatch = adminDb.batch();
+  adminOverrideBatch.update(adminDb.collection("test_ride_otps").doc(OVERRIDE_BOOKING_ID), {
+    used: true,
+    overridden: true,
+    overrideReason: "Owner approved QA OTP override",
+    overriddenByUid: "admin_uid",
+    verifiedByUid: "admin_uid",
+    updatedAt: nowTs(),
+  });
+  adminOverrideBatch.update(adminDb.collection("test_ride_otp_secrets").doc(OVERRIDE_BOOKING_ID), {
+    status: "overridden",
+    updatedAt: nowTs(),
+  });
+  adminOverrideBatch.update(adminDb.collection("bookings").doc(OVERRIDE_BOOKING_ID), {
+    status: "in_progress",
+    test_otp_status: "overridden",
+    updatedAt: nowTs(),
+  });
+  adminOverrideBatch.set(adminDb.collection("audit_logs").doc("audit_admin_override_1"), {
+    actorId: "admin_uid",
+    actorEmail: ADMIN_EMAIL,
+    action: "TEST_OTP_ADMIN_OVERRIDE",
+    targetCollection: "test_ride_otps",
+    targetId: OVERRIDE_BOOKING_ID,
+    summary: "[admin] Owner approved QA OTP override",
+    isTestRide: true,
+    createdAt: nowTs(),
+  });
+  await assertSucceeds(adminOverrideBatch.commit());
+
+  // Scenario 12: Financial isolation — payments and commissions CANNOT be created for test rides even by Admin
   await assertFails(
     adminDb.collection("payments").doc(TEST_BOOKING_ID).set({
       bookingId: TEST_BOOKING_ID,
       customerId: CUSTOMER_UID,
-      driverId: "test_driver_toto_01",
+      driverId: DRIVER_UID,
       grossFareInr: 70,
       gstInr: 3.5,
       platformCommissionInr: 7,
@@ -1167,7 +1460,7 @@ test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OT
   await assertFails(
     adminDb.collection("commissions").doc(TEST_BOOKING_ID).set({
       bookingId: TEST_BOOKING_ID,
-      driverId: "test_driver_toto_01",
+      driverId: DRIVER_UID,
       grossFareInr: 70,
       commissionRatePct: 10,
       commissionAmountInr: 7,
@@ -1176,17 +1469,41 @@ test("Admin-Controlled Live Test Ride Mode: strict isolation, backend SHA-256 OT
     })
   );
 
-  // 11. Complete test ride & verify Staff/Admin can delete completed test bookings during cleanup
+  // Scenario 11: Test ride completion works non-commercially (by assigned Test Partner and by Ops/Admin)
   await assertSucceeds(
-    opsDb.collection("bookings").doc(TEST_BOOKING_ID).update({
+    driverDb.collection("bookings").doc(TEST_BOOKING_ID).update({
+      status: "completed",
+      paymentStatus: "pending",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    opsDb.collection("ride_assignments").doc(TEST_BOOKING_ID).update({
       status: "completed",
       updatedAt: nowTs(),
     })
   );
+
+  // Scenario 13: Disabling Test Ride Mode blocks new test rides without corrupting existing completed test records
+  await assertSucceeds(
+    adminDb.collection("platform_settings").doc("global").update({
+      testRideModeEnabled: false,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    custDb.collection("bookings").doc("test_ride_after_off").set(makeTestBookingPayload(CUSTOMER_UID, "Alice Test Customer"))
+  );
+  const existingAfterOff = await assertSucceeds(custDb.collection("bookings").doc(TEST_BOOKING_ID).get());
+  if (!existingAfterOff.exists || existingAfterOff.data().status !== "completed") {
+    throw new Error("Existing test ride record was corrupted when testRideModeEnabled was turned off.");
+  }
+
+  // Cleanup completed test ride docs succeeds for Staff/Admin
   await assertSucceeds(opsDb.collection("trip_locations").doc(TEST_BOOKING_ID).delete());
+  await assertSucceeds(opsDb.collection("live_locations").doc(DRIVER_UID).delete());
   await assertSucceeds(opsDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).delete());
   await assertSucceeds(opsDb.collection("test_ride_otp_secrets").doc(TEST_BOOKING_ID).delete());
+  await assertSucceeds(opsDb.collection("ride_assignments").doc(TEST_BOOKING_ID).delete());
   await assertSucceeds(opsDb.collection("bookings").doc(TEST_BOOKING_ID).delete());
 });
-
-

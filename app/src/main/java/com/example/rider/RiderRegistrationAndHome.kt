@@ -508,7 +508,10 @@ fun RiderHomeDashboardTab(
         }.timeInMillis / 1000L
     }
     val todaysCompletedRides = assignedBookings.count {
-        it.status == "completed" && (it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L) >= startOfDaySec
+        !it.isTestRide &&
+            !it.testMode &&
+            it.status == "completed" &&
+            (it.updatedAt?.seconds ?: it.createdAt?.seconds ?: 0L) >= startOfDaySec
     }
     val todaysEarningsInr = commissions.filter {
         (it.createdAt?.seconds ?: 0L) >= startOfDaySec

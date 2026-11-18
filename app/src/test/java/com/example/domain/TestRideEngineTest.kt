@@ -1,7 +1,15 @@
 package com.example.domain
 
+import com.example.data.model.AuditLog
 import com.example.data.model.Booking
+import com.example.data.model.DriverDirectoryEntry
+import com.example.data.model.DriverProfile
+import com.example.data.model.LiveLocation
 import com.example.data.model.PlatformSettings
+import com.example.data.model.RideAssignment
+import com.example.data.model.TestRideOtpChallenge
+import com.example.data.model.TripLocation
+import com.example.data.model.UserAccount
 import com.google.firebase.firestore.PropertyName
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -148,5 +156,42 @@ class TestRideEngineTest {
         assertFalse(settings.testRideModeEnabled)
         assertTrue(settings.testManualAssignEnabled)
         assertEquals(300L, settings.testOtpValiditySeconds)
+
+        val user = UserAccount()
+        assertFalse(user.isTestCustomer)
+        assertEquals("isTestCustomer", UserAccount::class.java.getDeclaredMethod("isTestCustomer").getAnnotation(PropertyName::class.java)?.value)
+
+        val driver = DriverProfile()
+        assertFalse(driver.isTestPartner)
+        assertEquals("isTestPartner", DriverProfile::class.java.getDeclaredMethod("isTestPartner").getAnnotation(PropertyName::class.java)?.value)
+
+        val dirEntry = DriverDirectoryEntry()
+        assertFalse(dirEntry.isTestPartner)
+        assertEquals("isTestPartner", DriverDirectoryEntry::class.java.getDeclaredMethod("isTestPartner").getAnnotation(PropertyName::class.java)?.value)
+
+        val assignment = RideAssignment()
+        assertFalse(assignment.isTestRide)
+        assertEquals("is_test_ride", RideAssignment::class.java.getDeclaredMethod("isTestRide").getAnnotation(PropertyName::class.java)?.value)
+
+        val tripLoc = TripLocation()
+        assertFalse(tripLoc.isTestRide)
+        assertFalse(tripLoc.isSimulated)
+        assertEquals("isTestRide", TripLocation::class.java.getDeclaredMethod("isTestRide").getAnnotation(PropertyName::class.java)?.value)
+        assertEquals("isSimulated", TripLocation::class.java.getDeclaredMethod("isSimulated").getAnnotation(PropertyName::class.java)?.value)
+
+        val liveLoc = LiveLocation()
+        assertFalse(liveLoc.isTestRide)
+        assertFalse(liveLoc.isSimulated)
+        assertEquals("isTestRide", LiveLocation::class.java.getDeclaredMethod("isTestRide").getAnnotation(PropertyName::class.java)?.value)
+        assertEquals("isSimulated", LiveLocation::class.java.getDeclaredMethod("isSimulated").getAnnotation(PropertyName::class.java)?.value)
+
+        val auditLog = AuditLog()
+        assertFalse(auditLog.isTestRide)
+        assertEquals("isTestRide", AuditLog::class.java.getDeclaredMethod("isTestRide").getAnnotation(PropertyName::class.java)?.value)
+
+        val challenge = TestRideOtpChallenge()
+        assertEquals("", challenge.overrideRequestedByUid)
+        assertEquals("", challenge.overrideRequestedReason)
+        assertEquals("", challenge.overriddenByUid)
     }
 }

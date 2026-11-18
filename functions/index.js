@@ -29,8 +29,12 @@ async function sendToUserIds(userIds, payload) {
   if (uniqueIds.length === 0) return;
 
   for (const uid of uniqueIds) {
-    const snap = await db.collection("fcm_tokens").where("userId", "==", uid).where("active", "==", true).get();
-    if (snap.empty) continue;
+    const userTokensSnap = await db.collection("user_tokens").where("userId", "==", uid).where("active", "==", true).get();
+    const legacyTokensSnap = userTokensSnap.empty
+      ? await db.collection("fcm_tokens").where("userId", "==", uid).where("active", "==", true).get()
+      : null;
+    const snap = !userTokensSnap.empty ? userTokensSnap : legacyTokensSnap;
+    if (!snap || snap.empty) continue;
 
     const docs = snap.docs;
     const tokens = docs.map((d) => d.data().token).filter(Boolean);
@@ -84,17 +88,23 @@ exports.onBookingWriteNotify = onDocumentWritten(
     const bookingId = event.params.bookingId;
     const prevStatus = before?.status || "";
     const newStatus = after.status || "";
+    const isTestRide = after.is_test_ride === true || after.test_mode === true;
+    const prefix = isTestRide ? "[TEST RIDE] " : "";
 
     if (!before && newStatus === "searching") {
       await sendToUserIds([after.customerId], {
         eventId: `booking_created_${bookingId}`,
-        type: "booking_confirmation",
+        type: isTestRide ? "test_booking_confirmation" : "booking_confirmation",
         targetRole: "customer",
         targetScreen: "bookings",
         entityId: bookingId,
-        title: "Booking Confirmed — Searching Nearby",
-        body: `${after.vehicleCategory.toUpperCase()} request from ${after.pickupLabel} to ${after.destinationLabel}.`,
+        title: isTestRide ? "TEST RIDE Created — Awaiting Ops Dispatch" : "Booking Confirmed — Searching Nearby",
+        body: `${prefix}${(after.vehicleCategory || "ride").toUpperCase()} request from ${after.pickupLabel} to ${after.destinationLabel}.`,
       });
+      // Test rides NEVER broadcast publicly to production online drivers
+      if (isTestRide) {
+        return;
+      }
       const onlineDrivers = await db
         .collection("driver_directory")
         .where("verificationStatus", "==", "verified")
@@ -120,14 +130,23 @@ exports.onBookingWriteNotify = onDocumentWritten(
 
     if (prevStatus === newStatus) return;
 
-    const customerMessages = {
-      confirmed: ["Rider Assigned", `${after.assignedDriverName || "Your driver"} confirmed. Trip PIN: ${after.tripPin}.`],
-      driver_en_route: ["Rider Approaching Pickup", `${after.assignedDriverName || "Driver"} is on the way.`],
-      arrived: ["Rider Arrived at Pickup", `Share Trip PIN ${after.tripPin} to start your ride.`],
-      in_progress: ["Ride Started", `Trip to ${after.destinationLabel} is underway.`],
-      completed: ["Ride Completed", `Final fare ₹${Math.round(after.agreedFareInr || after.estimatedFareInr || 0)}. Rate your ride.`],
-      cancelled: ["Ride Cancelled", `Booking cancelled (${after.cancellationReason || "no reason provided"}).`],
-    };
+    const customerMessages = isTestRide
+      ? {
+          assigned: [`${prefix}Test Rider Dispatched`, `${after.assignedDriverName || "Test Partner"} assigned. Wait at pickup for OTP verification.`],
+          arriving: [`${prefix}Rider Approaching Pickup`, `${after.assignedDriverName || "Test Partner"} is on the way.`],
+          arrived: [`${prefix}Rider Arrived at Pickup`, "Verify your 6-digit Test Ride OTP in the app to start."],
+          in_progress: [`${prefix}Test Ride Started`, `Trip to ${after.destinationLabel} is underway.`],
+          completed: [`${prefix}Test Ride Completed`, "Simulation completed with ₹0 commercial impact."],
+          cancelled: [`${prefix}Test Ride Cancelled`, `Booking cancelled (${after.cancellationReason || "no reason provided"}).`],
+        }
+      : {
+          assigned: ["Rider Assigned", `${after.assignedDriverName || "Your driver"} confirmed. Trip PIN: ${after.tripPin}.`],
+          arriving: ["Rider Approaching Pickup", `${after.assignedDriverName || "Driver"} is on the way.`],
+          arrived: ["Rider Arrived at Pickup", `Share Trip PIN ${after.tripPin} to start your ride.`],
+          in_progress: ["Ride Started", `Trip to ${after.destinationLabel} is underway.`],
+          completed: ["Ride Completed", `Final fare ₹${Math.round(after.agreedFareInr || after.estimatedFareInr || 0)}. Rate your ride.`],
+          cancelled: ["Ride Cancelled", `Booking cancelled (${after.cancellationReason || "no reason provided"}).`],
+        };
 
     const msg = customerMessages[newStatus];
     if (msg) {
@@ -142,16 +161,16 @@ exports.onBookingWriteNotify = onDocumentWritten(
       });
     }
 
-    if (after.assignedDriverId) {
+    if (after.assignedDriverId && !String(after.assignedDriverId).startsWith("test_driver_")) {
       await sendToUserIds([after.assignedDriverId], {
         eventId: `driver_booking_${newStatus}_${bookingId}`,
-        type: `driver_booking_${newStatus}`,
+        type: isTestRide ? `test_driver_booking_${newStatus}` : `driver_booking_${newStatus}`,
         targetRole: "driver",
         targetScreen: "home",
         entityId: bookingId,
         channelId: "golocal_driver_dispatch",
-        title: newStatus === "cancelled" ? "Trip Cancelled" : "Trip Status Updated",
-        body: `Booking #${bookingId.slice(0, 6)} is now ${newStatus.replace("_", " ")}.`,
+        title: newStatus === "cancelled" ? `${prefix}Trip Cancelled` : `${prefix}Trip Status Updated`,
+        body: `${prefix}Booking #${bookingId.slice(0, 6)} is now ${newStatus.replace("_", " ")}.`,
       });
     }
   }

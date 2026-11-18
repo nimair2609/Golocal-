@@ -360,9 +360,18 @@ fun RiderEarningsHistoryTab(
                                     .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                             ) {
                                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        GolocalStatusBadge(label = b.status.uppercase(), tone = if (b.status == "completed") "success" else "info")
-                                        Text("₹${b.agreedFareInr.toInt()}", fontFamily = JetBrainsMono, color = GolocalPrimaryBlue)
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            if (b.isTestRide || b.testMode) {
+                                                GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
+                                            }
+                                            GolocalStatusBadge(label = b.status.uppercase(), tone = if (b.status == "completed") "success" else "info")
+                                        }
+                                        Text(
+                                            text = if (b.isTestRide || b.testMode) "₹0 (TEST)" else "₹${b.agreedFareInr.toInt()}",
+                                            fontFamily = JetBrainsMono,
+                                            color = GolocalPrimaryBlue
+                                        )
                                     }
                                     Text("${b.pickupLabel} → ${b.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                                     Text("Passenger: $passengerFirst • ${b.distanceKm} km", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

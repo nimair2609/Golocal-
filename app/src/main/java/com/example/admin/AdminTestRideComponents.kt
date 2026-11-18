@@ -16,8 +16,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.data.model.AuditLog
 import com.example.data.model.Booking
+import com.example.data.model.DriverProfile
 import com.example.data.model.PlatformSettings
+import com.example.data.model.TestRideOtpChallenge
 import com.example.data.model.TestRideOtpSecret
 import com.example.data.model.TripLocation
 import com.example.domain.SimulatedTestDriver
@@ -306,7 +309,9 @@ internal fun TestRideLiveSimulatorCard(
 internal fun AdminTestRideCard(
     booking: Booking,
     otpSecret: TestRideOtpSecret?,
+    otpChallenge: TestRideOtpChallenge?,
     settings: PlatformSettings,
+    isOwnerAdmin: Boolean,
     isFocused: Boolean,
     isSimulatingThis: Boolean,
     onFocusMap: () -> Unit,
@@ -315,6 +320,7 @@ internal fun AdminTestRideCard(
     onSimulateToPickup: () -> Unit,
     onSimulateToDrop: () -> Unit,
     onSendOtpToCustomer: () -> Unit,
+    onRequestOtpOverride: () -> Unit,
     onOverrideOtp: () -> Unit,
     onResetRide: () -> Unit,
     onCancelRide: () -> Unit
@@ -434,13 +440,16 @@ internal fun AdminTestRideCard(
                             )
                             val otpStatusLabel = when (booking.testOtpStatus) {
                                 "verified" -> "Verified by Customer"
-                                "overridden" -> "Overridden by Admin"
+                                "overridden" -> "Overridden by Owner Admin"
+                                "override_requested" -> "Override Requested by Ops (Pending Owner)"
                                 "reset" -> "Reset"
                                 else -> if (remainingSec > 0) "Expires in ${remainingSec}s" else "Expired (regenerate via Assign/Reset)"
                             }
                             Text(otpStatusLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (booking.status in setOf("assigned", "arriving", "arrived") && booking.testOtpStatus == "pending") {
+                        if (booking.status in setOf("assigned", "arriving", "arrived") &&
+                            booking.testOtpStatus in setOf("pending", "override_requested")
+                        ) {
                             OutlinedButton(
                                 onClick = onSendOtpToCustomer,
                                 modifier = Modifier.heightIn(min = 48.dp).testTag("send_test_otp_${booking.id}")
@@ -449,6 +458,21 @@ internal fun AdminTestRideCard(
                             }
                         }
                     }
+                }
+            }
+
+            if (otpChallenge != null && otpChallenge.overrideRequestedReason.isNotBlank() && booking.testOtpStatus == "override_requested") {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = GolocalLightBlue.copy(alpha = 0.6f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Ops Override Request: ${otpChallenge.overrideRequestedReason}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GolocalDeepNavy,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
                 }
             }
 
@@ -494,11 +518,18 @@ internal fun AdminTestRideCard(
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) { Text("Sim") }
                 } else if (booking.status == "arrived" && settings.testAllowAdminOtpOverride) {
-                    Button(
-                        onClick = onOverrideOtp,
-                        colors = ButtonDefaults.buttonColors(containerColor = GolocalWarning, contentColor = GolocalDeepNavy),
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("override_otp_${booking.id}")
-                    ) { Text("Override OTP & Start") }
+                    if (isOwnerAdmin) {
+                        Button(
+                            onClick = onOverrideOtp,
+                            colors = ButtonDefaults.buttonColors(containerColor = GolocalWarning, contentColor = GolocalDeepNavy),
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("override_otp_${booking.id}")
+                        ) { Text("Authorize & Override OTP") }
+                    } else {
+                        OutlinedButton(
+                            onClick = onRequestOtpOverride,
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("request_override_otp_${booking.id}")
+                        ) { Text("Request OTP Override") }
+                    }
                 } else if (booking.status == "in_progress") {
                     OutlinedButton(
                         onClick = onSimulateToDrop,
@@ -541,31 +572,72 @@ internal fun AdminTestRideCard(
 @Composable
 internal fun AssignTestDriverDialog(
     booking: Booking,
+    verifiedPartners: List<DriverProfile>,
     onDismiss: () -> Unit,
-    onSelect: (SimulatedTestDriver) -> Unit
+    onSelectPartner: (DriverProfile) -> Unit,
+    onSelectSimulated: (SimulatedTestDriver) -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Assign Simulated Test Driver") },
+        title = { Text("Assign Authorized Test Driver") },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 360.dp)
+                    .heightIn(max = 400.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = "Ride #${booking.id.take(8)} (${booking.vehicleCategory.uppercase()}) — select simulated unit:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Verified Test Partners (${verifiedPartners.size})",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = GolocalDeepNavy
+                )
+                if (verifiedPartners.isEmpty()) {
+                    Text(
+                        text = "No verified drivers marked as Test Partner in Riders module. Authorize a rider there or pick a simulated unit below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    verifiedPartners.forEach { partner ->
+                        Surface(
+                            onClick = { onSelectPartner(partner) },
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (partner.vehicleCategory == booking.vehicleCategory) GolocalSuccessContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                                .testTag("select_test_partner_${partner.driverId}")
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(partner.legalName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    GolocalStatusBadge(label = "REAL TEST PARTNER", tone = "success")
+                                }
+                                Text("${partner.vehicleCategory.uppercase()} • ${partner.vehicleModel} • ${partner.vehicleRegNumber}", style = MaterialTheme.typography.bodySmall, color = GolocalPrimaryBlue)
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Text(
+                    text = "Simulated Test Units — Ride #${booking.id.take(8)} (${booking.vehicleCategory.uppercase()})",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = GolocalDeepNavy
                 )
                 TestDriverCatalog.presetDrivers.forEach { driver ->
                     Surface(
-                        onClick = { onSelect(driver) },
+                        onClick = { onSelectSimulated(driver) },
                         shape = RoundedCornerShape(14.dp),
                         color = if (driver.vehicleCategory == booking.vehicleCategory) GolocalLightBlue else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                            .testTag("select_sim_driver_${driver.id}")
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(driver.displayName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -578,4 +650,38 @@ internal fun AssignTestDriverDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
+}
+
+@Composable
+internal fun TestRideAuditLogItem(log: AuditLog) {
+    val timeLabel = remember(log.id, log.createdAt) {
+        val ms = log.createdAt?.toDate()?.time
+        if (ms == null) "Just now"
+        else SimpleDateFormat("dd MMM, hh:mm a", Locale.US).format(Date(ms))
+    }
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(log.action, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = GolocalPrimaryBlue)
+                Text(timeLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(log.summary, style = MaterialTheme.typography.bodySmall)
+            Text(
+                text = "Actor: ${log.actorEmail.ifBlank { log.actorId.take(10) }} • Target: ${log.targetId.take(10)}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = JetBrainsMono,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }

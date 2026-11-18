@@ -34,18 +34,34 @@ fun AdminTestRideModule(
 ) {
     val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
     val testBookings by adminViewModel.testBookings.collectAsStateWithLifecycle()
+    val verifiedTestPartners by adminViewModel.verifiedTestPartners.collectAsStateWithLifecycle()
     val testTripLocations by adminViewModel.testTripLocations.collectAsStateWithLifecycle()
     val testOtpSecrets by adminViewModel.testOtpSecrets.collectAsStateWithLifecycle()
+    val testOtpChallenges by adminViewModel.testOtpChallenges.collectAsStateWithLifecycle()
+    val testAuditLogs by adminViewModel.testAuditLogs.collectAsStateWithLifecycle()
     val simulatingBookingId by adminViewModel.simulatingBookingId.collectAsStateWithLifecycle()
     val simulationPhase by adminViewModel.simulationPhase.collectAsStateWithLifecycle()
 
     var showSettings by remember { mutableStateOf(false) }
+    var showAuditHistory by remember { mutableStateOf(true) }
     var selectedFilter by remember { mutableStateOf("All Test") }
     var focusedBookingId by remember { mutableStateOf<String?>(null) }
     var assignTarget by remember { mutableStateOf<Booking?>(null) }
     var overrideTarget by remember { mutableStateOf<Booking?>(null) }
+    var requestOverrideTarget by remember { mutableStateOf<Booking?>(null) }
     var cancelTarget by remember { mutableStateOf<Booking?>(null) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(
+        platformSettings.testRideModeEnabled,
+        platformSettings.testAutoAssignEnabled,
+        testBookings.size,
+        verifiedTestPartners.size
+    ) {
+        if (platformSettings.testRideModeEnabled && platformSettings.testAutoAssignEnabled) {
+            adminViewModel.tryAutoAssignPendingTestRides(actorRoleLabel)
+        }
+    }
 
     val filters = listOf("All Test", "Pending", "Assigned", "Ongoing", "Completed", "Cancelled")
     val filteredBookings = remember(testBookings, selectedFilter) {
@@ -208,7 +224,9 @@ fun AdminTestRideModule(
                 AdminTestRideCard(
                     booking = booking,
                     otpSecret = testOtpSecrets[booking.id],
+                    otpChallenge = testOtpChallenges[booking.id],
                     settings = platformSettings,
+                    isOwnerAdmin = isOwnerAdmin,
                     isFocused = focusedBooking?.id == booking.id,
                     isSimulatingThis = simulatingBookingId == booking.id,
                     onFocusMap = { focusedBookingId = booking.id },
@@ -223,10 +241,51 @@ fun AdminTestRideModule(
                         adminViewModel.startMovementSimulation(booking, "to_drop", actorRoleLabel)
                     },
                     onSendOtpToCustomer = { adminViewModel.sendTestOtpToCustomer(booking, actorRoleLabel) },
+                    onRequestOtpOverride = { requestOverrideTarget = booking },
                     onOverrideOtp = { overrideTarget = booking },
                     onResetRide = { adminViewModel.resetTestRide(booking, actorRoleLabel) },
                     onCancelRide = { cancelTarget = booking }
                 )
+            }
+        }
+
+        // Test Ride Audit History Section
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Test Ride Audit History (${testAuditLogs.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(
+                    onClick = { showAuditHistory = !showAuditHistory },
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("toggle_test_audit_history")
+                ) {
+                    Text(if (showAuditHistory) "Hide" else "Show")
+                    Icon(
+                        imageVector = if (showAuditHistory) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null
+                    )
+                }
+            }
+        }
+
+        if (showAuditHistory) {
+            if (testAuditLogs.isEmpty()) {
+                item {
+                    GolocalEmptyState(
+                        title = "No Test Audit Events Yet",
+                        message = "Assignments, OTP verifications, override requests, and completions are recorded here."
+                    )
+                }
+            } else {
+                items(testAuditLogs.take(25), key = { it.id }) { log ->
+                    TestRideAuditLogItem(log = log)
+                }
             }
         }
     }
@@ -234,8 +293,14 @@ fun AdminTestRideModule(
     assignTarget?.let { target ->
         AssignTestDriverDialog(
             booking = target,
+            verifiedPartners = verifiedTestPartners,
             onDismiss = { assignTarget = null },
-            onSelect = { driver ->
+            onSelectPartner = { partner ->
+                focusedBookingId = target.id
+                adminViewModel.assignTestPartner(target, partner, notifyCustomer = true, actorRole = actorRoleLabel)
+                assignTarget = null
+            },
+            onSelectSimulated = { driver ->
                 focusedBookingId = target.id
                 adminViewModel.assignTestDriver(target, driver, notifyCustomer = true, actorRole = actorRoleLabel)
                 assignTarget = null
@@ -244,13 +309,21 @@ fun AdminTestRideModule(
     }
 
     overrideTarget?.let { target ->
-        var reason by remember { mutableStateOf("") }
+        val pendingReqReason = testOtpChallenges[target.id]?.overrideRequestedReason.orEmpty()
+        var reason by remember(target.id, pendingReqReason) { mutableStateOf(pendingReqReason) }
         AlertDialog(
             onDismissRequest = { overrideTarget = null },
-            title = { Text("Authorize OTP Override") },
+            title = { Text("Authorize & Execute OTP Override") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Bypass customer pickup OTP and start TEST RIDE #${target.id.take(8)}. This action is logged in audit_logs.")
+                    Text("Owner Admin authorization: bypass pickup OTP and start TEST RIDE #${target.id.take(8)}. Logged in audit_logs.")
+                    if (pendingReqReason.isNotBlank()) {
+                        Text(
+                            text = "Ops Staff Request: $pendingReqReason",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = GolocalPrimaryBlue
+                        )
+                    }
                     OutlinedTextField(
                         value = reason,
                         onValueChange = { reason = it },
@@ -270,6 +343,36 @@ fun AdminTestRideModule(
                 ) { Text("Confirm Override") }
             },
             dismissButton = { TextButton(onClick = { overrideTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    requestOverrideTarget?.let { target ->
+        var reason by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { requestOverrideTarget = null },
+            title = { Text("Request Owner OTP Override") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Operations Staff cannot bypass Test OTP directly. Submit an audited override request for TEST RIDE #${target.id.take(8)} to Owner Admin.")
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Request reason (min 4 chars)") },
+                        modifier = Modifier.fillMaxWidth().testTag("request_override_reason_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        adminViewModel.requestTestOtpOverride(target, reason, actorRoleLabel)
+                        requestOverrideTarget = null
+                    },
+                    enabled = reason.trim().length >= 4,
+                    modifier = Modifier.testTag("submit_override_request_button")
+                ) { Text("Submit Request") }
+            },
+            dismissButton = { TextButton(onClick = { requestOverrideTarget = null }) { Text("Cancel") } }
         )
     }
 

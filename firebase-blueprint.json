@@ -20,6 +20,7 @@
         "emailVerified": { "type": "boolean" },
         "mobileVerified": { "type": "boolean" },
         "hasEmergencyContact": { "type": "boolean" },
+        "isTestCustomer": { "type": "boolean", "description": "Admin-granted flag allowing authorized test bookings when test mode is enabled" },
         "accountStatus": { "type": "string", "enum": ["active", "restricted", "deletion_requested"] },
         "accountCreatedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -80,6 +81,7 @@
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
         "rejectionReason": { "type": "string" },
         "isOnline": { "type": "boolean" },
+        "isTestPartner": { "type": "boolean", "description": "Admin-granted flag authorizing driver for verified test-ride dispatch" },
         "ratingAvg": { "type": "number" },
         "completedRides": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -101,6 +103,7 @@
         "block": { "type": "string" },
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
         "isOnline": { "type": "boolean" },
+        "isTestPartner": { "type": "boolean" },
         "currentLat": { "type": "number" },
         "currentLng": { "type": "number" },
         "ratingAvg": { "type": "number" },
@@ -238,6 +241,9 @@
         "offerId": { "type": "string" },
         "lockedFareInr": { "type": "number" },
         "status": { "type": "string", "enum": ["active", "completed", "cancelled"] },
+        "is_test_ride": { "type": "boolean" },
+        "assignedByUid": { "type": "string" },
+        "assignedByRole": { "type": "string", "enum": ["customer", "admin", "ops_staff"] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -253,9 +259,29 @@
         "driverId": { "type": "string" },
         "lat": { "type": "number" },
         "lng": { "type": "number" },
+        "isTestRide": { "type": "boolean" },
+        "isSimulated": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["bookingId", "customerId", "driverId", "lat", "lng", "updatedAt"]
+    },
+    "LiveLocation": {
+      "title": "LiveLocation",
+      "description": "Live coordinate stream keyed by driverId for production and simulated test rides",
+      "type": "object",
+      "properties": {
+        "driverId": { "type": "string" },
+        "bookingId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "headingDeg": { "type": "number" },
+        "speedKmph": { "type": "number" },
+        "isTestRide": { "type": "boolean" },
+        "isSimulated": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driverId", "bookingId", "customerId", "lat", "lng", "isTestRide", "isSimulated", "updatedAt"]
     },
     "PaymentRecord": {
       "title": "PaymentRecord",
@@ -408,6 +434,7 @@
         "targetCollection": { "type": "string" },
         "targetId": { "type": "string" },
         "summary": { "type": "string" },
+        "isTestRide": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["actorId", "action", "targetCollection", "targetId", "summary", "createdAt"]
@@ -483,6 +510,10 @@
         "used": { "type": "boolean" },
         "overridden": { "type": "boolean" },
         "overrideReason": { "type": "string" },
+        "overrideRequestedByUid": { "type": "string" },
+        "overrideRequestedReason": { "type": "string" },
+        "overrideRequestedAt": { "type": "string", "format": "date-time" },
+        "overriddenByUid": { "type": "string" },
         "verifiedByUid": { "type": "string" },
         "attempts": { "type": "integer" },
         "maxAttempts": { "type": "integer" },
@@ -522,6 +553,7 @@
     "/ride_offers/{offerId}": { "schema": { "$ref": "#/entities/RideOffer" }, "description": "Driver fare proposals" },
     "/ride_assignments/{assignmentId}": { "schema": { "$ref": "#/entities/RideAssignment" }, "description": "Locked ride assignments" },
     "/trip_locations/{bookingId}": { "schema": { "$ref": "#/entities/TripLocation" }, "description": "Live ride driver coordinates" },
+    "/live_locations/{locationId}": { "schema": { "$ref": "#/entities/LiveLocation" }, "description": "Live driver telemetry stream keyed by driverId" },
     "/payments/{paymentId}": { "schema": { "$ref": "#/entities/PaymentRecord" }, "description": "Payment receipts and status" },
     "/commissions/{commissionId}": { "schema": { "$ref": "#/entities/CommissionRecord" }, "description": "Platform commission records" },
     "/driver_settlements/{settlementId}": { "schema": { "$ref": "#/entities/DriverSettlement" }, "description": "Driver payout requests" },

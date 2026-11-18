@@ -56,7 +56,8 @@ data class BookingDraftState(
     val scheduledDateTimeLabel: String = "",
     val familyMemberName: String = "",
     val familyConsentConfirmed: Boolean = false,
-    val isRoundTrip: Boolean = false
+    val isRoundTrip: Boolean = false,
+    val bookAsTestRide: Boolean = false
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -451,6 +452,10 @@ class CustomerViewModel(
         )
     }
 
+    fun setBookAsTestRide(enabled: Boolean) {
+        _draft.value = _draft.value.copy(bookAsTestRide = enabled)
+    }
+
     fun restoreDraftFromPreferences(pickupId: String, destId: String, category: String) {
         val pickup = WestBengalCatalog.places.firstOrNull { it.id == pickupId }
         val dest = WestBengalCatalog.places.firstOrNull { it.id == destId }
@@ -471,7 +476,11 @@ class CustomerViewModel(
         }
     }
 
-    fun submitBooking(bookingChannel: String = "app", invoiceEmail: String = "") {
+    fun submitBooking(
+        bookingChannel: String = "app",
+        invoiceEmail: String = "",
+        isAuthorizedTestCustomer: Boolean = false
+    ) {
         val d = _draft.value
         val cfg = fareConfigs.value.firstOrNull { it.vehicleCategory == d.selectedCategory }
         if (d.selectedCategory == "parcel" && cfg?.isEnabled != true) {
@@ -495,8 +504,18 @@ class CustomerViewModel(
             return
         }
 
+        val globalTestModeEnabled = platformSettings.value?.testRideModeEnabled == true
+        if (d.bookAsTestRide && !isAuthorizedTestCustomer) {
+            _actionMessage.value = "Only Admin-authorized test customer accounts can create Test Ride bookings."
+            return
+        }
+        if (d.bookAsTestRide && !globalTestModeEnabled) {
+            _actionMessage.value = "Test Ride Mode is currently disabled by Owner Admin."
+            return
+        }
+
         val quote = currentQuote.value
-        val isTestRideActive = platformSettings.value?.testRideModeEnabled == true
+        val isTestRideActive = globalTestModeEnabled && isAuthorizedTestCustomer && d.bookAsTestRide
         _isSubmitting.value = true
         viewModelScope.launch {
             val booking = Booking(
@@ -535,6 +554,7 @@ class CustomerViewModel(
             repository.createBooking(booking)
                 .onSuccess { id ->
                     prefsRepository.clearDraftBooking()
+                    _draft.value = _draft.value.copy(bookAsTestRide = false)
                     _actionMessage.value = if (isTestRideActive) {
                         "TEST RIDE #$id created. Waiting for Admin/Ops Test Driver assignment."
                     } else {

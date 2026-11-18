@@ -118,8 +118,7 @@ class DriverViewModel(
 
     val assignedBookings: StateFlow<List<Booking>> = repository.observeDriverAssignedBookings(currentUserId)
         .map { list ->
-            list.filter { !it.isTestRide && !it.testMode }
-                .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+            list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
         }
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
@@ -372,10 +371,11 @@ class DriverViewModel(
 
     fun advanceTripState(booking: Booking, nextStatus: String, enteredPin: String = "", lat: Double, lng: Double) {
         val profile = (driverProfileState.value as? UiState.Success)?.data
+        val isTest = booking.isTestRide || booking.testMode
         viewModelScope.launch {
             repository.advanceDriverTripState(booking, nextStatus, enteredPin, lat, lng)
                 .onSuccess {
-                    if (profile != null && communicationRepository != null && BookingChatValidator.isChatWriteAllowed(nextStatus)) {
+                    if (!isTest && profile != null && communicationRepository != null && BookingChatValidator.isChatWriteAllowed(nextStatus)) {
                         communicationRepository.publishParticipantContactForActiveTrip(
                             booking = booking.copy(status = nextStatus),
                             myPhone = profile.phone,
@@ -384,10 +384,18 @@ class DriverViewModel(
                         )
                     }
                     _message.value = when (nextStatus) {
-                        "arriving" -> "Marked as heading to pickup."
-                        "arrived" -> "Marked as arrived at pickup. Ask passenger for Trip PIN."
+                        "arriving" -> if (isTest) "TEST RIDE: Heading to pickup." else "Marked as heading to pickup."
+                        "arrived" -> if (isTest) {
+                            "TEST RIDE: Arrived at pickup. Waiting for Customer 6-digit Test OTP verification."
+                        } else {
+                            "Marked as arrived at pickup. Ask passenger for Trip PIN."
+                        }
                         "in_progress" -> "Trip started!"
-                        "completed" -> "Trip completed & fare settlement recorded."
+                        "completed" -> if (isTest) {
+                            "TEST RIDE completed with ₹0 commercial impact."
+                        } else {
+                            "Trip completed & fare settlement recorded."
+                        }
                         else -> "Status updated."
                     }
                 }

@@ -1353,6 +1353,7 @@ class GolocalRepository(
                     )
                 }
                 if (hasAssignedTrip && activeBooking != null) {
+                    val isTest = activeBooking.isTestRide || activeBooking.testMode
                     val locRef = db.collection("trip_locations").document(activeBooking.id)
                     batch.set(
                         locRef,
@@ -1362,6 +1363,22 @@ class GolocalRepository(
                             "driverId" to uid,
                             "lat" to lat,
                             "lng" to lng,
+                            "isTestRide" to isTest,
+                            "isSimulated" to false,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    val liveRef = db.collection("live_locations").document(uid)
+                    batch.set(
+                        liveRef,
+                        mapOf(
+                            "driverId" to uid,
+                            "bookingId" to activeBooking.id,
+                            "customerId" to activeBooking.customerId,
+                            "lat" to lat,
+                            "lng" to lng,
+                            "isTestRide" to isTest,
+                            "isSimulated" to false,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     )
@@ -1439,16 +1456,21 @@ class GolocalRepository(
         driverLng: Double
     ): Result<Unit> = runCatching {
         val uid = requireUserId()
+        val isTest = booking.isTestRide || booking.testMode
         require(FareCalculator.isValidTransition(booking.status, nextStatus)) {
             "Invalid state transition from ${booking.status} to $nextStatus"
         }
-        if (nextStatus == "in_progress") {
+        if (isTest && nextStatus == "in_progress") {
+            throw IllegalStateException("Test rides must be started by 6-digit Customer Test OTP or Owner Admin override.")
+        }
+        if (!isTest && nextStatus == "in_progress") {
             require(enteredPin.trim() == booking.tripPin) {
                 "Invalid Trip PIN. Please verify the 4-digit PIN with the passenger."
             }
         }
         val bookingRef = db.collection("bookings").document(booking.id)
         val locRef = db.collection("trip_locations").document(booking.id)
+        val liveRef = db.collection("live_locations").document(uid)
 
         try {
             if (nextStatus != "completed") {
@@ -1465,12 +1487,69 @@ class GolocalRepository(
                             "driverId" to uid,
                             "lat" to driverLat,
                             "lng" to driverLng,
+                            "isTestRide" to isTest,
+                            "isSimulated" to false,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    batch.set(
+                        liveRef,
+                        mapOf(
+                            "driverId" to uid,
+                            "bookingId" to booking.id,
+                            "customerId" to booking.customerId,
+                            "lat" to driverLat,
+                            "lng" to driverLng,
+                            "isTestRide" to isTest,
+                            "isSimulated" to false,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                     )
                 }.await()
+            } else if (isTest) {
+                // Non-commercial completion for assigned Test Rides: ZERO payments or commissions created
+                val assignmentRef = db.collection("ride_assignments").document(booking.id)
+                val actorEmail = auth.currentUser?.email ?: ""
+                val auditRef = db.collection("audit_logs").document()
+                db.runTransaction { tx ->
+                    val snap = tx.get(bookingRef)
+                    val curStatus = snap.getString("status") ?: ""
+                    if (curStatus != "in_progress") {
+                        throw IllegalStateException("Test ride is not in progress or was already completed.")
+                    }
+                    val hasAssignment = tx.get(assignmentRef).exists()
+                    tx.update(
+                        bookingRef,
+                        mapOf(
+                            "status" to "completed",
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    if (hasAssignment) {
+                        tx.update(
+                            assignmentRef,
+                            mapOf(
+                                "status" to "completed",
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                    }
+                    tx.set(
+                        auditRef,
+                        mapOf(
+                            "actorId" to uid,
+                            "actorEmail" to actorEmail,
+                            "action" to "TEST_RIDE_COMPLETED_BY_PARTNER",
+                            "targetCollection" to "bookings",
+                            "targetId" to booking.id,
+                            "summary" to "Test partner completed TEST RIDE ${booking.id} (zero financial impact)",
+                            "isTestRide" to true,
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }.await()
             } else {
-                // Idempotent completion + payment + commission ledger transaction
+                // Idempotent completion + payment + commission ledger transaction (production rides only)
                 val paymentRef = db.collection("payments").document(booking.id)
                 val commissionRef = db.collection("commissions").document(booking.id)
                 val assignmentRef = db.collection("ride_assignments").document(booking.id)
@@ -2149,6 +2228,71 @@ class GolocalRepository(
         }
     }
 
+    suspend fun adminSetUserTestCustomer(targetUid: String, enabled: Boolean): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val ref = db.collection("users").document(targetUid)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            db.runBatch { batch ->
+                batch.update(ref, mapOf("isTestCustomer" to enabled, "updatedAt" to FieldValue.serverTimestamp()))
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to if (enabled) "ENABLE_TEST_CUSTOMER" else "DISABLE_TEST_CUSTOMER",
+                        "targetCollection" to "users",
+                        "targetId" to targetUid,
+                        "summary" to "Set isTestCustomer=$enabled for user $targetUid",
+                        "isTestRide" to true,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, ref.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun adminSetDriverTestPartner(driverId: String, enabled: Boolean): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val privRef = db.collection("driver_profiles").document(driverId)
+        val dirRef = db.collection("driver_directory").document(driverId)
+        val auditRef = db.collection("audit_logs").document()
+        try {
+            val dirExists = dirRef.get().await().exists()
+            db.runBatch { batch ->
+                batch.update(privRef, mapOf("isTestPartner" to enabled, "updatedAt" to FieldValue.serverTimestamp()))
+                if (dirExists) {
+                    batch.update(dirRef, mapOf("isTestPartner" to enabled, "updatedAt" to FieldValue.serverTimestamp()))
+                }
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to if (enabled) "ENABLE_TEST_PARTNER" else "DISABLE_TEST_PARTNER",
+                        "targetCollection" to "driver_profiles",
+                        "targetId" to driverId,
+                        "summary" to "Set isTestPartner=$enabled for partner $driverId",
+                        "isTestRide" to true,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, privRef.path, auth)
+            throw e
+        }
+    }
+
     suspend fun adminSendNotification(targetUid: String, title: String, body: String, type: String = "system"): Result<Unit> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
@@ -2446,28 +2590,88 @@ class GolocalRepository(
             it.toObject(TestRideOtpSecret::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
         }
 
+    fun observeTestRideOtpChallenges(): Flow<List<TestRideOtpChallenge>> =
+        safeQueryFlow("test_ride_otps", db.collection("test_ride_otps")) {
+            it.toObject(TestRideOtpChallenge::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
+    fun observeTestAuditLogs(): Flow<List<AuditLog>> =
+        safeQueryFlow("audit_logs", db.collection("audit_logs").whereEqualTo("isTestRide", true)) {
+            it.toObject(AuditLog::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        }
+
     suspend fun assignTestDriverToBooking(
         booking: Booking,
         testDriver: SimulatedTestDriver,
         otpValiditySeconds: Long,
         notifyCustomer: Boolean = true,
         actorRole: String = "admin"
+    ): Result<String> = assignTestPartnerOrUnitToBooking(
+        booking = booking,
+        driverId = testDriver.id,
+        driverName = testDriver.displayName,
+        vehicleLabel = testDriver.vehicleLabel,
+        isSimulated = testDriver.id.startsWith("test_driver_"),
+        otpValiditySeconds = otpValiditySeconds,
+        notifyCustomer = notifyCustomer,
+        actorRole = actorRole
+    )
+
+    suspend fun assignTestPartnerToBooking(
+        booking: Booking,
+        partner: DriverProfile,
+        otpValiditySeconds: Long,
+        notifyCustomer: Boolean = true,
+        actorRole: String = "admin"
+    ): Result<String> {
+        require(partner.verificationStatus == "verified" && partner.isTestPartner) {
+            "Selected driver must be KYC verified and authorized as a Test Partner."
+        }
+        val vehicleLabel = listOf(partner.vehicleModel, partner.vehicleRegNumber)
+            .filter { it.isNotBlank() }
+            .joinToString(" • ")
+            .ifBlank { partner.vehicleCategory.uppercase() }
+        return assignTestPartnerOrUnitToBooking(
+            booking = booking,
+            driverId = partner.driverId,
+            driverName = partner.legalName,
+            vehicleLabel = vehicleLabel,
+            isSimulated = false,
+            otpValiditySeconds = otpValiditySeconds,
+            notifyCustomer = notifyCustomer,
+            actorRole = actorRole
+        )
+    }
+
+    private suspend fun assignTestPartnerOrUnitToBooking(
+        booking: Booking,
+        driverId: String,
+        driverName: String,
+        vehicleLabel: String,
+        isSimulated: Boolean,
+        otpValiditySeconds: Long,
+        notifyCustomer: Boolean,
+        actorRole: String
     ): Result<String> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
         require(booking.isTestRide || booking.testMode) {
-            "Only TEST RIDE bookings can be assigned a simulated test driver."
+            "Only TEST RIDE bookings can be assigned a test partner or simulated unit."
         }
         val otpPlaintext = TestRideOtpUtil.generateSixDigitOtp()
         val otpHash = TestRideOtpUtil.sha256Hex(booking.id, otpPlaintext)
         val expiresAtMs = TestRideOtpUtil.computeExpiresAtMs(System.currentTimeMillis(), otpValiditySeconds)
         val expiresAtTs = Timestamp(Date(expiresAtMs))
         val initialPt = TestRideRouteSimulator.initialApproachPoint(booking.pickupLat, booking.pickupLng)
+        val lockedFare = booking.estimatedFareInr.coerceAtLeast(1.0)
+        val cleanRole = if (actorRole == "ops_staff") "ops_staff" else "admin"
 
         val bookingRef = db.collection("bookings").document(booking.id)
+        val assignmentRef = db.collection("ride_assignments").document(booking.id)
         val otpChallengeRef = db.collection("test_ride_otps").document(booking.id)
         val otpSecretRef = db.collection("test_ride_otp_secrets").document(booking.id)
         val locationRef = db.collection("trip_locations").document(booking.id)
+        val liveLocationRef = db.collection("live_locations").document(driverId)
         val auditRef = db.collection("audit_logs").document()
 
         try {
@@ -2476,12 +2680,28 @@ class GolocalRepository(
                     bookingRef,
                     mapOf(
                         "status" to "assigned",
-                        "assignedDriverId" to testDriver.id,
-                        "assignedDriverName" to testDriver.displayName,
-                        "assignedVehicleLabel" to testDriver.vehicleLabel,
-                        "agreedFareInr" to booking.estimatedFareInr.coerceAtLeast(1.0),
+                        "assignedDriverId" to driverId,
+                        "assignedDriverName" to driverName,
+                        "assignedVehicleLabel" to vehicleLabel,
+                        "agreedFareInr" to lockedFare,
                         "test_otp_status" to "pending",
                         "test_otp_expires_at_ms" to expiresAtMs,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    assignmentRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "driverId" to driverId,
+                        "offerId" to "test_dispatch_${booking.id}",
+                        "lockedFareInr" to lockedFare,
+                        "status" to "active",
+                        "is_test_ride" to true,
+                        "assignedByUid" to actorUid,
+                        "assignedByRole" to cleanRole,
+                        "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2495,6 +2715,9 @@ class GolocalRepository(
                         "used" to false,
                         "overridden" to false,
                         "overrideReason" to "",
+                        "overrideRequestedByUid" to "",
+                        "overrideRequestedReason" to "",
+                        "overriddenByUid" to "",
                         "verifiedByUid" to "",
                         "attempts" to 0L,
                         "maxAttempts" to 5L,
@@ -2511,7 +2734,7 @@ class GolocalRepository(
                         "otpPlaintext" to otpPlaintext,
                         "status" to "pending",
                         "issuedByUid" to actorUid,
-                        "issuedByRole" to actorRole,
+                        "issuedByRole" to cleanRole,
                         "expiresAt" to expiresAtTs,
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
@@ -2522,9 +2745,24 @@ class GolocalRepository(
                     mapOf(
                         "bookingId" to booking.id,
                         "customerId" to booking.customerId,
-                        "driverId" to testDriver.id,
+                        "driverId" to driverId,
                         "lat" to initialPt.lat,
                         "lng" to initialPt.lng,
+                        "isTestRide" to true,
+                        "isSimulated" to isSimulated,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    liveLocationRef,
+                    mapOf(
+                        "driverId" to driverId,
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "lat" to initialPt.lat,
+                        "lng" to initialPt.lng,
+                        "isTestRide" to true,
+                        "isSimulated" to isSimulated,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2535,7 +2773,7 @@ class GolocalRepository(
                         mapOf(
                             "userId" to booking.customerId,
                             "title" to "TEST RIDE Assigned • Test OTP Ready",
-                            "body" to "TEST DRIVER ${testDriver.displayName} assigned. TEST OTP: $otpPlaintext (enter at pickup).",
+                            "body" to "TEST DRIVER $driverName assigned. TEST OTP: $otpPlaintext (enter at pickup).",
                             "type" to "test_otp",
                             "read" to false,
                             "createdAt" to FieldValue.serverTimestamp()
@@ -2550,7 +2788,8 @@ class GolocalRepository(
                         "action" to "TEST_RIDE_ASSIGN_DRIVER",
                         "targetCollection" to "bookings",
                         "targetId" to booking.id,
-                        "summary" to "[$actorRole] Assigned ${testDriver.displayName} to TEST RIDE ${booking.id}",
+                        "summary" to "[$cleanRole] Assigned $driverName (${if (isSimulated) "Simulated" else "Verified Test Partner"}) to TEST RIDE ${booking.id}",
+                        "isTestRide" to true,
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2572,29 +2811,45 @@ class GolocalRepository(
     ): Result<Unit> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
+        val cleanRole = if (actorRole == "ops_staff") "ops_staff" else "admin"
         require(booking.isTestRide || booking.testMode) { "Only TEST RIDE bookings can use test controls." }
         require(TestRideStateMachine.isValidTransition(booking.status, nextStatus)) {
             "Invalid test ride transition from ${booking.status} to $nextStatus."
         }
         val bookingRef = db.collection("bookings").document(booking.id)
+        val assignmentRef = db.collection("ride_assignments").document(booking.id)
         val auditRef = db.collection("audit_logs").document()
         try {
+            val assignmentExists = if (nextStatus in setOf("completed", "cancelled")) {
+                assignmentRef.get().await().exists()
+            } else {
+                false
+            }
             db.runBatch { batch ->
                 val updates = buildMap<String, Any> {
                     put("status", nextStatus)
                     if (nextStatus == "cancelled") {
                         put("cancellationReason", reason.ifBlank { "Cancelled from Admin Test Ride Control" }.take(250))
                         put("cancelledBy", actorUid)
-                        put("cancelledByRole", "admin")
+                        put("cancelledByRole", cleanRole)
                     }
                     put("updatedAt", FieldValue.serverTimestamp())
                 }
                 batch.update(bookingRef, updates)
+                if (assignmentExists && nextStatus in setOf("completed", "cancelled")) {
+                    batch.update(
+                        assignmentRef,
+                        mapOf(
+                            "status" to nextStatus,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
                 if (nextStatus in setOf("arriving", "arrived", "completed", "cancelled")) {
                     val notifRef = db.collection("notifications").document()
                     val (title, body) = when (nextStatus) {
-                        "arriving" -> "TEST DRIVER En Route" to "Simulated test driver is heading to ${booking.pickupLabel}."
-                        "arrived" -> "TEST DRIVER Arrived" to "Simulated test driver arrived at pickup. Verify Test OTP to start ride."
+                        "arriving" -> "TEST DRIVER En Route" to "Test driver is heading to ${booking.pickupLabel}."
+                        "arrived" -> "TEST DRIVER Arrived" to "Test driver arrived at pickup. Verify Test OTP to start ride."
                         "completed" -> "TEST RIDE Completed" to "Test ride ended (${booking.pickupLabel} -> ${booking.destinationLabel}). No production charge recorded."
                         else -> "TEST RIDE Cancelled" to reason.ifBlank { "Test ride cancelled by Admin/Ops." }.take(250)
                     }
@@ -2618,7 +2873,8 @@ class GolocalRepository(
                         "action" to "TEST_RIDE_STATUS_${nextStatus.uppercase()}",
                         "targetCollection" to "bookings",
                         "targetId" to booking.id,
-                        "summary" to "[$actorRole] Changed TEST RIDE ${booking.id} from ${booking.status} to $nextStatus",
+                        "summary" to "[$cleanRole] Changed TEST RIDE ${booking.id} from ${booking.status} to $nextStatus",
+                        "isTestRide" to true,
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2638,18 +2894,39 @@ class GolocalRepository(
     ): Result<Unit> = runCatching {
         requireUserId()
         require(booking.isTestRide || booking.testMode) { "Not a test ride." }
+        val resolvedDriverId = booking.assignedDriverId.ifBlank { "test_driver_toto_01" }
+        val isSimulated = resolvedDriverId.startsWith("test_driver_")
         val locRef = db.collection("trip_locations").document(booking.id)
+        val liveRef = db.collection("live_locations").document(resolvedDriverId)
         try {
-            locRef.set(
-                mapOf(
-                    "bookingId" to booking.id,
-                    "customerId" to booking.customerId,
-                    "driverId" to booking.assignedDriverId.ifBlank { "test_driver_toto_01" },
-                    "lat" to lat,
-                    "lng" to lng,
-                    "updatedAt" to FieldValue.serverTimestamp()
+            db.runBatch { batch ->
+                batch.set(
+                    locRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "driverId" to resolvedDriverId,
+                        "lat" to lat,
+                        "lng" to lng,
+                        "isTestRide" to true,
+                        "isSimulated" to isSimulated,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
                 )
-            ).await()
+                batch.set(
+                    liveRef,
+                    mapOf(
+                        "driverId" to resolvedDriverId,
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "lat" to lat,
+                        "lng" to lng,
+                        "isTestRide" to true,
+                        "isSimulated" to isSimulated,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -2665,6 +2942,7 @@ class GolocalRepository(
     ): Result<Unit> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
+        val cleanRole = if (actorRole == "ops_staff") "ops_staff" else "admin"
         require(TestRideOtpUtil.isValidOtpFormat(otpPlaintext)) { "Valid 6-digit test OTP required." }
         val notifRef = db.collection("notifications").document()
         val auditRef = db.collection("audit_logs").document()
@@ -2689,7 +2967,8 @@ class GolocalRepository(
                         "action" to "TEST_OTP_SENT",
                         "targetCollection" to "notifications",
                         "targetId" to booking.id,
-                        "summary" to "[$actorRole] Dispatched TEST OTP notification for TEST RIDE ${booking.id}",
+                        "summary" to "[$cleanRole] Dispatched TEST OTP notification for TEST RIDE ${booking.id}",
+                        "isTestRide" to true,
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2755,13 +3034,69 @@ class GolocalRepository(
                 val message = if (booking.testOtpExpiresAtMs > 0L &&
                     TestRideOtpUtil.isExpired(booking.testOtpExpiresAtMs)
                 ) {
-                    "Test OTP expired. Ask Admin/Ops to regenerate or override."
+                    "Test OTP expired. Ask Admin/Ops to regenerate or request override."
                 } else {
                     "Incorrect Test OTP or attempt limit reached."
                 }
                 throw IllegalArgumentException(message)
             }
             handleFirestoreError(e, OperationType.WRITE, otpRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun requestTestOtpOverride(
+        booking: Booking,
+        reason: String,
+        actorRole: String = "ops_staff"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanReason = reason.trim()
+        require(booking.isTestRide || booking.testMode) { "Only TEST RIDE bookings support OTP override requests." }
+        require(booking.status == "arrived") { "Ride must be in 'arrived' state to request OTP override." }
+        require(cleanReason.length >= 4) { "Provide an audit reason (at least 4 characters)." }
+
+        val otpRef = db.collection("test_ride_otps").document(booking.id)
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    otpRef,
+                    mapOf(
+                        "overrideRequestedByUid" to actorUid,
+                        "overrideRequestedReason" to cleanReason.take(250),
+                        "overrideRequestedAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "test_otp_status" to "override_requested",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "TEST_OTP_OVERRIDE_REQUESTED",
+                        "targetCollection" to "test_ride_otps",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Requested Owner OTP override for ${booking.id}: $cleanReason",
+                        "isTestRide" to true,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, otpRef.path, auth)
             throw e
         }
     }
@@ -2791,6 +3126,7 @@ class GolocalRepository(
                         "used" to true,
                         "overridden" to true,
                         "overrideReason" to cleanReason.take(250),
+                        "overriddenByUid" to actorUid,
                         "verifiedByUid" to actorUid,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
@@ -2819,6 +3155,7 @@ class GolocalRepository(
                         "targetCollection" to "test_ride_otps",
                         "targetId" to booking.id,
                         "summary" to "[$actorRole] Overrode Test OTP for ${booking.id}: $cleanReason",
+                        "isTestRide" to true,
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2837,11 +3174,16 @@ class GolocalRepository(
     ): Result<Unit> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
+        val cleanRole = if (actorRole == "ops_staff") "ops_staff" else "admin"
         require(booking.isTestRide || booking.testMode) { "Only TEST RIDE bookings can be reset." }
         val bookingRef = db.collection("bookings").document(booking.id)
+        val assignmentRef = db.collection("ride_assignments").document(booking.id)
         val otpRef = db.collection("test_ride_otps").document(booking.id)
         val secretRef = db.collection("test_ride_otp_secrets").document(booking.id)
         val locRef = db.collection("trip_locations").document(booking.id)
+        val liveRef = if (booking.assignedDriverId.isNotBlank()) {
+            db.collection("live_locations").document(booking.assignedDriverId)
+        } else null
         val auditRef = db.collection("audit_logs").document()
 
         try {
@@ -2859,9 +3201,13 @@ class GolocalRepository(
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
+                batch.delete(assignmentRef)
                 batch.delete(otpRef)
                 batch.delete(secretRef)
                 batch.delete(locRef)
+                if (liveRef != null) {
+                    batch.delete(liveRef)
+                }
                 batch.set(
                     auditRef,
                     mapOf(
@@ -2870,7 +3216,8 @@ class GolocalRepository(
                         "action" to "TEST_RIDE_RESET",
                         "targetCollection" to "bookings",
                         "targetId" to booking.id,
-                        "summary" to "[$actorRole] Reset TEST RIDE ${booking.id} back to Pending",
+                        "summary" to "[$cleanRole] Reset TEST RIDE ${booking.id} back to Pending",
+                        "isTestRide" to true,
                         "createdAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -2886,6 +3233,7 @@ class GolocalRepository(
     suspend fun clearCompletedTestRideRecords(actorRole: String = "admin"): Result<Int> = runCatching {
         val actorUid = requireUserId()
         val actorEmail = auth.currentUser?.email ?: ""
+        val cleanRole = if (actorRole == "ops_staff") "ops_staff" else "admin"
         val snap = db.collection("bookings")
             .whereEqualTo("is_test_ride", true)
             .get()
@@ -2896,14 +3244,19 @@ class GolocalRepository(
         }
         if (targets.isEmpty()) return@runCatching 0
 
-        targets.chunked(40).forEach { chunk ->
+        targets.chunked(30).forEach { chunk ->
             db.runBatch { batch ->
                 chunk.forEach { doc ->
                     val id = doc.id
+                    val driverId = doc.getString("assignedDriverId").orEmpty()
                     batch.delete(db.collection("bookings").document(id))
+                    batch.delete(db.collection("ride_assignments").document(id))
                     batch.delete(db.collection("test_ride_otps").document(id))
                     batch.delete(db.collection("test_ride_otp_secrets").document(id))
                     batch.delete(db.collection("trip_locations").document(id))
+                    if (driverId.isNotBlank()) {
+                        batch.delete(db.collection("live_locations").document(driverId))
+                    }
                 }
             }.await()
         }
@@ -2916,7 +3269,8 @@ class GolocalRepository(
                 "action" to "CLEAR_TEST_RIDE_RECORDS",
                 "targetCollection" to "bookings",
                 "targetId" to "test_cleanup",
-                "summary" to "[$actorRole] Cleared ${targets.size} completed/cancelled TEST RIDE records",
+                "summary" to "[$cleanRole] Cleared ${targets.size} completed/cancelled TEST RIDE records",
+                "isTestRide" to true,
                 "createdAt" to FieldValue.serverTimestamp()
             )
         ).await()

@@ -181,21 +181,48 @@ fun AdminCustomersModule(adminViewModel: AdminViewModel) {
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                GolocalStatusBadge(
-                                    label = u.accountStatus.uppercase(),
-                                    tone = if (u.accountStatus == "active") "success" else "error"
-                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    if (u.isTestCustomer) {
+                                        GolocalStatusBadge(label = "TEST CUSTOMER", tone = "warning")
+                                    }
+                                    GolocalStatusBadge(
+                                        label = u.accountStatus.uppercase(),
+                                        tone = if (u.accountStatus == "active") "success" else "error"
+                                    )
+                                }
                             }
                             Text("UID: ${u.userId} • Lang: ${u.preferredLanguage.uppercase()}", style = MaterialTheme.typography.labelSmall, fontFamily = JetBrainsMono, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 if (u.accountStatus == "active") {
-                                    OutlinedButton(onClick = { adminViewModel.setUserAccountStatus(u.userId, "restricted") }) {
-                                        Text("Restrict Account", color = GolocalError)
+                                    OutlinedButton(
+                                        onClick = { adminViewModel.setUserAccountStatus(u.userId, "restricted") },
+                                        modifier = Modifier.heightIn(min = 48.dp)
+                                    ) {
+                                        Text("Restrict", color = GolocalError)
                                     }
                                 } else {
-                                    Button(onClick = { adminViewModel.setUserAccountStatus(u.userId, "active") }) {
-                                        Text("Activate Account")
+                                    Button(
+                                        onClick = { adminViewModel.setUserAccountStatus(u.userId, "active") },
+                                        modifier = Modifier.heightIn(min = 48.dp)
+                                    ) {
+                                        Text("Activate")
                                     }
+                                }
+                                OutlinedButton(
+                                    onClick = { adminViewModel.setUserTestCustomer(u.userId, !u.isTestCustomer) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .testTag("toggle_test_customer_${u.userId}")
+                                ) {
+                                    Text(
+                                        text = if (u.isTestCustomer) "Revoke Test Customer" else "Authorize Test Customer",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                             }
                         }
@@ -277,15 +304,20 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(d.legalName, style = MaterialTheme.typography.titleMedium)
-                            GolocalStatusBadge(
-                                label = d.verificationStatus.uppercase(),
-                                tone = when (d.verificationStatus) {
-                                    "verified" -> "success"
-                                    "pending" -> "warning"
-                                    else -> "error"
+                            Text(d.legalName, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (d.isTestPartner) {
+                                    GolocalStatusBadge(label = "TEST PARTNER", tone = "warning")
                                 }
-                            )
+                                GolocalStatusBadge(
+                                    label = d.verificationStatus.uppercase(),
+                                    tone = when (d.verificationStatus) {
+                                        "verified" -> "success"
+                                        "pending" -> "warning"
+                                        else -> "error"
+                                    }
+                                )
+                            }
                         }
                         Text("${d.vehicleCategory.uppercase()} • ${d.vehicleModel} • Reg: ${d.vehicleRegNumber}", style = MaterialTheme.typography.bodyMedium)
                         Text("Phone: ${d.phone} • District: ${d.district} ${d.block} • KYC v${d.verificationVersion}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -304,7 +336,7 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
                                 onClick = { inspectingDriver = d },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                             ) {
                                 Text("Inspect KYC")
                             }
@@ -312,7 +344,7 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
                                 Button(
                                     onClick = { adminViewModel.verifyDriver(d.driverId, "verified", "All KYC documents verified") },
                                     colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess),
-                                    modifier = Modifier.weight(1f).testTag("approve_driver_${d.driverId}")
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("approve_driver_${d.driverId}")
                                 ) {
                                     Text("Approve")
                                 }
@@ -320,17 +352,31 @@ fun AdminRidersModule(adminViewModel: AdminViewModel) {
                             if (d.verificationStatus == "pending") {
                                 OutlinedButton(
                                     onClick = { reasonActionTarget = d.driverId to "rejected" },
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                 ) {
                                     Text("Reject", color = GolocalError)
                                 }
                             } else if (d.verificationStatus == "verified") {
                                 OutlinedButton(
                                     onClick = { reasonActionTarget = d.driverId to "suspended" },
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                 ) {
                                     Text("Suspend", color = GolocalError)
                                 }
+                            }
+                        }
+                        if (d.verificationStatus == "verified") {
+                            OutlinedButton(
+                                onClick = { adminViewModel.setDriverTestPartner(d.driverId, !d.isTestPartner) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("toggle_test_partner_${d.driverId}")
+                            ) {
+                                Text(
+                                    if (d.isTestPartner) "Revoke Test Partner Authorization"
+                                    else "Authorize as Test Ride Partner"
+                                )
                             }
                         }
                     }

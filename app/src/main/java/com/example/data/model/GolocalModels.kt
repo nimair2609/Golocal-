@@ -57,6 +57,9 @@ data class UserAccount(
     val emailVerified: Boolean = false,
     val mobileVerified: Boolean = false,
     val hasEmergencyContact: Boolean = false,
+    @get:PropertyName("isTestCustomer")
+    @PropertyName("isTestCustomer")
+    val isTestCustomer: Boolean = false,
     val accountStatus: String = "active",
     @ServerTimestamp val accountCreatedAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -153,6 +156,9 @@ data class DriverProfile(
     val verificationStatus: String = "pending",
     val rejectionReason: String = "",
     val isOnline: Boolean = false,
+    @get:PropertyName("isTestPartner")
+    @PropertyName("isTestPartner")
+    val isTestPartner: Boolean = false,
     val ratingAvg: Double = 5.0,
     val completedRides: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
@@ -171,6 +177,9 @@ data class DriverDirectoryEntry(
     val block: String = "",
     val verificationStatus: String = "pending",
     val isOnline: Boolean = false,
+    @get:PropertyName("isTestPartner")
+    @PropertyName("isTestPartner")
+    val isTestPartner: Boolean = false,
     val currentLat: Double = 22.90,
     val currentLng: Double = 88.39,
     val ratingAvg: Double = 5.0,
@@ -298,6 +307,24 @@ data class RideOffer(
 )
 
 @IgnoreExtraProperties
+data class RideAssignment(
+    @DocumentId val id: String = "",
+    val bookingId: String = "",
+    val customerId: String = "",
+    val driverId: String = "",
+    val offerId: String = "",
+    val lockedFareInr: Double = 0.0,
+    val status: String = "active",
+    @get:PropertyName("is_test_ride")
+    @PropertyName("is_test_ride")
+    val isTestRide: Boolean = false,
+    val assignedByUid: String = "",
+    val assignedByRole: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
 data class TripLocation(
     @DocumentId val id: String = "",
     val bookingId: String = "",
@@ -305,6 +332,31 @@ data class TripLocation(
     val driverId: String = "",
     val lat: Double = 0.0,
     val lng: Double = 0.0,
+    @get:PropertyName("isTestRide")
+    @PropertyName("isTestRide")
+    val isTestRide: Boolean = false,
+    @get:PropertyName("isSimulated")
+    @PropertyName("isSimulated")
+    val isSimulated: Boolean = false,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@IgnoreExtraProperties
+data class LiveLocation(
+    @DocumentId val id: String = "",
+    val driverId: String = "",
+    val bookingId: String = "",
+    val customerId: String = "",
+    val lat: Double = 0.0,
+    val lng: Double = 0.0,
+    val headingDeg: Double = 0.0,
+    val speedKmph: Double = 0.0,
+    @get:PropertyName("isTestRide")
+    @PropertyName("isTestRide")
+    val isTestRide: Boolean = false,
+    @get:PropertyName("isSimulated")
+    @PropertyName("isSimulated")
+    val isSimulated: Boolean = false,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
@@ -435,6 +487,9 @@ data class AuditLog(
     val targetCollection: String = "",
     val targetId: String = "",
     val summary: String = "",
+    @get:PropertyName("isTestRide")
+    @PropertyName("isTestRide")
+    val isTestRide: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null
 )
 
@@ -504,6 +559,10 @@ data class TestRideOtpChallenge(
     val used: Boolean = false,
     val overridden: Boolean = false,
     val overrideReason: String = "",
+    val overrideRequestedByUid: String = "",
+    val overrideRequestedReason: String = "",
+    val overrideRequestedAt: Timestamp? = null,
+    val overriddenByUid: String = "",
     val verifiedByUid: String = "",
     val attempts: Long = 0L,
     val maxAttempts: Long = 5L,
