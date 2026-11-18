@@ -16,6 +16,7 @@ import com.example.data.model.PaymentRecord
 import com.example.data.model.PlatformSettings
 import com.example.data.model.RatingRecord
 import com.example.data.model.RideOffer
+import com.example.data.model.RideOtpSecret
 import com.example.data.model.ServiceArea
 import com.example.data.model.TripLocation
 import com.example.data.model.UiState
@@ -23,6 +24,7 @@ import com.example.data.repository.BusRepository
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
+import com.example.data.repository.RealtimeLocationRepository
 import com.example.domain.BookingChatValidator
 import com.example.domain.FareCalculator
 import com.example.domain.FareQuote
@@ -67,7 +69,8 @@ class CustomerViewModel(
     private val currentUserId: String,
     private val customerName: String,
     private val communicationRepository: CommunicationRepository? = null,
-    private val busRepository: BusRepository? = null
+    private val busRepository: BusRepository? = null,
+    private val realtimeLocationRepository: RealtimeLocationRepository? = null
 ) : ViewModel() {
 
     private val _draft = MutableStateFlow(BookingDraftState())
@@ -191,12 +194,54 @@ class CustomerViewModel(
 
     val activeTripLocation: StateFlow<TripLocation?> = activeBooking
         .flatMapLatest { booking ->
-            if (booking == null || booking.assignedDriverId.isBlank()) flowOf(null)
-            else repository.observeTripLocation(booking.id)
-                .catch { error ->
-                    if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-                    emit(null)
+            if (booking == null || booking.assignedDriverId.isBlank()) {
+                flowOf(null)
+            } else {
+                val fsFlow = repository.observeTripLocation(booking.id)
+                    .catch { error ->
+                        if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                        emit(null)
+                    }
+                val rtdbRepo = realtimeLocationRepository
+                if (rtdbRepo == null) {
+                    fsFlow
+                } else {
+                    val rtdbFlow = rtdbRepo.observeTripLocation(booking.id)
+                        .catch { error ->
+                            if (error is CancellationException) throw error
+                            emit(null)
+                        }
+                    combine(rtdbFlow, fsFlow) { rtdbLoc, fsLoc ->
+                        when {
+                            rtdbLoc == null -> fsLoc
+                            fsLoc == null -> rtdbLoc
+                            else -> {
+                                val rtdbMs = rtdbLoc.updatedAt?.toDate()?.time ?: 0L
+                                val fsMs = fsLoc.updatedAt?.toDate()?.time ?: 0L
+                                if (rtdbMs >= fsMs) rtdbLoc else fsLoc
+                            }
+                        }
+                    }
                 }
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null
+        )
+
+    val activeRideOtpSecret: StateFlow<RideOtpSecret?> = activeBooking
+        .flatMapLatest { booking ->
+            if (booking == null || (!booking.isTestRide && !booking.testMode) || booking.assignedDriverId.isBlank()) {
+                flowOf(null)
+            } else {
+                repository.observeCustomerRideOtpSecret(booking.id)
+                    .catch { error ->
+                        if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                        emit(null)
+                    }
+            }
         }
         .stateIn(
             scope = viewModelScope,

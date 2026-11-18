@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.notifications.NotificationDeepLinkTarget
+import com.example.notifications.NotificationHelper
 
 class RiderActivity : ComponentActivity() {
     private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
@@ -16,6 +17,7 @@ class RiderActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        NotificationHelper.ensureChannels(this)
         deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)
         setContent {
             RiderAppRoot(

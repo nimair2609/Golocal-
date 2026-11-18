@@ -546,12 +546,19 @@ private fun ChatMessageBubble(
 
 @Composable
 fun NotificationPermissionBannerCard(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    title: String = "Enable Ride & Chat Alerts",
+    description: String = "Get instant arrival, trip message, and bus ticket updates.",
+    onPermissionGranted: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var hasPermission by remember { mutableStateOf(NotificationHelper.hasNotificationPermission(context)) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasPermission = granted
+        if (granted) {
+            NotificationHelper.ensureChannels(context)
+            onPermissionGranted()
+        }
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPermission) {
@@ -573,9 +580,9 @@ fun NotificationPermissionBannerCard(
                     tint = MaterialTheme.colorScheme.primary
                 )
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Enable Ride & Chat Alerts", style = MaterialTheme.typography.titleSmall)
+                    Text(title, style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Get instant arrival, trip message, and bus ticket updates.",
+                        description,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

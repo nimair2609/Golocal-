@@ -397,13 +397,18 @@
     },
     "AppNotification": {
       "title": "AppNotification",
-      "description": "User-scoped booking, driver, and safety notifications",
+      "description": "User-scoped booking, driver, and safety notifications with deep-link and test-ride isolation metadata",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
         "title": { "type": "string" },
         "body": { "type": "string" },
         "type": { "type": "string" },
+        "bookingId": { "type": "string" },
+        "entityId": { "type": "string" },
+        "targetApp": { "type": "string" },
+        "targetScreen": { "type": "string" },
+        "isTestRide": { "type": "boolean" },
         "read": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },

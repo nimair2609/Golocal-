@@ -13,9 +13,12 @@ import com.example.data.model.DriverSettlement
 import com.example.data.model.DriverVerificationHistoryEntry
 import com.example.data.model.RatingRecord
 import com.example.data.model.RideOffer
+import com.example.data.model.TestRiderProfile
+import com.example.data.model.TestRiderRequest
 import com.example.data.model.UiState
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
+import com.example.data.repository.RealtimeLocationRepository
 import com.example.domain.BookingChatValidator
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -37,7 +40,8 @@ import kotlinx.coroutines.launch
 class DriverViewModel(
     private val repository: GolocalRepository,
     private val currentUserId: String,
-    private val communicationRepository: CommunicationRepository? = null
+    private val communicationRepository: CommunicationRepository? = null,
+    private val realtimeLocationRepository: RealtimeLocationRepository? = null
 ) : ViewModel() {
 
     private val _message = MutableStateFlow<String?>(null)
@@ -139,6 +143,70 @@ class DriverViewModel(
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
             initialValue = null
         )
+
+    val testRiderRequestState: StateFlow<UiState<TestRiderRequest?>> =
+        repository.observeMyTestRiderRequest(currentUserId)
+            .map<TestRiderRequest?, UiState<TestRiderRequest?>> { UiState.Success(it) }
+            .catch { error ->
+                val fe = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (fe == null && error is CancellationException) throw error
+                val root = fe ?: error
+                Log.w(TAG, "Error observing test rider request", root)
+                emit(UiState.Error(root.message ?: "Failed to load Test Rider request"))
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = UiState.Loading
+            )
+
+    val testRiderProfile: StateFlow<TestRiderProfile?> =
+        repository.observeMyTestRiderProfile(currentUserId)
+            .catch { error ->
+                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                emit(null)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = null
+            )
+
+    val openTestBookings: StateFlow<List<Booking>> =
+        repository.observeOpenTestBookingsForTestRiders()
+            .map { list ->
+                list.filter {
+                    (it.isTestRide || it.testMode) &&
+                        it.status == "searching" &&
+                        it.customerId != currentUserId
+                }.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+            }
+            .catch { error ->
+                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                Log.w(TAG, "Error observing open test bookings", error)
+                emit(emptyList())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = emptyList()
+            )
+
+    val testRiderCompletedCount: StateFlow<Int> = assignedBookings
+        .map { list -> list.count { (it.isTestRide || it.testMode) && it.status == "completed" } }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = 0
+        )
+
+    private val _isVerifyingTestOtp = MutableStateFlow(false)
+    val isVerifyingTestOtp: StateFlow<Boolean> = _isVerifyingTestOtp.asStateFlow()
+
+    private val _testOtpError = MutableStateFlow<String?>(null)
+    val testOtpError: StateFlow<String?> = _testOtpError.asStateFlow()
 
     val activeChatMessages: StateFlow<List<BookingChatMessage>> = activeAssignedBooking
         .flatMapLatest { booking ->
@@ -313,7 +381,10 @@ class DriverViewModel(
         }
     }
 
-    private val gpsThrottle = com.example.map.GpsBroadcastThrottle()
+    private val gpsThrottle = com.example.map.GpsBroadcastThrottle(
+        minIntervalMs = 2_500L,
+        minDistanceMeters = 8.0
+    )
 
     fun toggleOnline(online: Boolean, lat: Double, lng: Double) {
         viewModelScope.launch {
@@ -328,28 +399,187 @@ class DriverViewModel(
         }
     }
 
-    fun broadcastGpsSample(lat: Double, lng: Double, accuracyMeters: Float = 15f, force: Boolean = false) {
-        val profile = (driverProfileState.value as? UiState.Success)?.data ?: return
-        val booking = activeAssignedBooking.value
-        val shouldEmit = (profile.isOnline && profile.verificationStatus == "verified") || booking != null
-        if (!shouldEmit) return
-
-        val sample = com.example.map.LocationSample(lat = lat, lng = lng, accuracyMeters = accuracyMeters)
-        if (!gpsThrottle.acceptIfQualified(sample, force = force)) return
-
+    fun submitTestRiderRequest(
+        fullName: String,
+        mobileNumber: String,
+        email: String,
+        vehicleCategory: String,
+        testPurpose: String,
+        notes: String = "",
+        deviceInfoSummary: String = ""
+    ) {
         viewModelScope.launch {
-            repository.updateDriverLiveLocation(
-                activeBooking = booking,
-                isOnline = profile.isOnline,
-                isVerified = profile.verificationStatus == "verified",
-                lat = lat,
-                lng = lng
-            )
+            repository.submitTestRiderRequest(
+                fullName = fullName,
+                mobileNumber = mobileNumber,
+                email = email,
+                vehicleCategory = vehicleCategory,
+                testPurpose = testPurpose,
+                notes = notes,
+                deviceInfoSummary = deviceInfoSummary
+            ).onSuccess {
+                _message.value = "Test Rider access request submitted for Owner Admin review."
+            }.onFailure {
+                _message.value = it.localizedMessage ?: "Failed to submit Test Rider request"
+            }
         }
     }
 
-    fun stopLiveLocationBroadcast() {
+    fun toggleTestRiderOnline(online: Boolean, lat: Double, lng: Double) {
+        viewModelScope.launch {
+            if (!online) gpsThrottle.reset()
+            repository.setTestRiderOnlineStatus(online, lat, lng)
+                .onSuccess {
+                    _message.value = if (online) {
+                        "Test Rider Mode is ONLINE for open TEST RIDE bookings."
+                    } else {
+                        "Test Rider Mode is OFFLINE."
+                    }
+                }
+                .onFailure {
+                    _message.value = it.localizedMessage ?: "Unable to update Test Rider online status"
+                }
+        }
+    }
+
+    fun claimTestBooking(booking: Booking, lat: Double, lng: Double) {
+        val tr = testRiderProfile.value
+        if (tr == null || tr.status != "approved") {
+            _message.value = "Approved Test Rider profile is required to claim Test Rides."
+            return
+        }
+        viewModelScope.launch {
+            repository.claimTestBookingByTestRider(
+                booking = booking,
+                riderProfile = tr,
+                currentLat = lat,
+                currentLng = lng
+            ).onSuccess {
+                _message.value = "Claimed TEST RIDE #${booking.id.take(6)}. Head to pickup!"
+                if (com.example.map.GpsBroadcastThrottle.isValidCoordinate(lat, lng)) {
+                    realtimeLocationRepository?.publishDriverAndTripLocation(
+                        driverId = currentUserId,
+                        activeBooking = booking.copy(assignedDriverId = currentUserId, status = "assigned"),
+                        lat = lat,
+                        lng = lng,
+                        accuracyMeters = 15f,
+                        speedMps = 0f,
+                        headingDeg = 0f
+                    )
+                }
+            }.onFailure {
+                _message.value = it.localizedMessage ?: "Unable to claim Test Ride"
+            }
+        }
+    }
+
+    fun verifyTestRideOtp(booking: Booking, enteredOtp: String) {
+        if (_isVerifyingTestOtp.value) return
+        _isVerifyingTestOtp.value = true
+        _testOtpError.value = null
+        viewModelScope.launch {
+            repository.verifyTestRideOtpByRider(booking, enteredOtp)
+                .onSuccess {
+                    _testOtpError.value = null
+                    _message.value = "Pickup OTP verified! Test Ride started."
+                }
+                .onFailure { exc ->
+                    _testOtpError.value = exc.localizedMessage ?: "Invalid 6-digit Pickup OTP."
+                }
+            _isVerifyingTestOtp.value = false
+        }
+    }
+
+    fun clearTestOtpError() {
+        _testOtpError.value = null
+    }
+
+    fun broadcastGpsSample(
+        lat: Double,
+        lng: Double,
+        accuracyMeters: Float = 15f,
+        speedMps: Float = 0f,
+        headingDeg: Float = 0f,
+        force: Boolean = false,
+        isTestRiderMode: Boolean = false
+    ) {
+        val booking = activeAssignedBooking.value
+        val shouldEmit: Boolean
+        val isOnlineFlag: Boolean
+        val isVerifiedFlag: Boolean
+        if (isTestRiderMode) {
+            val tr = testRiderProfile.value ?: return
+            val hasTestBooking = booking != null && (booking.isTestRide || booking.testMode)
+            shouldEmit = tr.status == "approved" && (tr.isOnline || hasTestBooking)
+            isOnlineFlag = tr.isOnline
+            isVerifiedFlag = tr.status == "approved"
+        } else {
+            val profile = (driverProfileState.value as? UiState.Success)?.data ?: return
+            shouldEmit = (profile.isOnline && profile.verificationStatus == "verified") || booking != null
+            isOnlineFlag = profile.isOnline
+            isVerifiedFlag = profile.verificationStatus == "verified"
+        }
+        if (!shouldEmit) return
+
+        val sample = com.example.map.LocationSample(
+            lat = lat,
+            lng = lng,
+            accuracyMeters = accuracyMeters,
+            speedMps = speedMps,
+            headingDeg = headingDeg
+        )
+        if (!gpsThrottle.acceptIfQualified(sample, force = force)) return
+
+        val speedKmph = (speedMps.coerceAtLeast(0f) * 3.6f).toDouble()
+        val normHeading = (((headingDeg % 360f) + 360f) % 360f).toDouble()
+        viewModelScope.launch {
+            realtimeLocationRepository?.publishDriverAndTripLocation(
+                driverId = currentUserId,
+                activeBooking = booking,
+                lat = lat,
+                lng = lng,
+                accuracyMeters = accuracyMeters,
+                speedMps = speedMps,
+                headingDeg = headingDeg
+            )
+            if (isTestRiderMode) {
+                repository.updateTestRiderLiveLocation(
+                    activeBooking = booking,
+                    isOnline = isOnlineFlag,
+                    lat = lat,
+                    lng = lng,
+                    headingDeg = normHeading,
+                    speedKmph = speedKmph
+                )
+            } else {
+                repository.updateDriverLiveLocation(
+                    activeBooking = booking,
+                    isOnline = isOnlineFlag,
+                    isVerified = isVerifiedFlag,
+                    lat = lat,
+                    lng = lng,
+                    headingDeg = normHeading,
+                    speedKmph = speedKmph
+                )
+            }
+        }
+    }
+
+    fun stopLiveLocationBroadcast(lastLat: Double = 0.0, lastLng: Double = 0.0) {
         gpsThrottle.reset()
+        val rtdb = realtimeLocationRepository ?: return
+        val booking = activeAssignedBooking.value
+        if (com.example.map.GpsBroadcastThrottle.isValidCoordinate(lastLat, lastLng)) {
+            viewModelScope.launch {
+                rtdb.stopTripTracking(
+                    driverId = currentUserId,
+                    bookingId = booking?.id,
+                    customerId = booking?.customerId,
+                    lastLat = lastLat,
+                    lastLng = lastLng
+                )
+            }
+        }
     }
 
     fun submitOffer(booking: Booking, proposedFareInr: Double, etaMinutes: Long) {
@@ -479,6 +709,11 @@ class DriverViewModel(
 
     fun clearMessage() {
         _message.value = null
+    }
+
+    override fun onCleared() {
+        gpsThrottle.reset()
+        super.onCleared()
     }
 
     private companion object {

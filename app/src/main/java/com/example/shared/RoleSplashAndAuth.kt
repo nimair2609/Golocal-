@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.repository.ClientPreferences
+import com.example.data.repository.PreferencesRepository
 import com.example.ui.auth.PhoneAuthController
 import com.example.ui.auth.PhoneAuthFormContent
 import com.example.ui.auth.PhoneAuthStep
@@ -189,10 +190,22 @@ fun RoleAuthScreen(
     mode: ExperienceMode,
     onAuthSuccess: () -> Unit,
     phoneControllerFactory: ((CoroutineScope, (String) -> Unit) -> PhoneAuthController)? = null,
-    googleGateway: com.example.ui.auth.GoogleSignInGateway = com.example.ui.auth.DefaultGoogleSignInGateway()
+    googleGateway: com.example.ui.auth.GoogleSignInGateway = com.example.ui.auth.DefaultGoogleSignInGateway(),
+    initialTestRiderIntent: Boolean? = null,
+    onTestRiderIntentChanged: ((Boolean) -> Unit)? = null
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
+    val prefsRepository = remember(context) { PreferencesRepository(context) }
+    val storedPrefs by prefsRepository.preferencesFlow.collectAsStateWithLifecycle(initialValue = ClientPreferences())
+    var localTestRiderIntent by remember(initialTestRiderIntent) {
+        mutableStateOf(initialTestRiderIntent ?: storedPrefs.testRiderIntent)
+    }
+    LaunchedEffect(storedPrefs.testRiderIntent, initialTestRiderIntent) {
+        if (initialTestRiderIntent == null) {
+            localTestRiderIntent = storedPrefs.testRiderIntent
+        }
+    }
     val controller = remember(mode) {
         phoneControllerFactory?.invoke(scope) { _ -> onAuthSuccess() }
             ?: PhoneAuthController(
@@ -233,6 +246,7 @@ fun RoleAuthScreen(
                 .widthIn(max = 540.dp)
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
+                .imePadding()
                 .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -372,6 +386,47 @@ fun RoleAuthScreen(
                     }
 
                     if (phoneState.step == PhoneAuthStep.INPUT_PHONE) {
+                        if (mode == ExperienceMode.RIDER) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Select Sign-In Mode",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    RiderModeOptionCard(
+                                        title = "Commercial Partner",
+                                        subtitle = "Verified DL, RC & KYC",
+                                        selected = !localTestRiderIntent,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("auth_mode_commercial_partner"),
+                                        onClick = {
+                                            localTestRiderIntent = false
+                                            onTestRiderIntentChanged?.invoke(false)
+                                            scope.launch { prefsRepository.setTestRiderIntent(false) }
+                                        }
+                                    )
+                                    RiderModeOptionCard(
+                                        title = "Test Rider (Sandbox)",
+                                        subtitle = "QA & Admin-approved test rides",
+                                        selected = localTestRiderIntent,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("auth_mode_test_rider"),
+                                        onClick = {
+                                            localTestRiderIntent = true
+                                            onTestRiderIntentChanged?.invoke(true)
+                                            scope.launch { prefsRepository.setTestRiderIntent(true) }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
                         if (!googleError.isNullOrBlank()) {
                             Surface(
                                 color = MaterialTheme.colorScheme.errorContainer,
@@ -473,6 +528,49 @@ fun RoleAuthScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RiderModeOptionCard(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        },
+        modifier = modifier
+            .heightIn(min = 68.dp)
+            .border(
+                width = if (selected) 1.5.dp else 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                shape = RoundedCornerShape(14.dp)
+            )
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

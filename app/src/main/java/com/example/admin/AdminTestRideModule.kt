@@ -39,9 +39,13 @@ fun AdminTestRideModule(
     val testOtpSecrets by adminViewModel.testOtpSecrets.collectAsStateWithLifecycle()
     val testOtpChallenges by adminViewModel.testOtpChallenges.collectAsStateWithLifecycle()
     val testAuditLogs by adminViewModel.testAuditLogs.collectAsStateWithLifecycle()
+    val testRiderRequests by adminViewModel.testRiderRequests.collectAsStateWithLifecycle()
+    val testRiders by adminViewModel.testRiders.collectAsStateWithLifecycle()
+    val testRiderAuditLogs by adminViewModel.testRiderAuditLogs.collectAsStateWithLifecycle()
     val simulatingBookingId by adminViewModel.simulatingBookingId.collectAsStateWithLifecycle()
     val simulationPhase by adminViewModel.simulationPhase.collectAsStateWithLifecycle()
 
+    var activeSectionTab by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     var showAuditHistory by remember { mutableStateOf(true) }
     var selectedFilter by remember { mutableStateOf("All Test") }
@@ -73,13 +77,63 @@ fun AdminTestRideModule(
             ?: testBookings.firstOrNull()
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    val pendingRiderCount = testRiderRequests.count { it.status == "pending" }
+    val approvedRiderCount = testRiders.count { it.status == "approved" }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = activeSectionTab) {
+            Tab(
+                selected = activeSectionTab == 0,
+                onClick = { activeSectionTab = 0 },
+                modifier = Modifier.testTag("admin_test_tab_rides"),
+                text = { Text("Test Rides (${testBookings.size})", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+            )
+            Tab(
+                selected = activeSectionTab == 1,
+                onClick = { activeSectionTab = 1 },
+                modifier = Modifier.testTag("admin_test_tab_requests"),
+                text = { Text("Rider Requests ($pendingRiderCount)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+            )
+            Tab(
+                selected = activeSectionTab == 2,
+                onClick = { activeSectionTab = 2 },
+                modifier = Modifier.testTag("admin_test_tab_approved"),
+                text = { Text("Test Riders ($approvedRiderCount)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+            )
+        }
+
+        when (activeSectionTab) {
+            1 -> {
+                AdminTestRiderRequestsPanel(
+                    requests = testRiderRequests,
+                    auditLogs = testRiderAuditLogs,
+                    isOwnerAdmin = isOwnerAdmin,
+                    onReviewRequest = { req, status, reason, note ->
+                        adminViewModel.reviewTestRiderRequest(req, status, reason, note)
+                    },
+                    onRecommendRequest = { req, rec, note ->
+                        adminViewModel.recommendTestRiderRequest(req, rec, note)
+                    }
+                )
+            }
+            2 -> {
+                AdminApprovedTestRidersPanel(
+                    riders = testRiders,
+                    requests = testRiderRequests,
+                    isOwnerAdmin = isOwnerAdmin,
+                    onReviewRequest = { req, status, reason, note ->
+                        adminViewModel.reviewTestRiderRequest(req, status, reason, note)
+                    }
+                )
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
         // Master Test Ride Mode Banner + Toggle
         item {
             Surface(
@@ -145,7 +199,7 @@ fun AdminTestRideModule(
                             text = "Total Test Rides: ${testBookings.size}",
                             style = MaterialTheme.typography.labelLarge,
                             fontFamily = JetBrainsMono,
-                            color = GolocalDeepNavy
+                            color = if (platformSettings.testRideModeEnabled) GolocalDeepNavy else MaterialTheme.colorScheme.onSurface
                         )
                         TextButton(
                             onClick = { showSettings = !showSettings },
@@ -285,6 +339,9 @@ fun AdminTestRideModule(
             } else {
                 items(testAuditLogs.take(25), key = { it.id }) { log ->
                     TestRideAuditLogItem(log = log)
+                }
+            }
+        }
                 }
             }
         }

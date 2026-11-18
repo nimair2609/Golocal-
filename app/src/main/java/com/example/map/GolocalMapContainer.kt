@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -127,12 +129,14 @@ fun GolocalMapContainer(
     recenterBottomPadding: Dp = 10.dp,
     userLat: Double? = null,
     userLng: Double? = null,
+    rerouteFromLatLng: GeoPoint? = null,
     enableCenterPinSelection: Boolean = false,
     onCenterCoordinateChanged: ((Double, Double) -> Unit)? = null,
     onRouteComputed: ((RouteUiState) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var routeState by remember { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
+    var lastRerouteEpochMs by remember(pickupLat, pickupLng, destLat, destLng) { mutableLongStateOf(0L) }
     val latestCenterCallback by androidx.compose.runtime.rememberUpdatedState(onCenterCoordinateChanged)
     val latestPinMode by androidx.compose.runtime.rememberUpdatedState(enableCenterPinSelection)
 
@@ -160,6 +164,43 @@ fun GolocalMapContainer(
         )
         routeState = fetched
         onRouteComputed?.invoke(fetched)
+    }
+
+    // Dynamic OSRM deviation rerouting when live GPS deviates > 75m from active polyline
+    LaunchedEffect(
+        rerouteFromLatLng?.lat,
+        rerouteFromLatLng?.lng,
+        liveTripLocation?.lat,
+        liveTripLocation?.lng,
+        destLat,
+        destLng,
+        lowNetworkMode
+    ) {
+        if (lowNetworkMode || !GpsBroadcastThrottle.isValidCoordinate(destLat, destLng)) return@LaunchedEffect
+        val candidate = rerouteFromLatLng ?: liveTripLocation?.let { GeoPoint(it.lat, it.lng) } ?: return@LaunchedEffect
+        val activePoints = when (val st = routeState) {
+            is RouteUiState.Ready -> st.points
+            is RouteUiState.Fallback -> st.points
+            else -> emptyList()
+        }
+        val nowMs = System.currentTimeMillis()
+        if (RouteNavigationMath.shouldRecalculateRoute(
+                currentLat = candidate.lat,
+                currentLng = candidate.lng,
+                activeRoute = activePoints,
+                lastRerouteEpochMs = lastRerouteEpochMs,
+                nowEpochMs = nowMs
+            )
+        ) {
+            lastRerouteEpochMs = nowMs
+            val rerouted = OsrmRouteService.fetchDrivingRoute(
+                origin = candidate,
+                destination = GeoPoint(destLat, destLng),
+                bypassCache = true
+            )
+            routeState = rerouted
+            onRouteComputed?.invoke(rerouted)
+        }
     }
 
     val useLiteView = lowNetworkMode || isRobolectricEnvironment()
@@ -473,6 +514,34 @@ fun GolocalMapContainer(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
+                    }
+                }
+                if (liveTripLocation != null && (liveTripLocation.speedKmph > 0.5 || liveTripLocation.headingDeg > 0.0)) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                        shape = RoundedCornerShape(999.dp),
+                        shadowElevation = 3.dp,
+                        modifier = Modifier.testTag("map_live_heading_chip")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Navigation,
+                                contentDescription = "Vehicle heading ${liveTripLocation.headingDeg.toInt()} degrees",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .rotate(liveTripLocation.headingDeg.toFloat())
+                            )
+                            Text(
+                                text = "${liveTripLocation.speedKmph.toInt()} km/h",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }

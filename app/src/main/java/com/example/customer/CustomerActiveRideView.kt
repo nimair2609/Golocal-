@@ -74,10 +74,14 @@ import com.example.data.model.Booking
 import com.example.data.model.BookingCallContact
 import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.RideOffer
+import com.example.data.model.RideOtpSecret
 import com.example.data.model.TripLocation
 import com.example.domain.FareCalculator
 import com.example.domain.TestRideOtpUtil
+import com.example.map.GeoPoint
 import com.example.map.GolocalMapContainer
+import com.example.map.GpsBroadcastThrottle
+import com.example.map.RouteNavigationMath
 import com.example.shared.BookingCommunicationBar
 import com.example.shared.CircularBackButton
 import com.example.ui.components.GolocalStatusBadge
@@ -111,6 +115,7 @@ fun CustomerActiveRideView(
     onOpenCancel: () -> Unit,
     isVerifyingTestOtp: Boolean = false,
     testOtpError: String? = null,
+    rideOtpSecret: RideOtpSecret? = null,
     onVerifyTestOtp: (String) -> Unit = {},
     onClearTestOtpError: () -> Unit = {}
 ) {
@@ -266,7 +271,7 @@ fun CustomerActiveRideView(
                                     text = "₹${booking.estimatedFareInr.toInt()}",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontFamily = JetBrainsMono,
-                                    color = GolocalDeepNavy,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -325,6 +330,7 @@ fun CustomerActiveRideView(
             cornerRadius = 0.dp,
             showBorder = false,
             showTopRouteChip = false,
+            rerouteFromLatLng = tripLocation?.let { GeoPoint(it.lat, it.lng) },
             recenterBottomPadding = sheetHeight + 12.dp
         )
 
@@ -365,7 +371,7 @@ fun CustomerActiveRideView(
                         text = if (isTestRide) "TEST RIDE • $stageHeadline" else stageHeadline,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = GolocalDeepNavy
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -441,6 +447,48 @@ fun CustomerActiveRideView(
                                     text = "Simulated Driver • Controlled via Admin Portal",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    if (rideOtpSecret != null &&
+                        rideOtpSecret.otpPlaintext.length == 6 &&
+                        booking.status in setOf("assigned", "arriving", "arrived")
+                    ) {
+                        Surface(
+                            color = GolocalLightBlue.copy(alpha = 0.78f),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, GolocalPrimaryBlue, RoundedCornerShape(16.dp))
+                                .testTag("customer_test_otp_secret_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Share 6-Digit Test Pickup OTP",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = GolocalDeepNavy
+                                    )
+                                    Text(
+                                        text = "Give this OTP to your Test Rider at pickup (valid until ride starts).",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = GolocalDeepNavy.copy(alpha = 0.78f)
+                                    )
+                                }
+                                Text(
+                                    text = rideOtpSecret.otpPlaintext,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontFamily = JetBrainsMono,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = GolocalPrimaryBlue,
+                                    modifier = Modifier.testTag("customer_test_otp_secret_value")
                                 )
                             }
                         }
@@ -531,10 +579,31 @@ fun CustomerActiveRideView(
                             fontWeight = FontWeight.Medium
                         )
                         tripLocation?.let { loc ->
+                            val targetLat = if (booking.status == "in_progress") booking.destinationLat else booking.pickupLat
+                            val targetLng = if (booking.status == "in_progress") booking.destinationLng else booking.pickupLng
+                            val remainingKm = GpsBroadcastThrottle.haversineMeters(loc.lat, loc.lng, targetLat, targetLng) / 1000.0
+                            val liveEtaMin = RouteNavigationMath.estimateEtaMinutes(
+                                distanceKm = remainingKm,
+                                speedMps = loc.speedKmph / 3.6,
+                                vehicleCategory = booking.vehicleCategory
+                            )
+                            val gpsStatus = when (loc.trackingStatus) {
+                                "paused_gps_lost" -> "GPS Paused"
+                                "stopped" -> "Tracking Stopped"
+                                else -> "Live GPS"
+                            }
                             Text(
-                                text = "Live Rider GPS: ${String.format(Locale.US, "%.4f, %.4f", loc.lat, loc.lng)}",
+                                text = String.format(
+                                    Locale.US,
+                                    "$gpsStatus: ~%d min (%.1f km) • %d km/h • %.0f°",
+                                    liveEtaMin,
+                                    remainingKm,
+                                    loc.speedKmph.toInt(),
+                                    loc.headingDeg
+                                ),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (loc.trackingStatus == "paused_gps_lost") GolocalWarning else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("customer_live_telemetry_line")
                             )
                         }
                     }

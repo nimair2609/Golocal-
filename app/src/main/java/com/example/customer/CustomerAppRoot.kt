@@ -223,7 +223,8 @@ fun CustomerAuthenticatedShell(
                         currentUserId = currentUserId,
                         customerName = completedName,
                         communicationRepository = CommunicationRepository(db),
-                        busRepository = BusRepository(db)
+                        busRepository = BusRepository(db),
+                        realtimeLocationRepository = com.example.data.repository.RealtimeLocationRepository(app)
                     )
                 }
             }
@@ -277,22 +278,13 @@ fun CustomerAuthenticatedShell(
             }
         }
 
-        LaunchedEffect(deepLinkTarget) {
+        LaunchedEffect(deepLinkTarget, activeBooking?.id) {
             val target = deepLinkTarget ?: return@LaunchedEffect
-            when (target.type) {
-                "chat", "booking" -> {
-                    isBusFlowOpen = false
-                    isBookingFlowOpen = true
-                }
-                "bus_booking" -> {
-                    isBookingFlowOpen = false
-                    isBusFlowOpen = true
-                }
-                else -> {
-                    isBookingFlowOpen = false
-                    isBusFlowOpen = false
-                    selectedTab = "notifications"
-                }
+            val route = resolveCustomerDeepLink(target = target, hasActiveBooking = activeBooking != null)
+            isBookingFlowOpen = route.openBookingFlow
+            isBusFlowOpen = route.openBusFlow
+            if (route.selectedTab != null) {
+                selectedTab = route.selectedTab
             }
             onDeepLinkHandled()
         }
@@ -335,7 +327,15 @@ fun CustomerAuthenticatedShell(
                                 NavigationBarItem(
                                     selected = selectedTab == route,
                                     onClick = { selectedTab = route },
-                                    icon = { Icon(icon, contentDescription = label) },
+                                    icon = {
+                                        if (route == "notifications" && unreadCount > 0) {
+                                            BadgedBox(badge = { Badge { Text(unreadCount.coerceAtMost(99).toString()) } }) {
+                                                Icon(icon, contentDescription = label)
+                                            }
+                                        } else {
+                                            Icon(icon, contentDescription = label)
+                                        }
+                                    },
                                     label = { Text(label) },
                                     modifier = Modifier.testTag("customer_nav_$route")
                                 )
@@ -430,7 +430,20 @@ fun CustomerAuthenticatedShell(
                                         },
                                         onOpenBusBooking = { isBusFlowOpen = true }
                                     )
-                                    "notifications" -> CustomerNotificationsTab(sessionViewModel = sessionViewModel)
+                                    "notifications" -> CustomerNotificationsTab(
+                                        sessionViewModel = sessionViewModel,
+                                        onOpenDeepLink = { target ->
+                                            val route = resolveCustomerDeepLink(
+                                                target = target,
+                                                hasActiveBooking = activeBooking != null
+                                            )
+                                            isBookingFlowOpen = route.openBookingFlow
+                                            isBusFlowOpen = route.openBusFlow
+                                            if (route.selectedTab != null) {
+                                                selectedTab = route.selectedTab
+                                            }
+                                        }
+                                    )
                                     "profile" -> CustomerProfileTab(
                                         sessionViewModel = sessionViewModel,
                                         bookings = allBookings,
@@ -508,4 +521,60 @@ fun CustomerAuthenticatedShell(
 
         AppUpdateDialogHost(controller = updateController)
     }
+}
+
+internal data class CustomerDeepLinkRoute(
+    val selectedTab: String? = null,
+    val openBookingFlow: Boolean = false,
+    val openBusFlow: Boolean = false
+)
+
+internal fun resolveCustomerDeepLink(
+    target: NotificationDeepLinkTarget,
+    hasActiveBooking: Boolean
+): CustomerDeepLinkRoute {
+    val normType = target.type.trim().lowercase()
+    val normScreen = target.targetScreen.trim().lowercase()
+
+    if (normScreen in setOf("bus", "bus_booking", "buses") || normType.startsWith("bus")) {
+        return CustomerDeepLinkRoute(openBusFlow = true)
+    }
+    if (normScreen == "explore") {
+        return CustomerDeepLinkRoute(selectedTab = "explore")
+    }
+    if (normScreen == "profile") {
+        return CustomerDeepLinkRoute(selectedTab = "profile")
+    }
+    if (normType in setOf("booking_completed", "booking_cancelled") ||
+        normScreen == "bookings" && !hasActiveBooking && normType !in setOf("chat", "booking_chat", "ride_offer")
+    ) {
+        return CustomerDeepLinkRoute(selectedTab = "bookings")
+    }
+    if (normType in setOf(
+            "chat",
+            "booking_chat",
+            "booking",
+            "booking_confirmation",
+            "booking_assigned",
+            "booking_arriving",
+            "booking_arrived",
+            "booking_in_progress",
+            "ride_offer",
+            "driver_assigned",
+            "trip_status",
+            "test_booking_confirmation",
+            "test_otp",
+            "test_ride"
+        ) || normScreen in setOf("booking", "bookings", "active_booking", "trip", "ride", "chat")
+    ) {
+        return if (hasActiveBooking || normType in setOf("chat", "booking_chat", "ride_offer", "booking_confirmation", "test_booking_confirmation", "test_otp") || normScreen == "booking" || normScreen == "active_booking") {
+            CustomerDeepLinkRoute(openBookingFlow = true)
+        } else {
+            CustomerDeepLinkRoute(selectedTab = "bookings")
+        }
+    }
+    if (normType == "booking_exception" || normScreen == "bookings") {
+        return CustomerDeepLinkRoute(selectedTab = "bookings")
+    }
+    return CustomerDeepLinkRoute(selectedTab = "notifications")
 }

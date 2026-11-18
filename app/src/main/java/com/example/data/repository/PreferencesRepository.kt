@@ -6,10 +6,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.AppLanguage
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 private val Context.golocalPrefs: DataStore<Preferences> by preferencesDataStore(name = "golocal_client_prefs")
 
@@ -36,6 +39,8 @@ class PreferencesRepository(private val context: Context) {
     private val keyCustomerOnboarded = booleanPreferencesKey("customer_onboarded")
     private val keyRiderOnboarded = booleanPreferencesKey("rider_onboarded")
     private val keyTestRiderIntent = booleanPreferencesKey("test_rider_intent")
+    private val keyDeviceInstallationId = stringPreferencesKey("device_installation_id")
+    private val keyActiveAppVariants = stringSetPreferencesKey("active_app_variants")
 
     val preferencesFlow: Flow<ClientPreferences> = context.golocalPrefs.data.map { prefs ->
         ClientPreferences(
@@ -49,6 +54,41 @@ class PreferencesRepository(private val context: Context) {
             riderOnboarded = prefs[keyRiderOnboarded] ?: false,
             testRiderIntent = prefs[keyTestRiderIntent] ?: false
         )
+    }
+
+    suspend fun getOrCreateDeviceId(): String {
+        val current = context.golocalPrefs.data.first()[keyDeviceInstallationId].orEmpty()
+        if (current.isNotBlank()) return current
+        val generated = UUID.randomUUID().toString().replace("-", "").take(16)
+        var saved = generated
+        context.golocalPrefs.edit { prefs ->
+            val existing = prefs[keyDeviceInstallationId].orEmpty()
+            if (existing.isNotBlank()) {
+                saved = existing
+            } else {
+                prefs[keyDeviceInstallationId] = generated
+                saved = generated
+            }
+        }
+        return saved
+    }
+
+    suspend fun recordActiveAppVariant(variant: String) {
+        val clean = variant.trim().lowercase().takeIf { it in setOf("customer", "rider", "admin") } ?: return
+        context.golocalPrefs.edit { prefs ->
+            val current = prefs[keyActiveAppVariants].orEmpty()
+            prefs[keyActiveAppVariants] = current + clean
+        }
+    }
+
+    suspend fun getActiveAppVariants(): Set<String> {
+        return context.golocalPrefs.data.first()[keyActiveAppVariants].orEmpty()
+    }
+
+    suspend fun clearActiveAppVariants() {
+        context.golocalPrefs.edit { prefs ->
+            prefs.remove(keyActiveAppVariants)
+        }
     }
 
     suspend fun setLanguage(language: AppLanguage) {

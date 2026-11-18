@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.notifications.NotificationDeepLinkExtras
 import com.example.notifications.NotificationDeepLinkTarget
+import com.example.notifications.NotificationHelper
 
 class AdminActivity : ComponentActivity() {
     private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
@@ -17,6 +18,7 @@ class AdminActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NotificationHelper.ensureChannels(this)
         applyIntentDeepLink(intent)
         enableEdgeToEdge()
         setContent {
@@ -42,7 +44,9 @@ class AdminActivity : ComponentActivity() {
         if (target != null) {
             deepLinkState = target
         }
-        val screen = intent?.getStringExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN)
+        val screen = (intent?.getStringExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN)
+            ?: intent?.getStringExtra("targetScreen")
+            ?: intent?.getStringExtra("target_screen"))
             ?.takeIf { it.isNotBlank() }
         if (screen != null) {
             legacyScreenState = screen

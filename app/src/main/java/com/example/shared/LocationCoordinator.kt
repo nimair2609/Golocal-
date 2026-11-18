@@ -38,7 +38,9 @@ data class DeviceGpsFix(
     val lat: Double,
     val lng: Double,
     val accuracyMeters: Float,
-    val timestampMs: Long
+    val timestampMs: Long,
+    val speedMps: Float = 0f,
+    val bearingDeg: Float = 0f
 )
 
 object LocationCoordinator {
@@ -107,7 +109,9 @@ object LocationCoordinator {
                                 lat = loc.latitude,
                                 lng = loc.longitude,
                                 accuracyMeters = loc.accuracy.takeIf { it > 0f } ?: 20f,
-                                timestampMs = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+                                timestampMs = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                                speedMps = if (loc.hasSpeed()) loc.speed.coerceAtLeast(0f) else 0f,
+                                bearingDeg = if (loc.hasBearing()) loc.bearing else 0f
                             )
                         )
                     } else {
@@ -119,7 +123,9 @@ object LocationCoordinator {
                                             lat = last.latitude,
                                             lng = last.longitude,
                                             accuracyMeters = last.accuracy.takeIf { it > 0f } ?: 35f,
-                                            timestampMs = last.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+                                            timestampMs = last.time.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                                            speedMps = if (last.hasSpeed()) last.speed.coerceAtLeast(0f) else 0f,
+                                            bearingDeg = if (last.hasBearing()) last.bearing else 0f
                                         )
                                     )
                                 } else {
@@ -143,9 +149,10 @@ object LocationCoordinator {
             return@callbackFlow
         }
         val client = LocationServices.getFusedLocationProviderClient(context)
+        val minDistMeters = if (intervalMs <= 3_000L) 5f else 10f
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
-            .setMinUpdateIntervalMillis(2_500L)
-            .setMinUpdateDistanceMeters(10f)
+            .setMinUpdateIntervalMillis(intervalMs.coerceAtMost(2_500L))
+            .setMinUpdateDistanceMeters(minDistMeters)
             .build()
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
@@ -156,7 +163,9 @@ object LocationCoordinator {
                             lat = loc.latitude,
                             lng = loc.longitude,
                             accuracyMeters = loc.accuracy.takeIf { it > 0f } ?: 20f,
-                            timestampMs = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+                            timestampMs = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                            speedMps = if (loc.hasSpeed()) loc.speed.coerceAtLeast(0f) else 0f,
+                            bearingDeg = if (loc.hasBearing()) loc.bearing else 0f
                         )
                     )
                 }

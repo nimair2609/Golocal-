@@ -279,6 +279,10 @@ class AppSessionViewModel(
         viewModelScope.launch { prefsRepository.setRiderOnboarded(done) }
     }
 
+    fun setTestRiderIntent(enabled: Boolean) {
+        viewModelScope.launch { prefsRepository.setTestRiderIntent(enabled) }
+    }
+
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             prefsRepository.setLanguage(language)
@@ -378,6 +382,13 @@ class AppSessionViewModel(
     fun markNotificationRead(notificationId: String) {
         viewModelScope.launch {
             repository.markNotificationRead(notificationId)
+        }
+    }
+
+    fun markAllNotificationsRead(notificationIds: List<String>) {
+        if (notificationIds.isEmpty()) return
+        viewModelScope.launch {
+            repository.markAllNotificationsRead(notificationIds)
         }
     }
 

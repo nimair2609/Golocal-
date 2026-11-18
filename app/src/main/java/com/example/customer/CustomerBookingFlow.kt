@@ -155,6 +155,7 @@ fun CustomerBookRideScreen(
     val platformSettings by customerViewModel.platformSettings.collectAsStateWithLifecycle()
     val isVerifyingTestOtp by customerViewModel.isVerifyingTestOtp.collectAsStateWithLifecycle()
     val testOtpError by customerViewModel.testOtpError.collectAsStateWithLifecycle()
+    val activeRideOtpSecret by customerViewModel.activeRideOtpSecret.collectAsStateWithLifecycle()
 
     val customerAccount = (accountState as? UiState.Success)?.data
     val customerInvoiceEmail = customerAccount?.email.orEmpty()
@@ -252,6 +253,7 @@ fun CustomerBookRideScreen(
             onOpenCancel = { showCancelDialog = true },
             isVerifyingTestOtp = isVerifyingTestOtp,
             testOtpError = testOtpError,
+            rideOtpSecret = activeRideOtpSecret,
             onVerifyTestOtp = { otp -> customerViewModel.verifyTestRideOtp(currentBooking, otp) },
             onClearTestOtpError = { customerViewModel.clearTestOtpError() }
         )

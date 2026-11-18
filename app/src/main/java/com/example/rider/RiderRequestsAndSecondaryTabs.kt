@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,6 +72,7 @@ fun RiderRequestsTab(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
+            .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -135,13 +139,13 @@ fun RiderRequestsTab(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedButton(
                                 onClick = { driverViewModel.rejectRequest(booking.id) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                             ) {
                                 Text("Decline", color = GolocalError)
                             }
                             Button(
                                 onClick = { proposalTarget = booking },
-                                modifier = Modifier.weight(1.4f)
+                                modifier = Modifier.weight(1.4f).heightIn(min = 48.dp)
                             ) {
                                 Text("Propose Fare")
                             }
@@ -181,7 +185,10 @@ fun RiderRequestsTab(
                             )
                         }
                         if (offer.status == "pending") {
-                            TextButton(onClick = { driverViewModel.withdrawOffer(offer.id) }) {
+                            TextButton(
+                                onClick = { driverViewModel.withdrawOffer(offer.id) },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
                                 Text("Withdraw", color = GolocalError)
                             }
                         } else {
@@ -505,8 +512,22 @@ fun RiderEarningsHistoryTab(
 }
 
 @Composable
-fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
-    val notifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
+fun RiderNotificationsTab(
+    sessionViewModel: AppSessionViewModel,
+    testOnly: Boolean = false,
+    excludeTestNotifications: Boolean = false,
+    onNotificationClick: (com.example.notifications.NotificationDeepLinkTarget) -> Unit = {}
+) {
+    val allNotifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
+    val notifications = remember(allNotifications, testOnly, excludeTestNotifications) {
+        when {
+            testOnly -> allNotifications.filter { it.isTestNotification() }
+            excludeTestNotifications -> allNotifications.filter { !it.isTestNotification() }
+            else -> allNotifications
+        }
+    }
+    val unreadIds = remember(notifications) { notifications.filter { !it.read }.map { it.id } }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -514,14 +535,42 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "Rider Alerts & Updates",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (testOnly) "Test Rider Sandbox Alerts" else "Rider Alerts & Updates",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            if (unreadIds.isNotEmpty()) {
+                TextButton(
+                    onClick = { sessionViewModel.markAllNotificationsRead(unreadIds) },
+                    modifier = Modifier.testTag("rider_mark_all_read_button")
+                ) {
+                    Text("Mark all read (${unreadIds.size})")
+                }
+            }
+        }
+        NotificationPermissionBannerCard(
+            title = if (testOnly) "Enable Test Rider Push Alerts" else "Enable Rider Dispatch & Chat Alerts",
+            description = if (testOnly) {
+                "Receive non-commercial Test Ride dispatches, Test OTP readiness, and approval updates."
+            } else {
+                "Get instant ride requests, trip assignments, customer messages, and KYC status alerts."
+            }
         )
-        NotificationPermissionBannerCard()
         if (notifications.isEmpty()) {
-            GolocalEmptyState(title = "No Alerts Yet", message = "KYC verification updates, ride confirmations, chat messages, and payout statuses appear here.")
+            GolocalEmptyState(
+                title = if (testOnly) "No Test Rider Alerts Yet" else "No Alerts Yet",
+                message = if (testOnly) {
+                    "Isolated TEST RIDE requests, sandbox trip status updates, and Test Rider approval notices appear here."
+                } else {
+                    "KYC verification updates, ride confirmations, chat messages, and payout statuses appear here."
+                }
+            )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(notifications, key = { it.id }) { notif ->
@@ -531,12 +580,29 @@ fun RiderNotificationsTab(sessionViewModel: AppSessionViewModel) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                            .clickable { if (!notif.read) sessionViewModel.markNotificationRead(notif.id) }
+                            .clickable {
+                                if (!notif.read) sessionViewModel.markNotificationRead(notif.id)
+                                onNotificationClick(com.example.notifications.NotificationDeepLinkTarget.fromAppNotification(notif))
+                            }
+                            .testTag("rider_notification_item_${notif.id}")
                     ) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(notif.title, style = MaterialTheme.typography.titleSmall)
-                                if (!notif.read) GolocalStatusBadge(label = "NEW", tone = "info")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = notif.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (notif.isTestNotification()) {
+                                        GolocalStatusBadge(label = "TEST", tone = "warning")
+                                    }
+                                    if (!notif.read) GolocalStatusBadge(label = "NEW", tone = "info")
+                                }
                             }
                             Text(notif.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }

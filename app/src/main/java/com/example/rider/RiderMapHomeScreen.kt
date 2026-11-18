@@ -16,14 +16,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -72,6 +75,7 @@ import com.example.domain.DocumentExpiryAssessment
 import com.example.map.GolocalMapContainer
 import com.example.shared.LocationAccessState
 import com.example.shared.LocationCoordinator
+import com.example.shared.NotificationPermissionBannerCard
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalDeepNavy
 import com.example.ui.theme.GolocalError
@@ -237,7 +241,7 @@ fun RiderMapHomeScreen(
                             Icon(
                                 imageVector = Icons.Filled.Notifications,
                                 contentDescription = "Partner alerts",
-                                tint = GolocalDeepNavy
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -298,6 +302,11 @@ fun RiderMapHomeScreen(
                 }
             }
 
+            NotificationPermissionBannerCard(
+                title = "Enable Rider Ride & Chat Alerts",
+                description = "Receive instant ride requests, trip assignments, and passenger updates."
+            )
+
             if (expiryAlerts.isNotEmpty()) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -308,7 +317,7 @@ fun RiderMapHomeScreen(
                     Text(
                         text = "Document notice: ${expiryAlerts.joinToString { "${it.docType.displayLabel} (${it.status.name.lowercase()})" }}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = GolocalError,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
@@ -411,7 +420,10 @@ fun IncomingRideRequestOverlayCard(
     ) {
         Column(
             modifier = Modifier
+                .heightIn(max = 460.dp)
+                .verticalScroll(rememberScrollState())
                 .windowInsetsPadding(WindowInsets.safeDrawing)
+                .imePadding()
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -552,7 +564,7 @@ fun IncomingRideRequestOverlayCard(
                         IconButton(
                             onClick = { proposedFare = (proposedFare - 10f).coerceIn(minFare, maxFare) },
                             enabled = proposedFare > minFare,
-                            modifier = Modifier.size(44.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(Icons.Filled.Remove, contentDescription = "Decrease fare", tint = GolocalPureWhite)
                         }
@@ -573,7 +585,7 @@ fun IncomingRideRequestOverlayCard(
                         IconButton(
                             onClick = { proposedFare = (proposedFare + 10f).coerceIn(minFare, maxFare) },
                             enabled = proposedFare < maxFare,
-                            modifier = Modifier.size(44.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(Icons.Filled.Add, contentDescription = "Increase fare", tint = GolocalPureWhite)
                         }
@@ -745,7 +757,10 @@ private fun RiderIdleDashboardDock(
                             color = GolocalDeepNavy,
                             modifier = Modifier.weight(1f)
                         )
-                        TextButton(onClick = { onWithdrawOffer(topOffer.id) }) {
+                        TextButton(
+                            onClick = { onWithdrawOffer(topOffer.id) },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) {
                             Text("Withdraw", color = GolocalError)
                         }
                     }

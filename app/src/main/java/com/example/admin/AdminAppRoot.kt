@@ -34,9 +34,12 @@ import com.example.notifications.NotificationDeepLinkTarget
 import com.example.notifications.NotificationHelper
 import com.example.shared.ExperienceMode
 import com.example.shared.GolocalRoleSplashScreen
+import com.example.shared.NotificationPermissionBannerCard
 import com.example.shared.RoleAuthScreen
 import com.example.ui.auth.signOut
 import com.example.ui.components.GoLocalLogoMark
+import com.example.ui.components.GolocalEmptyState
+import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.components.GolocalStatusMessageBanner
 import com.example.ui.theme.*
 import com.example.updater.AppUpdateDialogHost
@@ -218,9 +221,12 @@ fun AdminAuthenticatedShell(
         val adminMsg by adminViewModel.message.collectAsStateWithLifecycle()
         val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
         val testBookings by adminViewModel.testBookings.collectAsStateWithLifecycle()
+        val adminNotifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
+        val unreadAdminNotifCount = remember(adminNotifications) { adminNotifications.count { !it.read } }
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
         val defaultModule = if (isAdmin) "dashboard" else "test_rides"
         var selectedModule by remember(isAdmin) { mutableStateOf(defaultModule) }
+        var showAdminNotificationsDialog by remember { mutableStateOf(false) }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
         LaunchedEffect(testBookings.size, platformSettings.testRideModeEnabled, platformSettings.testAutoAssignEnabled) {
@@ -292,6 +298,31 @@ fun AdminAuthenticatedShell(
                                 onDismiss = { adminViewModel.clearMessage() },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                             )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = modules.firstOrNull { it.first == selectedModule }?.second ?: "Admin Portal",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                OutlinedButton(
+                                    onClick = { showAdminNotificationsDialog = true },
+                                    modifier = Modifier.testTag("admin_notifications_button")
+                                ) {
+                                    Icon(Icons.Filled.Notifications, contentDescription = "Admin Alerts", modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(if (unreadAdminNotifCount > 0) "Alerts ($unreadAdminNotifCount)" else "Alerts")
+                                }
+                            }
+                            NotificationPermissionBannerCard(
+                                title = "Enable Operations & SOS Push Alerts",
+                                description = "Receive real-time SOS emergencies, Test Rider requests, KYC submissions, and booking exceptions.",
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                            )
                             AdminModuleContent(
                                 selectedModule = selectedModule,
                                 adminViewModel = adminViewModel,
@@ -331,6 +362,20 @@ fun AdminAuthenticatedShell(
                                         Icon(Icons.Filled.Menu, contentDescription = "Open Admin Menu")
                                     }
                                 },
+                                actions = {
+                                    IconButton(
+                                        onClick = { showAdminNotificationsDialog = true },
+                                        modifier = Modifier.testTag("admin_notifications_button")
+                                    ) {
+                                        if (unreadAdminNotifCount > 0) {
+                                            BadgedBox(badge = { Badge { Text(unreadAdminNotifCount.coerceAtMost(99).toString()) } }) {
+                                                Icon(Icons.Filled.Notifications, contentDescription = "Admin Alerts", tint = GolocalPureWhite)
+                                            }
+                                        } else {
+                                            Icon(Icons.Filled.Notifications, contentDescription = "Admin Alerts", tint = GolocalPureWhite)
+                                        }
+                                    }
+                                },
                                 colors = TopAppBarDefaults.topAppBarColors(
                                     containerColor = GolocalDeepNavy,
                                     titleContentColor = GolocalPureWhite,
@@ -345,6 +390,11 @@ fun AdminAuthenticatedShell(
                                 onDismiss = { adminViewModel.clearMessage() },
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
+                            NotificationPermissionBannerCard(
+                                title = "Enable Operations & SOS Push Alerts",
+                                description = "Receive real-time SOS emergencies, Test Rider requests, KYC submissions, and booking exceptions.",
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            )
                             AdminModuleContent(
                                 selectedModule = selectedModule,
                                 adminViewModel = adminViewModel,
@@ -355,6 +405,72 @@ fun AdminAuthenticatedShell(
                     }
                 }
             }
+        }
+
+        if (showAdminNotificationsDialog) {
+            val unreadIds = adminNotifications.filter { !it.read }.map { it.id }
+            AlertDialog(
+                onDismissRequest = { showAdminNotificationsDialog = false },
+                title = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Admin & Ops Alerts", style = MaterialTheme.typography.titleMedium)
+                        if (unreadIds.isNotEmpty()) {
+                            TextButton(onClick = { sessionViewModel.markAllNotificationsRead(unreadIds) }) {
+                                Text("Mark all read")
+                            }
+                        }
+                    }
+                },
+                text = {
+                    if (adminNotifications.isEmpty()) {
+                        GolocalEmptyState(
+                            title = "No Recent Alerts",
+                            message = "SOS alerts, new rider KYC applications, Test Rider requests, complaints, and booking exceptions appear here."
+                        )
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier.heightIn(max = 420.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(adminNotifications.size, key = { idx -> adminNotifications[idx].id }) { idx ->
+                                val notif = adminNotifications[idx]
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (notif.read) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            if (!notif.read) sessionViewModel.markNotificationRead(notif.id)
+                                            val target = NotificationDeepLinkTarget.fromAppNotification(notif)
+                                            val resolved = resolveAdminDeepLinkModule(null, target)
+                                            if (resolved != null && modules.any { it.first == resolved }) {
+                                                selectedModule = resolved
+                                            }
+                                            showAdminNotificationsDialog = false
+                                        }
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text(notif.title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                                            if (!notif.read) GolocalStatusBadge(label = "NEW", tone = "info")
+                                        }
+                                        Text(notif.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showAdminNotificationsDialog = false }) {
+                        Text("Close")
+                    }
+                }
+            )
         }
 
         AppUpdateDialogHost(controller = updateController)
@@ -474,10 +590,10 @@ internal fun resolveAdminDeepLinkModule(
     val normalizedScreen = screenHint?.lowercase()
     val fromScreen = when (normalizedScreen) {
         "dashboard", "home" -> "dashboard"
-        "test_rides", "test_ride", "test_otp" -> "test_rides"
+        "test_rides", "test_ride", "test_otp", "test_riders", "test_rider", "test_rider_request", "test_rider_status", "test_rider_dashboard" -> "test_rides"
         "customers", "users", "support" -> "customers"
         "riders", "drivers", "kyc" -> "riders"
-        "bookings", "trips", "rides", "sos", "emergency", "complaints", "appeals" -> "bookings"
+        "bookings", "trips", "rides", "sos", "emergency", "safety", "complaints", "disputes", "appeals" -> "bookings"
         "buses", "bus" -> "buses"
         "services", "fares", "service_areas" -> "services"
         "payments", "settlements", "refunds" -> "payments"
@@ -488,9 +604,9 @@ internal fun resolveAdminDeepLinkModule(
     if (fromScreen != null) return fromScreen
 
     return when (deepLinkTarget?.type?.trim()?.lowercase()) {
-        "sos", "emergency", "booking", "complaint", "appeal" -> "bookings"
-        "test_ride", "test_otp" -> "test_rides"
-        "kyc", "driver" -> "riders"
+        "sos", "sos_alert", "emergency", "booking", "booking_exception", "booking_cancelled", "dispute", "dispute_opened", "complaint", "complaint_opened", "cancellation_appeal", "appeal" -> "bookings"
+        "test_ride", "test_otp", "test_rider", "test_rider_request", "test_rider_status" -> "test_rides"
+        "kyc", "driver", "pending_verification", "new_rider_application" -> "riders"
         "payment", "settlement", "refund" -> "payments"
         "bus", "bus_booking" -> "buses"
         "update" -> "settings"

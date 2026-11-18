@@ -1507,3 +1507,446 @@ test("Admin-Controlled Live Test Ride Mode (13 Acceptance Scenarios): authorizat
   await assertSucceeds(opsDb.collection("ride_assignments").doc(TEST_BOOKING_ID).delete());
   await assertSucceeds(opsDb.collection("bookings").doc(TEST_BOOKING_ID).delete());
 });
+
+test("Test Rider Sandbox Mode: applicant onboarding, Ops recommend-only vs Owner Admin approval/revoke, test ride claim, ride_otp_secrets privacy & bi-directional OTP verification", async () => {
+  const TEST_RIDER_UID = "test_rider_qa_1";
+  const OPS_UID = "ops_sandbox_mgr";
+  const ADMIN_UID = "admin_uid";
+  const TEST_BOOKING_ID = "sandbox_ride_001";
+
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const opsDb = testEnv.authenticatedContext(OPS_UID).firestore();
+  const riderDb = testEnv.authenticatedContext(TEST_RIDER_UID, { phone_number: "+919811112222" }).firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
+  const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+  function sha256Otp(bookingId, otp) {
+    return crypto.createHash("sha256").update(`${bookingId}:${otp}`).digest("hex");
+  }
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("operations_staff").doc(OPS_UID).set({
+      userId: OPS_UID,
+      displayName: "Ops Reviewer",
+      assignedDistrict: "Hooghly",
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("platform_settings").doc("global").set({
+      helplineNumber: "+91-1800-103-0000",
+      testRideModeEnabled: true,
+      updatedAt: nowTs(),
+    });
+    await db.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
+      userId: CUSTOMER_UID,
+      fullName: "Alice Sandbox",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      isTestCustomer: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("bookings").doc("prod_booking_hidden").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice Sandbox",
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Bandel",
+      destinationLabel: "Chinsurah",
+      distanceKm: 4.0,
+      estimatedFareInr: 70,
+      minPermittedFareInr: 60,
+      maxPermittedFareInr: 90,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "searching",
+      is_test_ride: false,
+      test_mode: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await db.collection("bookings").doc(TEST_BOOKING_ID).set({
+      customerId: CUSTOMER_UID,
+      customerName: "Alice Sandbox",
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Bandel",
+      destinationLabel: "Hooghly Ghat",
+      distanceKm: 3.5,
+      estimatedFareInr: 0,
+      minPermittedFareInr: 0,
+      maxPermittedFareInr: 0,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "searching",
+      is_test_ride: true,
+      test_mode: true,
+      test_otp_status: "awaiting_assignment",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  // 1. Applicant CANNOT self-approve or spoof reviewedByUid; CAN submit pending request
+  await assertFails(
+    riderDb.collection("test_rider_requests").doc(TEST_RIDER_UID).set({
+      uid: TEST_RIDER_UID,
+      fullName: "QA Test Rider",
+      mobileNumber: "+919811112222",
+      vehicleCategory: "toto",
+      testPurpose: "Field GPS validation",
+      status: "approved",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    riderDb.collection("test_riders").doc(TEST_RIDER_UID).set({
+      uid: TEST_RIDER_UID,
+      displayName: "QA Test Rider",
+      vehicleCategory: "toto",
+      status: "approved",
+      isOnline: true,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    riderDb.collection("test_rider_requests").doc(TEST_RIDER_UID).set({
+      uid: TEST_RIDER_UID,
+      fullName: "QA Test Rider",
+      mobileNumber: "+919811112222",
+      email: "qa@nrnext.in",
+      vehicleCategory: "toto",
+      testPurpose: "Field GPS validation across Hooghly",
+      notes: "",
+      status: "pending",
+      rejectionReason: "",
+      reviewedByUid: "",
+      reviewedByRole: "",
+      reviewNote: "",
+      opsRecommendation: "",
+      opsRecommendedByUid: "",
+      opsRecommendedNote: "",
+      isOnline: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Pending rider CANNOT read searching test rides yet
+  await assertFails(riderDb.collection("bookings").doc(TEST_BOOKING_ID).get());
+
+  // 2. Operations Staff CAN recommend ONLY (CANNOT approve, reject, or write test_riders)
+  await assertFails(
+    opsDb.collection("test_rider_requests").doc(TEST_RIDER_UID).update({
+      status: "approved",
+      reviewedByUid: OPS_UID,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    opsDb.collection("test_riders").doc(TEST_RIDER_UID).set({
+      uid: TEST_RIDER_UID,
+      displayName: "QA Test Rider",
+      vehicleCategory: "toto",
+      status: "approved",
+      isOnline: false,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    opsDb.collection("test_rider_requests").doc(TEST_RIDER_UID).update({
+      opsRecommendation: "recommend_approve",
+      opsRecommendedByUid: OPS_UID,
+      opsRecommendedNote: "Verified internal QA tester",
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 3. Owner Admin rejects with reason -> Applicant reapplies -> Owner Admin approves + creates test_riders doc
+  await assertFails(
+    adminDb.collection("test_rider_requests").doc(TEST_RIDER_UID).update({
+      status: "rejected",
+      rejectionReason: "no",
+      reviewedByUid: ADMIN_UID,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("test_rider_requests").doc(TEST_RIDER_UID).update({
+      status: "rejected",
+      rejectionReason: "Please clarify testing district",
+      reviewedByUid: ADMIN_UID,
+      reviewedByRole: "admin",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    riderDb.collection("test_rider_requests").doc(TEST_RIDER_UID).update({
+      fullName: "QA Test Rider",
+      mobileNumber: "+919811112222",
+      email: "qa@nrnext.in",
+      vehicleCategory: "toto",
+      testPurpose: "Field GPS validation in Chinsurah",
+      notes: "Reapplied with district details",
+      status: "pending",
+      rejectionReason: "",
+      reviewedByUid: "",
+      opsRecommendation: "",
+      deviceInfoSummary: "Android",
+      updatedAt: nowTs(),
+    })
+  );
+
+  const approveBatch = adminDb.batch();
+  approveBatch.update(adminDb.collection("test_rider_requests").doc(TEST_RIDER_UID), {
+    status: "approved",
+    rejectionReason: "",
+    reviewedByUid: ADMIN_UID,
+    reviewedByRole: "admin",
+    reviewNote: "Approved for sandbox QA",
+    updatedAt: nowTs(),
+  });
+  approveBatch.set(adminDb.collection("test_riders").doc(TEST_RIDER_UID), {
+    uid: TEST_RIDER_UID,
+    displayName: "QA Test Rider",
+    mobileNumber: "+919811112222",
+    vehicleCategory: "toto",
+    vehicleLabel: "TEST RIDER • TOTO",
+    status: "approved",
+    isOnline: false,
+    currentLat: 0,
+    currentLng: 0,
+    completedTestRides: 0,
+    updatedAt: nowTs(),
+  });
+  approveBatch.set(adminDb.collection("test_rider_audit_logs").doc("tr_audit_1"), {
+    targetUid: TEST_RIDER_UID,
+    actorUid: ADMIN_UID,
+    actorRole: "admin",
+    action: "TEST_RIDER_APPROVED",
+    previousStatus: "pending",
+    newStatus: "approved",
+    reason: "",
+    note: "Approved for sandbox QA",
+    createdAt: nowTs(),
+  });
+  await assertSucceeds(approveBatch.commit());
+
+  // Approved Test Rider does NOT gain commercial KYC verification and CANNOT read production searching rides
+  await assertFails(riderDb.collection("bookings").doc("prod_booking_hidden").get());
+  await assertSucceeds(riderDb.collection("bookings").doc(TEST_BOOKING_ID).get());
+  await assertSucceeds(
+    riderDb.collection("bookings").where("status", "==", "searching").where("is_test_ride", "==", true).get()
+  );
+
+  // Approved Test Rider can toggle only allowed live presence keys on test_riders
+  await assertSucceeds(
+    riderDb.collection("test_riders").doc(TEST_RIDER_UID).update({
+      isOnline: true,
+      currentLat: 22.91,
+      currentLng: 88.39,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 4. Test Rider claims open test ride atomically & initializes 6-digit OTP challenge + Customer-only ride_otp_secrets
+  const RIDER_OTP = "593827";
+  const futureDate = new Date(Date.now() + 300 * 1000);
+  const claimBatch = riderDb.batch();
+  claimBatch.update(riderDb.collection("bookings").doc(TEST_BOOKING_ID), {
+    status: "assigned",
+    assignedDriverId: TEST_RIDER_UID,
+    assignedDriverName: "QA Test Rider",
+    assignedVehicleLabel: "TEST RIDER • TOTO",
+    agreedFareInr: 0,
+    test_otp_status: "pending",
+    test_otp_expires_at_ms: futureDate.getTime(),
+    updatedAt: nowTs(),
+  });
+  claimBatch.set(riderDb.collection("ride_assignments").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    driverId: TEST_RIDER_UID,
+    offerId: "test_rider_claim",
+    lockedFareInr: 1,
+    status: "active",
+    is_test_ride: true,
+    assignedByUid: TEST_RIDER_UID,
+    assignedByRole: "customer",
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  claimBatch.set(riderDb.collection("test_ride_otps").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    otpHash: sha256Otp(TEST_BOOKING_ID, RIDER_OTP),
+    submittedHash: "",
+    used: false,
+    overridden: false,
+    overrideReason: "",
+    overrideRequestedByUid: "",
+    overrideRequestedReason: "",
+    overriddenByUid: "",
+    verifiedByUid: "",
+    attempts: 0,
+    maxAttempts: 5,
+    expiresAt: futureDate,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  claimBatch.set(riderDb.collection("ride_otp_secrets").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    otpPlaintext: RIDER_OTP,
+    isTestRide: true,
+    status: "pending",
+    expiresAt: futureDate,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  claimBatch.set(riderDb.collection("trip_locations").doc(TEST_BOOKING_ID), {
+    bookingId: TEST_BOOKING_ID,
+    customerId: CUSTOMER_UID,
+    driverId: TEST_RIDER_UID,
+    lat: 22.91,
+    lng: 88.39,
+    isTestRide: true,
+    isSimulated: false,
+    updatedAt: nowTs(),
+  });
+  await assertSucceeds(claimBatch.commit());
+
+  // 5. Privacy of ride_otp_secrets: ONLY Customer (and Admin/Ops) can read plaintext OTP; Test Rider and outsiders CANNOT read it
+  await assertSucceeds(custDb.collection("ride_otp_secrets").doc(TEST_BOOKING_ID).get());
+  await assertFails(riderDb.collection("ride_otp_secrets").doc(TEST_BOOKING_ID).get());
+  await assertFails(bobDb.collection("ride_otp_secrets").doc(TEST_BOOKING_ID).get());
+
+  // 6. Test Rider advances assigned -> arriving -> arrived; cannot jump arrived -> in_progress without valid OTP
+  await assertSucceeds(riderDb.collection("bookings").doc(TEST_BOOKING_ID).update({ status: "arriving", updatedAt: nowTs() }));
+  await assertSucceeds(riderDb.collection("bookings").doc(TEST_BOOKING_ID).update({ status: "arrived", updatedAt: nowTs() }));
+  await assertFails(riderDb.collection("bookings").doc(TEST_BOOKING_ID).update({ status: "in_progress", updatedAt: nowTs() }));
+
+  // Wrong OTP hash rejected for Test Rider; valid OTP entered by Test Rider succeeds atomically
+  await assertFails(
+    riderDb.collection("test_ride_otps").doc(TEST_BOOKING_ID).update({
+      used: true,
+      submittedHash: sha256Otp(TEST_BOOKING_ID, "000000"),
+      verifiedByUid: TEST_RIDER_UID,
+      updatedAt: nowTs(),
+    })
+  );
+  const riderOtpBatch = riderDb.batch();
+  riderOtpBatch.update(riderDb.collection("test_ride_otps").doc(TEST_BOOKING_ID), {
+    used: true,
+    submittedHash: sha256Otp(TEST_BOOKING_ID, RIDER_OTP),
+    verifiedByUid: TEST_RIDER_UID,
+    updatedAt: nowTs(),
+  });
+  riderOtpBatch.update(riderDb.collection("bookings").doc(TEST_BOOKING_ID), {
+    status: "in_progress",
+    test_otp_status: "verified",
+    updatedAt: nowTs(),
+  });
+  await assertSucceeds(riderOtpBatch.commit());
+
+  // 7. Owner Admin revokes Test Rider -> rider immediately loses access to searching test rides
+  await assertSucceeds(
+    adminDb.collection("test_riders").doc(TEST_RIDER_UID).update({
+      status: "revoked",
+      isOnline: false,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    riderDb.collection("bookings").where("status", "==", "searching").where("is_test_ride", "==", true).get()
+  );
+});
+
+test("Multi-device FCM tokens & Notification Centre isolation rules", async () => {
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  const riderDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
+  const rogueDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+  const opsDb = testEnv.authenticatedContext("ops_staff_notif").firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("operations_staff").doc("ops_staff_notif").set({
+      userId: "ops_staff_notif",
+      displayName: "Ops Notif User",
+      assignedDistrict: "Hooghly",
+      isActive: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  // 1. User registers multiple simultaneous devices cleanly; deleting one device preserves the other
+  await assertSucceeds(
+    custDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer_devA`).set({
+      userId: CUSTOMER_UID,
+      deviceId: "devA",
+      appVariant: "customer",
+      appVersionCode: 10,
+      platform: "android",
+      token: "fcm_tok_device_A",
+      active: true,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    custDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer_devB`).set({
+      userId: CUSTOMER_UID,
+      deviceId: "devB",
+      appVariant: "customer",
+      appVersionCode: 10,
+      platform: "android",
+      token: "fcm_tok_device_B",
+      active: true,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Sign out on devA deletes only devA token; outsider cannot spoof or delete another user's token
+  await assertFails(rogueDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer_devB`).delete());
+  await assertFails(
+    rogueDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer_devC`).set({
+      userId: CUSTOMER_UID,
+      deviceId: "devC",
+      appVariant: "customer",
+      platform: "android",
+      token: "spoof_tok",
+      active: true,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(custDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer_devA`).delete());
+  await assertSucceeds(custDb.collection("user_tokens").doc(`${CUSTOMER_UID}_customer_devB`).get());
+
+  // 2. Notification Centre metadata writes & strict recipient read/read-only update isolation
+  await assertSucceeds(
+    opsDb.collection("notifications").doc("notif_test_1").set({
+      userId: CUSTOMER_UID,
+      title: "TEST RIDE Assigned",
+      body: "Open Active Ride to verify your pickup code.",
+      type: "test_otp",
+      bookingId: "bk_test_1",
+      entityId: "bk_test_1",
+      targetApp: "customer",
+      targetScreen: "booking",
+      isTestRide: true,
+      read: false,
+      createdAt: nowTs(),
+    })
+  );
+  await assertSucceeds(custDb.collection("notifications").doc("notif_test_1").get());
+  await assertSucceeds(custDb.collection("notifications").doc("notif_test_1").update({ read: true }));
+  await assertFails(custDb.collection("notifications").doc("notif_test_1").update({ read: true, title: "Hacked" }));
+  await assertFails(riderDb.collection("notifications").doc("notif_test_1").get());
+  await assertSucceeds(adminDb.collection("notifications").doc("notif_test_1").get());
+});
+

@@ -332,6 +332,10 @@ data class TripLocation(
     val driverId: String = "",
     val lat: Double = 0.0,
     val lng: Double = 0.0,
+    val headingDeg: Double = 0.0,
+    val speedKmph: Double = 0.0,
+    val accuracyMeters: Double = 15.0,
+    val trackingStatus: String = "active",
     @get:PropertyName("isTestRide")
     @PropertyName("isTestRide")
     val isTestRide: Boolean = false,
@@ -463,9 +467,22 @@ data class AppNotification(
     val title: String = "",
     val body: String = "",
     val type: String = "booking",
+    val bookingId: String = "",
+    val entityId: String = "",
+    val targetApp: String = "",
+    val targetScreen: String = "",
+    @get:PropertyName("isTestRide")
+    @PropertyName("isTestRide")
+    val isTestRide: Boolean = false,
     val read: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null
-)
+) {
+    fun isTestNotification(): Boolean =
+        isTestRide ||
+            type.startsWith("test_", ignoreCase = true) ||
+            title.contains("[TEST", ignoreCase = true) ||
+            targetScreen.contains("test_rider", ignoreCase = true)
+}
 
 @IgnoreExtraProperties
 data class SupportRequest(

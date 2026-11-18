@@ -17,7 +17,9 @@ service cloud.firestore {
 
     function isBootstrappedAdmin() {
       return isSignedIn() &&
+             'email_verified' in request.auth.token &&
              request.auth.token.email_verified == true &&
+             'email' in request.auth.token &&
              request.auth.token.email == 'renukadas083@gmail.com';
     }
 
@@ -274,6 +276,27 @@ service cloud.firestore {
              isValidTimestamp(data.updatedAt);
     }
 
+    function isValidBookingUpdate(data) {
+      return data.status in ['searching', 'assigned', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled'] &&
+             data.paymentStatus in ['pending', 'pending_verification', 'settled_cash', 'paid', 'refunded'] &&
+             (!('agreedFareInr' in data) || (data.agreedFareInr is number && data.agreedFareInr >= 0)) &&
+             (!('assignedDriverId' in data) || (data.assignedDriverId is string && data.assignedDriverId.size() <= 128)) &&
+             (!('assignedDriverName' in data) || (data.assignedDriverName is string && data.assignedDriverName.size() <= 100)) &&
+             (!('assignedVehicleLabel' in data) || (data.assignedVehicleLabel is string && data.assignedVehicleLabel.size() <= 100)) &&
+             (!('acceptedOfferId' in data) || (data.acceptedOfferId is string && data.acceptedOfferId.size() <= 128)) &&
+             (!('tripPin' in data) || (data.tripPin is string && data.tripPin.size() <= 10)) &&
+             (!('cancellationReason' in data) || (data.cancellationReason is string && data.cancellationReason.size() <= 250)) &&
+             (!('cancelledBy' in data) || (data.cancelledBy is string && data.cancelledBy.size() <= 128)) &&
+             (!('cancelledByRole' in data) || data.cancelledByRole in ['', 'customer', 'driver', 'admin', 'ops_staff']) &&
+             (!('cancellationCategory' in data) || (data.cancellationCategory is string && data.cancellationCategory.size() <= 120)) &&
+             (!('customerRating' in data) || (data.customerRating is int && data.customerRating >= 1 && data.customerRating <= 5)) &&
+             (!('customerFeedbackRating' in data) || (data.customerFeedbackRating is int && data.customerFeedbackRating >= 1 && data.customerFeedbackRating <= 5)) &&
+             (!('customerFeedbackNote' in data) || (data.customerFeedbackNote is string && data.customerFeedbackNote.size() <= 300)) &&
+             (!('test_otp_status' in data) || (data.test_otp_status is string && data.test_otp_status.size() <= 40)) &&
+             (!('test_otp_expires_at_ms' in data) || (data.test_otp_expires_at_ms is int && data.test_otp_expires_at_ms >= 0)) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
     function isValidRideOffer(data) {
       return data.bookingId is string && isValidId(data.bookingId) &&
              data.customerId is string && data.customerId.size() <= 128 &&
@@ -415,6 +438,11 @@ service cloud.firestore {
              data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
              data.body is string && data.body.size() >= 1 && data.body.size() <= 300 &&
              data.type is string && data.type.size() >= 1 && data.type.size() <= 50 &&
+             isOptionalString(data, 'bookingId', 128) &&
+             isOptionalString(data, 'entityId', 128) &&
+             isOptionalString(data, 'targetApp', 30) &&
+             isOptionalString(data, 'targetScreen', 64) &&
+             (!('isTestRide' in data) || data.isTestRide is bool) &&
              data.read is bool &&
              isValidTimestamp(data.createdAt);
     }
@@ -754,28 +782,110 @@ service cloud.firestore {
                        isValidBooking(incoming());
       allow update: if isSignedIn() &&
                        isValidId(bookingId) &&
-                       isValidBooking(incoming()) &&
                        incoming().customerId == existing().customerId &&
-                       incoming().createdAt == existing().createdAt && (
-                         // Action: Owner Admin manages bookings & test rides (assigning test drivers still requires authorized test partner or simulated unit, and test override requires valid challenge)
-                         (isAdmin() &&
-                          (!('is_test_ride' in existing()) ||
-                           existing().is_test_ride != true ||
-                           ((incoming().assignedDriverId == existing().assignedDriverId ||
-                             incoming().assignedDriverId == '' ||
-                             isAuthorizedTestPartnerId(incoming().assignedDriverId)) &&
-                            (existing().status != 'arrived' ||
-                             incoming().status != 'in_progress' ||
-                             (existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
-                              (getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true ||
-                               getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == true)))))) ||
+                       incoming().createdAt == existing().createdAt &&
+                       isValidBookingUpdate(incoming()) && (
+                         // Customer participant actions
+                         (request.auth.uid == existing().customerId && (
+                           // Verify pickup OTP atomically against test_ride_otps/{bookingId} (arrived -> in_progress)
+                           ('is_test_ride' in existing() &&
+                            existing().is_test_ride == true &&
+                            existing().status == 'arrived' &&
+                            incoming().status == 'in_progress' &&
+                            incoming().test_otp_status == 'verified' &&
+                            existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
+                            getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true &&
+                            getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == false &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'test_otp_status', 'updatedAt'
+                            ])) ||
+                           // Confirm accepted offer on real bookings (searching -> assigned)
+                           ((!('is_test_ride' in existing()) || existing().is_test_ride != true) &&
+                            existing().status == 'searching' &&
+                            incoming().status == 'assigned' &&
+                            incoming().assignedDriverId is string && incoming().assignedDriverId.size() >= 1 &&
+                            incoming().acceptedOfferId is string && isValidId(incoming().acceptedOfferId) &&
+                            exists(/databases/$(database)/documents/ride_offers/$(incoming().acceptedOfferId)) &&
+                            get(/databases/$(database)/documents/ride_offers/$(incoming().acceptedOfferId)).data.bookingId == bookingId &&
+                            get(/databases/$(database)/documents/ride_offers/$(incoming().acceptedOfferId)).data.driverId == incoming().assignedDriverId &&
+                            !exists(/databases/$(database)/documents/ride_assignments/$(bookingId)) &&
+                            incoming().agreedFareInr >= existing().minPermittedFareInr &&
+                            incoming().agreedFareInr <= existing().maxPermittedFareInr &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
+                              'acceptedOfferId', 'agreedFareInr', 'tripPin', 'updatedAt'
+                            ])) ||
+                           // Cancel before trip starts
+                           (existing().status in ['searching', 'assigned', 'arriving', 'arrived'] &&
+                            incoming().status == 'cancelled' &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory', 'updatedAt'
+                            ])) ||
+                           // Submit rating after completion
+                           (existing().status == 'completed' &&
+                            incoming().status == 'completed' &&
+                            !('customerRating' in existing()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['customerRating', 'updatedAt']))
+                         )) ||
+                         // Assigned driver / Test Rider actions
+                         ('assignedDriverId' in existing() && request.auth.uid == existing().assignedDriverId && (
+                           // Verify customer pickup OTP atomically against test_ride_otps/{bookingId} (arrived -> in_progress)
+                           ('is_test_ride' in existing() &&
+                            existing().is_test_ride == true &&
+                            existing().status == 'arrived' &&
+                            incoming().status == 'in_progress' &&
+                            incoming().test_otp_status == 'verified' &&
+                            existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
+                            getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true &&
+                            getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == false &&
+                            getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.verifiedByUid == request.auth.uid &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'test_otp_status', 'updatedAt'
+                            ])) ||
+                           // Cancel before trip starts
+                           (existing().status in ['assigned', 'arriving', 'arrived'] &&
+                            incoming().status == 'cancelled' &&
+                            incoming().cancelledBy == request.auth.uid &&
+                            incoming().cancelledByRole == 'driver' &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory', 'updatedAt'
+                            ])) ||
+                           // Submit optional customer feedback after completion
+                           (existing().status == 'completed' &&
+                            incoming().status == 'completed' &&
+                            !('customerFeedbackRating' in existing()) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['customerFeedbackRating', 'customerFeedbackNote', 'updatedAt'])) ||
+                           // Advance active trip state (NEVER allowed to jump arrived -> in_progress on test rides without verified challenge!)
+                           (!(existing().status in ['completed', 'cancelled']) &&
+                            ((existing().status == 'assigned' && incoming().status == 'arriving') ||
+                             (existing().status == 'arriving' && incoming().status == 'arrived') ||
+                             (existing().status == 'arrived' && incoming().status == 'in_progress' &&
+                              (!('is_test_ride' in existing()) || existing().is_test_ride != true)) ||
+                             (existing().status == 'in_progress' && incoming().status == 'completed' &&
+                              ((!('is_test_ride' in existing()) || existing().is_test_ride != true) ||
+                               incoming().paymentStatus == existing().paymentStatus))) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'paymentStatus', 'updatedAt'
+                            ]))
+                         )) ||
+                         // Action: Approved Test Rider claims an unassigned searching Test Ride (searching -> assigned)
+                         ('is_test_ride' in existing() &&
+                          existing().is_test_ride == true &&
+                          existing().status == 'searching' &&
+                          incoming().status == 'assigned' &&
+                          incoming().assignedDriverId == request.auth.uid &&
+                          isApprovedTestRider() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
+                            'agreedFareInr', 'test_otp_status', 'test_otp_expires_at_ms', 'updatedAt'
+                          ])) ||
                          // Action: Operations Staff manages Admin-controlled Test Rides ONLY (cannot bypass OTP or assign unauthorized partners)
-                         (isOperationsStaff() &&
-                          'is_test_ride' in existing() &&
+                         ('is_test_ride' in existing() &&
                           existing().is_test_ride == true &&
                           incoming().is_test_ride == true &&
                           incoming().test_mode == true &&
-                          (incoming().assignedDriverId == existing().assignedDriverId ||
+                          isOperationsStaff() &&
+                          (('assignedDriverId' in existing() && incoming().assignedDriverId == existing().assignedDriverId) ||
                            incoming().assignedDriverId == '' ||
                            isAuthorizedTestPartnerId(incoming().assignedDriverId)) &&
                           (existing().status != 'arrived' ||
@@ -789,102 +899,18 @@ service cloud.firestore {
                             'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory',
                             'updatedAt'
                           ])) ||
-                         // Action: Approved Test Rider claims an unassigned searching Test Ride (searching -> assigned)
-                         (isApprovedTestRider() &&
-                          'is_test_ride' in existing() &&
-                          existing().is_test_ride == true &&
-                          existing().status == 'searching' &&
-                          incoming().status == 'assigned' &&
-                          incoming().assignedDriverId == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
-                            'agreedFareInr', 'test_otp_status', 'test_otp_expires_at_ms', 'updatedAt'
-                          ])) ||
-                         // Action: Customer verifies pickup OTP atomically against test_ride_otps/{bookingId} (arrived -> in_progress)
-                         (request.auth.uid == existing().customerId &&
-                          'is_test_ride' in existing() &&
-                          existing().is_test_ride == true &&
-                          existing().status == 'arrived' &&
-                          incoming().status == 'in_progress' &&
-                          incoming().test_otp_status == 'verified' &&
-                          existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
-                          getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true &&
-                          getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == false &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'test_otp_status', 'updatedAt'
-                          ])) ||
-                         // Action: Assigned Test Rider verifies Customer pickup OTP atomically against test_ride_otps/{bookingId} (arrived -> in_progress)
-                         (request.auth.uid == existing().assignedDriverId &&
-                          'is_test_ride' in existing() &&
-                          existing().is_test_ride == true &&
-                          existing().status == 'arrived' &&
-                          incoming().status == 'in_progress' &&
-                          incoming().test_otp_status == 'verified' &&
-                          existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
-                          getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true &&
-                          getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == false &&
-                          getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.verifiedByUid == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'test_otp_status', 'updatedAt'
-                          ])) ||
-                         // Action: Customer confirms an accepted offer (searching -> assigned) on real bookings
-                         (request.auth.uid == existing().customerId &&
-                          (!('is_test_ride' in existing()) || existing().is_test_ride != true) &&
-                          existing().status == 'searching' &&
-                          incoming().status == 'assigned' &&
-                          incoming().assignedDriverId is string && incoming().assignedDriverId.size() >= 1 &&
-                          incoming().acceptedOfferId is string && isValidId(incoming().acceptedOfferId) &&
-                          exists(/databases/$(database)/documents/ride_offers/$(incoming().acceptedOfferId)) &&
-                          get(/databases/$(database)/documents/ride_offers/$(incoming().acceptedOfferId)).data.bookingId == bookingId &&
-                          get(/databases/$(database)/documents/ride_offers/$(incoming().acceptedOfferId)).data.driverId == incoming().assignedDriverId &&
-                          !exists(/databases/$(database)/documents/ride_assignments/$(bookingId)) &&
-                          incoming().agreedFareInr >= existing().minPermittedFareInr &&
-                          incoming().agreedFareInr <= existing().maxPermittedFareInr &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
-                            'acceptedOfferId', 'agreedFareInr', 'tripPin', 'updatedAt'
-                          ])) ||
-                         // Action: Customer cancels before trip starts
-                         (request.auth.uid == existing().customerId &&
-                          existing().status in ['searching', 'assigned', 'arriving', 'arrived'] &&
-                          incoming().status == 'cancelled' &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory', 'updatedAt'
-                          ])) ||
-                         // Action: Assigned driver cancels before trip starts
-                         (request.auth.uid == existing().assignedDriverId &&
-                          existing().status in ['assigned', 'arriving', 'arrived'] &&
-                          incoming().status == 'cancelled' &&
-                          incoming().cancelledBy == request.auth.uid &&
-                          incoming().cancelledByRole == 'driver' &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory', 'updatedAt'
-                          ])) ||
-                         // Action: Customer submits rating after completion
-                         (request.auth.uid == existing().customerId &&
-                          existing().status == 'completed' &&
-                          incoming().status == 'completed' &&
-                          !('customerRating' in existing()) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['customerRating', 'updatedAt'])) ||
-                         // Action: Assigned driver submits optional customer feedback after completion
-                         (request.auth.uid == existing().assignedDriverId &&
-                          existing().status == 'completed' &&
-                          incoming().status == 'completed' &&
-                          !('customerFeedbackRating' in existing()) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['customerFeedbackRating', 'customerFeedbackNote', 'updatedAt'])) ||
-                         // Action: Assigned driver advances active trip state (NEVER allowed to jump arrived -> in_progress on test rides without verified challenge!)
-                         (request.auth.uid == existing().assignedDriverId &&
-                          !(existing().status in ['completed', 'cancelled']) &&
-                          ((existing().status == 'assigned' && incoming().status == 'arriving') ||
-                           (existing().status == 'arriving' && incoming().status == 'arrived') ||
-                           (existing().status == 'arrived' && incoming().status == 'in_progress' &&
-                            (!('is_test_ride' in existing()) || existing().is_test_ride != true)) ||
-                           (existing().status == 'in_progress' && incoming().status == 'completed' &&
-                            ((!('is_test_ride' in existing()) || existing().is_test_ride != true) ||
-                             incoming().paymentStatus == existing().paymentStatus))) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'paymentStatus', 'updatedAt'
-                          ]))
+                         // Action: Owner Admin manages bookings & test rides (assigning test drivers still requires authorized test partner or simulated unit, and test override requires valid challenge)
+                         (isAdmin() &&
+                          (!('is_test_ride' in existing()) ||
+                           existing().is_test_ride != true ||
+                           ((('assignedDriverId' in existing() && incoming().assignedDriverId == existing().assignedDriverId) ||
+                             incoming().assignedDriverId == '' ||
+                             isAuthorizedTestPartnerId(incoming().assignedDriverId)) &&
+                            (existing().status != 'arrived' ||
+                             incoming().status != 'in_progress' ||
+                             (existsAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)) &&
+                              (getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.used == true ||
+                               getAfter(/databases/$(database)/documents/test_ride_otps/$(bookingId)).data.overridden == true))))))
                        );
       allow delete: if isStaffOrAdmin() &&
                        isValidId(bookingId) &&
@@ -1515,7 +1541,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 27. FCM device tokens (strictly owner or admin)
+    // 27. FCM device tokens (strictly owner or admin; supports multi-device registration)
     match /user_tokens/{tokenId} {
       allow get: if isSignedIn() && isValidId(tokenId) && (existing().userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
@@ -1525,6 +1551,8 @@ service cloud.firestore {
                                incoming().platform == 'android' &&
                                incoming().appVariant in ['customer', 'rider', 'admin'] &&
                                incoming().active is bool &&
+                               isOptionalString(incoming(), 'deviceId', 128) &&
+                               (!('appVersionCode' in incoming()) || incoming().appVersionCode is int) &&
                                isOptionalString(incoming(), 'token', 400) &&
                                isValidTimestamp(incoming().updatedAt);
       allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);

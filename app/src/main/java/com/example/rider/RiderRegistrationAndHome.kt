@@ -102,7 +102,8 @@ fun RiderRegistrationAndVerificationGate(
     existingProfile: DriverProfile?,
     displayName: String,
     driverViewModel: DriverViewModel,
-    verifiedPhone: String = ""
+    verifiedPhone: String = "",
+    onSwitchToTestRiderMode: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -203,6 +204,17 @@ fun RiderRegistrationAndVerificationGate(
                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Sign Out")
+            }
+        }
+
+        if (onSwitchToTestRiderMode != null) {
+            OutlinedButton(
+                onClick = onSwitchToTestRiderMode,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("kyc_switch_to_test_rider_button")
+            ) {
+                Text("Want QA Testing Without KYC? Switch to Test Rider Mode")
             }
         }
 
@@ -528,6 +540,9 @@ fun RiderHomeDashboardTab(
     val currentLat = gps.lat ?: 22.9041
     val currentLng = gps.lng ?: 88.3976
 
+    val isVerifyingTestOtp by driverViewModel.isVerifyingTestOtp.collectAsStateWithLifecycle()
+    val testOtpError by driverViewModel.testOtpError.collectAsStateWithLifecycle()
+
     if (activeTrip != null) {
         RiderActiveTripSheet(
             booking = activeTrip,
@@ -560,7 +575,11 @@ fun RiderHomeDashboardTab(
             onCancelTrip = { showDriverCancelDialog = true },
             onAdvanceState = { next, pin ->
                 driverViewModel.advanceTripState(activeTrip, next, pin, currentLat, currentLng)
-            }
+            },
+            onVerifyTestOtp = { otp -> driverViewModel.verifyTestRideOtp(activeTrip, otp) },
+            isVerifyingTestOtp = isVerifyingTestOtp,
+            testOtpError = testOtpError,
+            onClearTestOtpError = { driverViewModel.clearTestOtpError() }
         )
     } else {
         RiderMapHomeScreen(

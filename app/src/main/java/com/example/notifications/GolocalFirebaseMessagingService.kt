@@ -18,14 +18,23 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         Log.i(TAG, "Refreshed FCM registration token received")
-        if (token.isBlank() || FirebaseApp.getApps(applicationContext).isEmpty()) return
-        val uid = Firebase.auth.currentUser?.uid ?: return
+        if (FirebaseApp.getApps(applicationContext).isEmpty()) {
+            Log.w(TAG, "Skipping refreshed FCM token: FirebaseApp is not initialized")
+            return
+        }
+        val currentUid = Firebase.auth.currentUser?.uid
+        val target = NotificationHelper.resolveRefreshedTokenTarget(
+            context = applicationContext,
+            currentUid = currentUid,
+            token = token
+        ) ?: return
+
         serviceScope.launch {
             NotificationHelper.saveTokenToFirestore(
                 context = applicationContext,
-                userId = uid,
+                userId = target.first,
                 token = token,
-                appVariant = "customer"
+                appVariant = target.second
             )
         }
     }
@@ -36,13 +45,17 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
         val title = message.notification?.title ?: data["title"].orEmpty()
         val body = message.notification?.body ?: data["body"].orEmpty()
         val type = data["type"] ?: "general"
-        val targetApp = data["targetApp"] ?: data["target_app"] ?: "customer"
+        val targetApp = data["targetApp"] ?: data["target_app"] ?: data["targetRole"] ?: "customer"
         val targetScreen = data["targetScreen"] ?: data["target_screen"] ?: ""
-        val bookingId = data["bookingId"] ?: data["booking_id"] ?: ""
+        val bookingId = data["bookingId"] ?: data["booking_id"] ?: data["entityId"] ?: data["entity_id"] ?: ""
+        val isTestRide = data["isTestRide"].equals("true", ignoreCase = true) ||
+            data["is_test_ride"].equals("true", ignoreCase = true) ||
+            type.startsWith("test_", ignoreCase = true)
         val dedupeKey = data["dedupeKey"]
+            ?: data["eventId"]
             ?: data["messageId"]
             ?: message.messageId
-            ?: "$type|$bookingId|$title|$body"
+            ?: "$targetApp|$type|$bookingId|$title|$body"
 
         NotificationHelper.displayNotification(
             context = applicationContext,
@@ -52,7 +65,8 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
             targetApp = targetApp,
             targetScreen = targetScreen,
             bookingId = bookingId,
-            dedupeKey = dedupeKey
+            dedupeKey = dedupeKey,
+            isTestRide = isTestRide
         )
     }
 

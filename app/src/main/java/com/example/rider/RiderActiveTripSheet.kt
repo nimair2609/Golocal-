@@ -13,14 +13,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Star
@@ -33,6 +37,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,13 +52,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Booking
 import com.example.data.model.BookingCallContact
 import com.example.data.model.CommissionRecord
 import com.example.data.model.DriverDirectoryEntry
+import com.example.map.GeoPoint
 import com.example.map.GolocalMapContainer
+import com.example.map.GpsBroadcastThrottle
+import com.example.map.RouteNavigationMath
+import com.example.map.RouteUiState
 import com.example.shared.BookingCommunicationBar
 import com.example.shared.LocationCoordinator
 import com.example.ui.components.GolocalStatusBadge
@@ -80,10 +90,16 @@ fun RiderActiveTripSheet(
     onChatCustomer: () -> Unit,
     onTriggerSos: () -> Unit,
     onCancelTrip: () -> Unit,
-    onAdvanceState: (nextStatus: String, pin: String) -> Unit
+    onAdvanceState: (nextStatus: String, pin: String) -> Unit,
+    onVerifyTestOtp: (String) -> Unit = {},
+    isVerifyingTestOtp: Boolean = false,
+    testOtpError: String? = null,
+    onClearTestOtpError: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var enteredPin by remember(booking.id) { mutableStateOf("") }
+    var enteredTestOtp by remember(booking.id) { mutableStateOf("") }
+    var activeRouteState by remember(booking.id) { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
 
     val navigateToDrop = booking.status == "in_progress"
     val mapPickupLat = if (navigateToDrop) booking.pickupLat else currentLat
@@ -120,7 +136,9 @@ fun RiderActiveTripSheet(
             showRecenterFab = true,
             recenterBottomPadding = 340.dp,
             userLat = currentLat,
-            userLng = currentLng
+            userLng = currentLng,
+            rerouteFromLatLng = GeoPoint(currentLat, currentLng),
+            onRouteComputed = { activeRouteState = it }
         )
 
         // Top Floating Status + Navigate + SOS Bar
@@ -152,7 +170,7 @@ fun RiderActiveTripSheet(
                         text = phaseTitle,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
-                        color = GolocalDeepNavy
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
@@ -181,11 +199,11 @@ fun RiderActiveTripSheet(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Navigation,
-                            contentDescription = "Navigate",
+                            contentDescription = "Open external navigation app",
                             tint = GolocalPureWhite,
                             modifier = Modifier.size(18.dp)
                         )
-                        Text("Navigate", color = GolocalPureWhite, style = MaterialTheme.typography.labelLarge)
+                        Text("Maps Nav", color = GolocalPureWhite, style = MaterialTheme.typography.labelLarge)
                     }
                 }
 
@@ -214,14 +232,33 @@ fun RiderActiveTripSheet(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .heightIn(max = 460.dp)
                 .testTag("rider_active_trip_sheet"),
             shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 18.dp
         ) {
+            val remainingKm = remember(currentLat, currentLng, mapDestLat, mapDestLng, activeRouteState) {
+                when (val st = activeRouteState) {
+                    is RouteUiState.Ready -> st.distanceKm
+                    else -> GpsBroadcastThrottle.haversineMeters(currentLat, currentLng, mapDestLat, mapDestLng) / 1000.0
+                }
+            }
+            val liveEtaMin = remember(remainingKm, activeRouteState, booking.vehicleCategory) {
+                when (val st = activeRouteState) {
+                    is RouteUiState.Ready -> st.durationMin.toInt()
+                    else -> RouteNavigationMath.estimateEtaMinutes(
+                        distanceKm = remainingKm,
+                        vehicleCategory = booking.vehicleCategory
+                    )
+                }
+            }
             Column(
                 modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .imePadding()
                     .padding(horizontal = 18.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -240,9 +277,21 @@ fun RiderActiveTripSheet(
                         )
                         Text(
                             text = if (isTestRide) {
-                                "TEST RIDE • ₹0 Commercial • ${booking.distanceKm} km"
+                                String.format(
+                                    Locale.US,
+                                    "TEST RIDE • ₹0 • %.1f km (~%d min ETA)",
+                                    remainingKm,
+                                    liveEtaMin
+                                )
                             } else {
-                                "₹${booking.agreedFareInr.toInt()} (${booking.paymentMethod.uppercase()}) • ${booking.distanceKm} km"
+                                String.format(
+                                    Locale.US,
+                                    "₹%d (%s) • %.1f km (~%d min ETA)",
+                                    booking.agreedFareInr.toInt(),
+                                    booking.paymentMethod.uppercase(),
+                                    remainingKm,
+                                    liveEtaMin
+                                )
                             },
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = JetBrainsMono,
@@ -305,19 +354,65 @@ fun RiderActiveTripSheet(
                             ) {
                                 Column(
                                     modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Text(
-                                        text = "Waiting for Customer 6-Digit Test OTP",
+                                        text = "Verify 6-Digit Customer Test OTP",
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = GolocalDeepNavy
                                     )
                                     Text(
-                                        text = "Ask the passenger to enter their 6-digit TEST OTP on the Customer app (or wait for Owner Admin OTP override). Test rides cannot be started with a 4-digit PIN.",
+                                        text = "Ask passenger for their 6-digit Pickup OTP to start, or the Customer/Owner Admin can start via their app.",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = GolocalDeepNavy.copy(alpha = 0.78f)
                                     )
+                                    OutlinedTextField(
+                                        value = enteredTestOtp,
+                                        onValueChange = { ch ->
+                                            val digits = ch.filter { it.isDigit() }.take(6)
+                                            enteredTestOtp = digits
+                                            if (!testOtpError.isNullOrBlank()) onClearTestOtpError()
+                                        },
+                                        label = { Text("Enter 6-Digit Pickup Test OTP") },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = GolocalDeepNavy,
+                                            unfocusedTextColor = GolocalDeepNavy,
+                                            focusedLabelColor = GolocalDeepNavy,
+                                            unfocusedLabelColor = GolocalDeepNavy.copy(alpha = 0.78f),
+                                            focusedBorderColor = GolocalPrimaryBlue,
+                                            unfocusedBorderColor = GolocalDeepNavy.copy(alpha = 0.45f),
+                                            cursorColor = GolocalDeepNavy
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("rider_test_otp_input")
+                                    )
+                                    if (!testOtpError.isNullOrBlank()) {
+                                        Text(
+                                            text = testOtpError,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = GolocalError,
+                                            modifier = Modifier.testTag("rider_test_otp_error")
+                                        )
+                                    }
+                                    Button(
+                                        onClick = { onVerifyTestOtp(enteredTestOtp) },
+                                        enabled = enteredTestOtp.length == 6 && !isVerifyingTestOtp,
+                                        contentPadding = PaddingValues(vertical = 12.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .testTag("rider_verify_test_otp_button")
+                                    ) {
+                                        Text(
+                                            text = if (isVerifyingTestOtp) "Verifying OTP..." else "Verify Pickup OTP & Start",
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         } else {

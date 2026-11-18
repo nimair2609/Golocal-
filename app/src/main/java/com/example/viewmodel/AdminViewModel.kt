@@ -127,6 +127,21 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val testRiderRequests: StateFlow<List<TestRiderRequest>> = repository.observeAllTestRiderRequests()
+        .map { list -> list.sortedByDescending { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val testRiders: StateFlow<List<TestRiderProfile>> = repository.observeAllTestRiders()
+        .map { list -> list.sortedByDescending { it.updatedAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val testRiderAuditLogs: StateFlow<List<TestRiderAuditLog>> = repository.observeTestRiderAuditLogs()
+        .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     val cancellationAdvisories: StateFlow<List<DriverAbuseAdvisory>> = bookings
         .map { list -> AbuseDetectionEngine.evaluateCancellationAdvisories(list) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
@@ -289,6 +304,39 @@ class AdminViewModel(
                     }
                 }
                 .onFailure { _message.value = it.localizedMessage ?: "Failed to update test partner flag" }
+        }
+    }
+
+    fun recommendTestRiderRequest(
+        request: TestRiderRequest,
+        recommendation: String,
+        note: String
+    ) {
+        viewModelScope.launch {
+            repository.opsRecommendTestRiderRequest(request, recommendation, note)
+                .onSuccess {
+                    _message.value = "Saved operations recommendation for ${request.fullName.ifBlank { request.uid.take(6) }}."
+                }
+                .onFailure {
+                    _message.value = it.localizedMessage ?: "Failed to submit recommendation"
+                }
+        }
+    }
+
+    fun reviewTestRiderRequest(
+        request: TestRiderRequest,
+        newStatus: String,
+        reason: String = "",
+        note: String = ""
+    ) {
+        viewModelScope.launch {
+            repository.adminReviewTestRiderRequest(request, newStatus, reason, note)
+                .onSuccess {
+                    _message.value = "Test Rider ${request.fullName.ifBlank { request.uid.take(6) }} marked $newStatus."
+                }
+                .onFailure {
+                    _message.value = it.localizedMessage ?: "Failed to update Test Rider status"
+                }
         }
     }
 

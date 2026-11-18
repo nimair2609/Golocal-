@@ -528,16 +528,34 @@ fun CustomerExploreTab(
 }
 
 @Composable
-fun CustomerNotificationsTab(sessionViewModel: AppSessionViewModel) {
+fun CustomerNotificationsTab(
+    sessionViewModel: AppSessionViewModel,
+    onOpenDeepLink: (com.example.notifications.NotificationDeepLinkTarget) -> Unit = {}
+) {
     val notifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
+    val unreadIds = remember(notifications) { notifications.filter { !it.read }.map { it.id } }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Notifications", style = MaterialTheme.typography.headlineSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Notifications", style = MaterialTheme.typography.headlineSmall)
+            if (unreadIds.isNotEmpty()) {
+                TextButton(
+                    onClick = { sessionViewModel.markAllNotificationsRead(unreadIds) },
+                    modifier = Modifier.testTag("customer_mark_all_read_button")
+                ) {
+                    Text("Mark all read (${unreadIds.size})")
+                }
+            }
+        }
         NotificationPermissionBannerCard()
         if (notifications.isEmpty()) {
             GolocalEmptyState(
                 title = "All Caught Up",
-                message = "Ride confirmations, Trip PINs, chat messages, and safety alerts appear here."
+                message = "Ride confirmations, arrival alerts, chat messages, and safety alerts appear here."
             )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -548,12 +566,32 @@ fun CustomerNotificationsTab(sessionViewModel: AppSessionViewModel) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-                            .clickable { if (!notif.read) sessionViewModel.markNotificationRead(notif.id) }
+                            .clickable {
+                                if (!notif.read) sessionViewModel.markNotificationRead(notif.id)
+                                val target = com.example.notifications.NotificationDeepLinkTarget.fromAppNotification(notif)
+                                if (target.bookingId.isNotBlank() || target.targetScreen.isNotBlank() || target.type !in setOf("general", "kyc_review")) {
+                                    onOpenDeepLink(target)
+                                }
+                            }
+                            .testTag("customer_notification_item_${notif.id}")
                     ) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text(notif.title, style = MaterialTheme.typography.titleSmall)
-                                if (!notif.read) GolocalStatusBadge(label = "NEW", tone = "info")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = notif.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    if (notif.isTestNotification()) {
+                                        GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
+                                    }
+                                    if (!notif.read) GolocalStatusBadge(label = "NEW", tone = "info")
+                                }
                             }
                             Text(notif.body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
