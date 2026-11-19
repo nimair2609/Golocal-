@@ -934,8 +934,9 @@ data class SampleRiderProfile(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-    fun isOnline(): Boolean = availabilityStatus == "online" && verificationStatus == "sample_approved"
-    fun isSuspendedOrRevoked(): Boolean = verificationStatus != "sample_approved" || !isSampleRider
+    fun isOnline(): Boolean = availabilityStatus == "online" && !isSuspendedOrRevoked()
+    fun isSuspendedOrRevoked(): Boolean =
+        verificationStatus != "sample_approved" || !isSampleRider || accountType != "sample"
 }
 
 @Keep

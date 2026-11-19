@@ -301,8 +301,12 @@ class SampleRiderRepository(
             query = db.collection("sample_riders").document(uid).collection("dismissed_rides")
         ) { doc -> doc.id }.map { it.toSet() }
 
-    fun observeAssignedSampleRides(uid: String): Flow<List<SampleRide>> =
-        safeQueryFlow(
+    fun observeAssignedSampleRides(uid: String): Flow<List<SampleRide>> {
+        val currentUid = auth.currentUser?.uid?.trim().orEmpty()
+        if (uid.isBlank() || currentUid.isBlank() || uid != currentUid) {
+            return kotlinx.coroutines.flow.flowOf(emptyList())
+        }
+        return safeQueryFlow(
             path = "sample_rides",
             query = db.collection("sample_rides").whereEqualTo("assignedSampleRiderId", uid)
         ) { doc ->
@@ -310,9 +314,14 @@ class SampleRiderRepository(
         }.map { list ->
             list.sortedByDescending { it.updatedAt?.toDate()?.time ?: it.createdAt?.toDate()?.time ?: 0L }
         }
+    }
 
-    fun observeCustomerSampleRides(customerId: String): Flow<List<SampleRide>> =
-        safeQueryFlow(
+    fun observeCustomerSampleRides(customerId: String): Flow<List<SampleRide>> {
+        val currentUid = auth.currentUser?.uid?.trim().orEmpty()
+        if (customerId.isBlank() || currentUid.isBlank() || customerId != currentUid) {
+            return kotlinx.coroutines.flow.flowOf(emptyList())
+        }
+        return safeQueryFlow(
             path = "sample_rides",
             query = db.collection("sample_rides").whereEqualTo("customerId", customerId)
         ) { doc ->
@@ -320,6 +329,7 @@ class SampleRiderRepository(
         }.map { list ->
             list.sortedByDescending { it.createdAt?.toDate()?.time ?: 0L }
         }
+    }
 
     fun observeAllSampleAllowlist(): Flow<List<SampleRiderAllowlistEntry>> =
         safeQueryFlow(

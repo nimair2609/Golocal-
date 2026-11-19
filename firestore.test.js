@@ -1957,6 +1957,9 @@ test("Sample Rider: allowlist-gated OTP auto-provisioning, zero plaintext OTP, a
   const SAMPLE_PHONE_2 = "+919800002222";
   const UNAUTHORIZED_PHONE = "+919800009999";
   const SAMPLE_RIDE_ID = "sample_ride_case_1";
+  function sha256Otp(rideId, otp) {
+    return crypto.createHash("sha256").update(`${rideId}:${otp}`).digest("hex");
+  }
 
   const adminDb = testEnv.authenticatedContext("admin_sample_mgr", { email: ADMIN_EMAIL, email_verified: true }).firestore();
   const sampleRider1Db = testEnv.authenticatedContext(SAMPLE_RIDER_UID, { phone_number: SAMPLE_PHONE_1 }).firestore();
@@ -2254,6 +2257,14 @@ test("Sample Rider: allowlist-gated OTP auto-provisioning, zero plaintext OTP, a
   // 5. Neither Sample Rider nor Customer can read sample_ride_otps directly
   await assertFails(sampleRider1Db.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID).get());
   await assertFails(testCustDb.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID).get());
+
+  // Customer & Active Sample Rider scoped list queries succeed; unfiltered phone-user list fails
+  await assertSucceeds(testCustDb.collection("sample_rides").where("customerId", "==", CUSTOMER_UID).get());
+  await assertSucceeds(unauthorizedPhoneDb.collection("sample_rides").where("customerId", "==", "unlisted_phone_uid").get());
+  await assertSucceeds(sampleRider1Db.collection("sample_rides").where("status", "==", "incoming").get());
+  await assertSucceeds(sampleRider1Db.collection("sample_rides").where("assignedSampleRiderId", "==", SAMPLE_RIDER_UID).get());
+  await assertFails(unauthorizedPhoneDb.collection("sample_rides").get());
+  await assertFails(unauthorizedPhoneDb.collection("sample_rides").where("status", "==", "incoming").get());
 
   // 6. Atomic acceptance: Rider 1 claims; Rider 2 claim immediately fails because status != 'incoming'
   await assertSucceeds(

@@ -1986,42 +1986,41 @@ service cloud.firestore {
         (isActiveSampleRider() && existing().status == 'incoming')
       );
       allow list: if isSignedIn() && (
-        isStaffOrAdmin() ||
         resource.data.customerId == request.auth.uid ||
         resource.data.assignedSampleRiderId == request.auth.uid ||
-        (isActiveSampleRider() && resource.data.status == 'incoming')
+        isStaffOrAdmin() ||
+        (resource.data.status == 'incoming' && isActiveSampleRider())
       );
       allow create: if isSignedIn() &&
                        isValidId(rideId) &&
-                       isValidSampleRide(incoming(), rideId) &&
-                       (isAdmin() || (isAuthorizedTestCustomer() && incoming().customerId == request.auth.uid)) &&
                        incoming().isSample == true &&
                        incoming().status == 'incoming' &&
                        incoming().assignedSampleRiderId == '' &&
                        incoming().otpVerified == false &&
-                       incoming().expiresAt > request.time;
+                       incoming().expiresAt > request.time &&
+                       isValidSampleRide(incoming(), rideId) &&
+                       (isAdmin() || (incoming().customerId == request.auth.uid && isAuthorizedTestCustomer()));
       allow update: if isSignedIn() &&
                        isValidId(rideId) &&
-                       isValidSampleRide(incoming(), rideId) &&
                        incoming().rideId == existing().rideId &&
                        incoming().customerId == existing().customerId &&
                        incoming().isSample == true &&
-                       incoming().createdAt == existing().createdAt && (
+                       incoming().createdAt == existing().createdAt &&
+                       isValidSampleRide(incoming(), rideId) && (
                          // 1. Atomic acceptance by an active Sample Rider
-                         (isActiveSampleRider() &&
-                          existing().status == 'incoming' &&
-                          existing().assignedSampleRiderId == '' &&
-                          request.time <= existing().expiresAt &&
+                         (existing().status == 'incoming' &&
                           incoming().status == 'accepted' &&
+                          existing().assignedSampleRiderId == '' &&
                           incoming().assignedSampleRiderId == request.auth.uid &&
                           incoming().otpVerified == false &&
+                          request.time <= existing().expiresAt &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'status', 'assignedSampleRiderId', 'assignedSampleRiderName',
                             'assignedSampleRiderPhone', 'riderLat', 'riderLng', 'updatedAt'
-                          ])) ||
+                          ]) &&
+                          isActiveSampleRider()) ||
                          // 2. Assigned Sample Rider pre-OTP progression (accepted -> arriving -> arrived) & real GPS updates
-                         (isActiveSampleRider() &&
-                          existing().assignedSampleRiderId == request.auth.uid &&
+                         (existing().assignedSampleRiderId == request.auth.uid &&
                           existing().status in ['accepted', 'arriving', 'arrived'] &&
                           incoming().status in ['accepted', 'arriving', 'arrived'] &&
                           (incoming().status == existing().status ||
@@ -2031,24 +2030,24 @@ service cloud.firestore {
                           incoming().otpVerified == false &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'status', 'riderLat', 'riderLng', 'updatedAt'
-                          ])) ||
+                          ]) &&
+                          isActiveSampleRider()) ||
                          // 3. Assigned Sample Rider starts ride ONLY atomically with hashed OTP challenge consumption
-                         (isActiveSampleRider() &&
-                          existing().assignedSampleRiderId == request.auth.uid &&
+                         (existing().assignedSampleRiderId == request.auth.uid &&
                           existing().status == 'arrived' &&
                           incoming().status == 'in_progress' &&
                           incoming().otpVerified == true &&
                           incoming().assignedSampleRiderId == existing().assignedSampleRiderId &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'otpVerified', 'otpVerifiedAt', 'riderLat', 'riderLng', 'updatedAt'
+                          ]) &&
+                          isActiveSampleRider() &&
                           existsAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)) &&
                           get(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.used == false &&
                           getAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.used == true &&
-                          getAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.verifiedByUid == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly([
-                            'status', 'otpVerified', 'otpVerifiedAt', 'riderLat', 'riderLng', 'updatedAt'
-                          ])) ||
+                          getAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.verifiedByUid == request.auth.uid) ||
                          // 4. Assigned Sample Rider live GPS & completion after OTP verified
-                         (isActiveSampleRider() &&
-                          existing().assignedSampleRiderId == request.auth.uid &&
+                         (existing().assignedSampleRiderId == request.auth.uid &&
                           existing().status == 'in_progress' &&
                           existing().otpVerified == true &&
                           incoming().otpVerified == true &&
@@ -2056,28 +2055,29 @@ service cloud.firestore {
                           incoming().assignedSampleRiderId == existing().assignedSampleRiderId &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'status', 'riderLat', 'riderLng', 'completedAt', 'updatedAt'
-                          ])) ||
+                          ]) &&
+                          isActiveSampleRider()) ||
                          // 5. Mark timed-out incoming sample ride as expired
-                         ((isActiveSampleRider() || existing().customerId == request.auth.uid || isStaffOrAdmin()) &&
-                          existing().status == 'incoming' &&
-                          request.time > existing().expiresAt &&
+                         (existing().status == 'incoming' &&
                           incoming().status == 'expired' &&
+                          request.time > existing().expiresAt &&
                           incoming().otpVerified == existing().otpVerified &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+                          (existing().customerId == request.auth.uid || isActiveSampleRider() || isStaffOrAdmin())) ||
                          // 6. Cancel pre-start sample ride
-                         ((existing().customerId == request.auth.uid ||
-                           (isActiveSampleRider() && existing().assignedSampleRiderId == request.auth.uid) ||
-                           isStaffOrAdmin()) &&
-                          existing().status in ['incoming', 'accepted', 'arriving', 'arrived'] &&
+                         (existing().status in ['incoming', 'accepted', 'arriving', 'arrived'] &&
                           incoming().status == 'cancelled' &&
                           incoming().otpVerified == existing().otpVerified &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt'])) ||
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt']) &&
+                          (existing().customerId == request.auth.uid ||
+                           (existing().assignedSampleRiderId == request.auth.uid && isActiveSampleRider()) ||
+                           isStaffOrAdmin())) ||
                          // 7. Admin cancellation/cleanup without bypassing OTP rules
-                         (isAdmin() &&
-                          incoming().otpVerified == existing().otpVerified &&
+                         (incoming().otpVerified == existing().otpVerified &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'status', 'cancellationReason', 'expiresAt', 'updatedAt'
-                          ]))
+                          ]) &&
+                          isAdmin())
                        );
       allow delete: if isAdmin() && isValidId(rideId);
     }
