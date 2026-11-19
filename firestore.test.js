@@ -2359,4 +2359,50 @@ test("Sample Rider: allowlist-gated OTP auto-provisioning, zero plaintext OTP, a
   await assertFails(sampleRider1Db.collection("sample_rides").where("status", "==", "incoming").get());
 });
 
+test("16. ride_rejections: scoped driver queries succeed; unfiltered and cross-driver access rejected", async () => {
+  const driverDb = testEnv.authenticatedContext(DRIVER_UID, { phone_number: "+919800001111" }).firestore();
+  const otherDb = testEnv.authenticatedContext(OTHER_UID, { phone_number: "+919800002222" }).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const ts = new Date(Date.now() - 1000);
+  const bookingId = "booking_reject_1";
+  const rejectionId = `${bookingId}_${DRIVER_UID}`;
+
+  // Unauthenticated access denied
+  await assertFails(unauthDb.collection("ride_rejections").where("driverId", "==", DRIVER_UID).get());
+
+  // Spoofing another driverId denied
+  await assertFails(
+    otherDb.collection("ride_rejections").doc(rejectionId).set({
+      bookingId,
+      driverId: DRIVER_UID,
+      reason: "declined",
+      createdAt: ts,
+    })
+  );
+
+  // Driver records own rejection matching GolocalRepository.rejectOpenBooking
+  await assertSucceeds(
+    driverDb.collection("ride_rejections").doc(rejectionId).set({
+      bookingId,
+      driverId: DRIVER_UID,
+      reason: "declined",
+      createdAt: ts,
+    })
+  );
+
+  // Scoped query matching GolocalRepository.observeMyRejectedBookingIds succeeds
+  const ownSnap = await assertSucceeds(
+    driverDb.collection("ride_rejections").where("driverId", "==", DRIVER_UID).get()
+  );
+  if (ownSnap.size !== 1) {
+    throw new Error(`Expected 1 rejection document, found ${ownSnap.size}`);
+  }
+
+  // Unfiltered list and cross-driver scoped query fail
+  await assertFails(driverDb.collection("ride_rejections").get());
+  await assertFails(otherDb.collection("ride_rejections").where("driverId", "==", DRIVER_UID).get());
+  await assertFails(otherDb.collection("ride_rejections").doc(rejectionId).get());
+});
+
+
 

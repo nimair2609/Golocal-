@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.Date
@@ -1693,13 +1694,18 @@ class GolocalRepository(
         }
     }
 
-    fun observeMyRejectedBookingIds(driverId: String): Flow<Set<String>> =
-        safeQueryFlow(
+    fun observeMyRejectedBookingIds(driverId: String): Flow<Set<String>> {
+        val currentUid = auth.currentUser?.uid
+        if (driverId.isBlank() || currentUid.isNullOrBlank() || currentUid != driverId) {
+            return flowOf(emptySet())
+        }
+        return safeQueryFlow(
             "ride_rejections",
             db.collection("ride_rejections").whereEqualTo("driverId", driverId)
         ) { doc ->
             doc.getString("bookingId")?.takeIf { it.isNotBlank() }
         }.map { it.toSet() }
+    }
 
     suspend fun acceptBookingAtomically(
         booking: Booking,

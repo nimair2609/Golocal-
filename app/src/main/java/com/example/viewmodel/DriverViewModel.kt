@@ -107,14 +107,21 @@ class DriverViewModel(
     private val _openTestBookingsError = MutableStateFlow<String?>(null)
     val openTestBookingsError: StateFlow<String?> = _openTestBookingsError.asStateFlow()
 
-    private val rejectedBookingIdsFlow = _dispatchRefreshTrigger
-        .flatMapLatest {
-            repository.observeMyRejectedBookingIds(currentUserId)
-                .catch { error ->
-                    if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-                    Log.w(TAG, "Error observing rejected booking IDs", error)
-                    emit(emptySet())
-                }
+    private val rejectedBookingIdsFlow = combine(driverProfileState, _dispatchRefreshTrigger) { profileUi, trigger ->
+        ((profileUi as? UiState.Success)?.data?.verificationStatus == "verified") to trigger
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (isVerified, _) ->
+            if (!isVerified) {
+                flowOf(emptySet())
+            } else {
+                repository.observeMyRejectedBookingIds(currentUserId)
+                    .catch { error ->
+                        if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                        Log.w(TAG, "Error observing rejected booking IDs", error)
+                        emit(emptySet())
+                    }
+            }
         }
 
     private val rawOpenBookingsFlow = combine(driverProfileState, _dispatchRefreshTrigger) { profileUi, trigger ->
@@ -176,6 +183,7 @@ class DriverViewModel(
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
             Log.w(TAG, "Error observing driver offers", error)
+            emit(emptyList())
         }
         .stateIn(
             scope = viewModelScope,
@@ -188,6 +196,7 @@ class DriverViewModel(
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
             Log.w(TAG, "Error observing driver ratings", error)
+            emit(emptyList())
         }
         .stateIn(
             scope = viewModelScope,
