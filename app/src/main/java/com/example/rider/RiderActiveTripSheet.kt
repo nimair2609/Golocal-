@@ -314,6 +314,8 @@ fun RiderActiveTripSheet(
                     }
                 }
 
+                TripProgressStepperRow(currentStatus = booking.status)
+
                 BookingCommunicationBar(
                     booking = booking,
                     viewerRole = "driver",
@@ -588,8 +590,8 @@ fun RiderCompletedSettlementDialog(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         if (isTestRide) {
-                            SettlementRow("Test Mode Impact", "NON-COMMERCIAL")
-                            SettlementRow("Commission / Payout", "₹0 (Excluded)", highlight = true)
+                            SettlementRow("Test Mode Impact", "NON-COMMERCIAL", onLightContainer = true)
+                            SettlementRow("Commission / Payout", "₹0 (Excluded)", highlight = true, onLightContainer = true)
                         } else {
                             SettlementRow("Gross Fare (${booking.paymentMethod.uppercase()})", "₹${gross.toInt()}")
                             SettlementRow("Platform Commission", "-₹${fee.toInt()}")
@@ -643,7 +645,8 @@ fun RiderCompletedSettlementDialog(
 private fun SettlementRow(
     label: String,
     value: String,
-    highlight: Boolean = false
+    highlight: Boolean = false,
+    onLightContainer: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -652,14 +655,65 @@ private fun SettlementRow(
         Text(
             text = label,
             style = if (highlight) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodySmall,
-            fontWeight = if (highlight) FontWeight.Bold else FontWeight.Normal
+            fontWeight = if (highlight) FontWeight.Bold else FontWeight.Normal,
+            color = if (onLightContainer) GolocalDeepNavy else MaterialTheme.colorScheme.onSurface
         )
         Text(
             text = value,
             style = if (highlight) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodySmall,
             fontFamily = JetBrainsMono,
             fontWeight = FontWeight.Bold,
-            color = if (highlight) GolocalSuccess else MaterialTheme.colorScheme.onSurface
+            color = when {
+                highlight -> GolocalSuccess
+                onLightContainer -> GolocalDeepNavy
+                else -> MaterialTheme.colorScheme.onSurface
+            }
         )
+    }
+}
+
+@Composable
+private fun TripProgressStepperRow(currentStatus: String) {
+    val steps = listOf(
+        "assigned" to "Accepted",
+        "arriving" to "En Route",
+        "arrived" to "At Pickup",
+        "in_progress" to "On Trip"
+    )
+    val activeIdx = steps.indexOfFirst { it.first == currentStatus }.coerceAtLeast(0)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("rider_trip_stepper"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        steps.forEachIndexed { idx, (_, title) ->
+            val reached = idx <= activeIdx
+            val isCurrent = idx == activeIdx
+            Surface(
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(10.dp),
+                color = when {
+                    isCurrent -> GolocalPrimaryBlue.copy(alpha = 0.16f)
+                    reached -> GolocalSuccess.copy(alpha = 0.14f)
+                    else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                }
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                    color = when {
+                        isCurrent -> GolocalPrimaryBlue
+                        reached -> GolocalSuccess
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+                )
+            }
+        }
     }
 }

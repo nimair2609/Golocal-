@@ -31,9 +31,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -48,16 +50,29 @@ class DriverViewModel(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    val driverProfileState: StateFlow<UiState<DriverProfile?>> = repository.observeMyDriverProfile(currentUserId)
-        .map<DriverProfile?, UiState<DriverProfile?>> { UiState.Success(it) }
-        .catch { error ->
-            val fe = generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (fe == null && error is CancellationException) throw error
-            val root = fe ?: error
-            Log.w(TAG, "Error observing driver profile", root)
-            emit(UiState.Error(root.message ?: "Failed to load driver profile"))
+    private val _dispatchRefreshTrigger = MutableStateFlow(0)
+
+    fun refreshDispatchFeeds() {
+        _openRequestsError.value = null
+        _assignedBookingsError.value = null
+        _openTestBookingsError.value = null
+        _testRiderProfileError.value = null
+        _dispatchRefreshTrigger.value += 1
+    }
+
+    val driverProfileState: StateFlow<UiState<DriverProfile?>> = _dispatchRefreshTrigger
+        .flatMapLatest {
+            repository.observeMyDriverProfile(currentUserId)
+                .map<DriverProfile?, UiState<DriverProfile?>> { UiState.Success(it) }
+                .catch { error ->
+                    val fe = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (fe == null && error is CancellationException) throw error
+                    val root = fe ?: error
+                    Log.w(TAG, "Error observing driver profile", root)
+                    emit(UiState.Error(root.message ?: "Failed to load driver profile"))
+                }
         }
         .stateIn(
             scope = viewModelScope,
@@ -83,30 +98,55 @@ class DriverViewModel(
     private val _openRequestsError = MutableStateFlow<String?>(null)
     val openRequestsError: StateFlow<String?> = _openRequestsError.asStateFlow()
 
-    private val rejectedBookingIdsFlow = repository.observeMyRejectedBookingIds(currentUserId)
-        .catch { error ->
-            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            Log.w(TAG, "Error observing rejected booking IDs", error)
-            emit(emptySet())
+    private val _assignedBookingsError = MutableStateFlow<String?>(null)
+    val assignedBookingsError: StateFlow<String?> = _assignedBookingsError.asStateFlow()
+
+    private val _testRiderProfileError = MutableStateFlow<String?>(null)
+    val testRiderProfileError: StateFlow<String?> = _testRiderProfileError.asStateFlow()
+
+    private val _openTestBookingsError = MutableStateFlow<String?>(null)
+    val openTestBookingsError: StateFlow<String?> = _openTestBookingsError.asStateFlow()
+
+    private val rejectedBookingIdsFlow = _dispatchRefreshTrigger
+        .flatMapLatest {
+            repository.observeMyRejectedBookingIds(currentUserId)
+                .catch { error ->
+                    if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                    Log.w(TAG, "Error observing rejected booking IDs", error)
+                    emit(emptySet())
+                }
+        }
+
+    private val rawOpenBookingsFlow = combine(driverProfileState, _dispatchRefreshTrigger) { profileUi, trigger ->
+        ((profileUi as? UiState.Success)?.data?.verificationStatus == "verified") to trigger
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (isVerified, _) ->
+            if (!isVerified) {
+                _openRequestsError.value = null
+                flowOf(emptyList())
+            } else {
+                repository.observeOpenBookingsForDrivers()
+                    .onEach { _openRequestsError.value = null }
+                    .catch { error ->
+                        val fe = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (fe == null && error is CancellationException) throw error
+                        val root = fe ?: error
+                        Log.w(TAG, "Error observing open bookings for verified driver=$currentUserId", root)
+                        _openRequestsError.value = root.localizedMessage ?: "Unable to sync nearby ride requests."
+                        emit(emptyList())
+                    }
+            }
         }
 
     val openRequests: StateFlow<List<Booking>> = combine(
-        repository.observeOpenBookingsForDrivers()
-            .catch { error ->
-                val fe = generateSequence(error) { it.cause }
-                    .filterIsInstance<FirebaseFirestoreException>()
-                    .firstOrNull()
-                if (fe == null && error is CancellationException) throw error
-                val root = fe ?: error
-                Log.w(TAG, "Error observing open bookings", root)
-                _openRequestsError.value = root.localizedMessage ?: "Unable to sync nearby ride requests."
-                emit(emptyList())
-            },
+        rawOpenBookingsFlow,
         rejectedBookingIdsFlow,
         _dismissedRequestIds,
         driverProfileState
     ) { list, persistedRejected, dismissed, profileUi ->
-        _openRequestsError.value = null
         val profile = (profileUi as? UiState.Success)?.data
         val nowMs = System.currentTimeMillis()
         list.filter { booking ->
@@ -155,30 +195,6 @@ class DriverViewModel(
             initialValue = emptyList()
         )
 
-    val assignedBookings: StateFlow<List<Booking>> = repository.observeDriverAssignedBookings(currentUserId)
-        .map { list ->
-            list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-        }
-        .catch { error ->
-            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            Log.w(TAG, "Error observing assigned bookings", error)
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-            initialValue = emptyList()
-        )
-
-    val activeAssignedBooking: StateFlow<Booking?> = assignedBookings
-        .map { list ->
-            list.firstOrNull { it.status in setOf("assigned", "arriving", "arrived", "in_progress") }
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-            initialValue = null
-        )
-
     val testRiderRequestState: StateFlow<UiState<TestRiderRequest?>> =
         repository.observeMyTestRiderRequest(currentUserId)
             .map<TestRiderRequest?, UiState<TestRiderRequest?>> { UiState.Success(it) }
@@ -197,37 +213,113 @@ class DriverViewModel(
                 initialValue = UiState.Loading
             )
 
-    val testRiderProfile: StateFlow<TestRiderProfile?> =
-        repository.observeMyTestRiderProfile(currentUserId)
-            .catch { error ->
-                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-                emit(null)
-            }
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-                initialValue = null
-            )
+    val testRiderProfile: StateFlow<TestRiderProfile?> = _dispatchRefreshTrigger
+        .flatMapLatest {
+            repository.observeMyTestRiderProfile(currentUserId)
+                .onEach { _testRiderProfileError.value = null }
+                .catch { error ->
+                    val fe = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (fe == null && error is CancellationException) throw error
+                    val root = fe ?: error
+                    Log.w(TAG, "Error observing test rider profile", root)
+                    _testRiderProfileError.value = root.localizedMessage ?: "Failed to load Test Rider profile."
+                    emit(null)
+                }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null
+        )
 
-    val openTestBookings: StateFlow<List<Booking>> =
-        repository.observeOpenTestBookingsForTestRiders()
-            .map { list ->
-                list.filter {
-                    (it.isTestRide || it.testMode) &&
-                        it.status == "searching" &&
-                        it.customerId != currentUserId
-                }.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+    val assignedBookings: StateFlow<List<Booking>> = combine(
+        driverProfileState,
+        testRiderProfile,
+        _dispatchRefreshTrigger
+    ) { profileUi, testProfile, trigger ->
+        val isVerifiedDriver = (profileUi as? UiState.Success)?.data?.verificationStatus == "verified"
+        val isApprovedTestRider = testProfile?.status == "approved"
+        (isVerifiedDriver || isApprovedTestRider) to trigger
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (canReadBookings, _) ->
+            if (!canReadBookings) {
+                _assignedBookingsError.value = null
+                flowOf(emptyList())
+            } else {
+                repository.observeDriverAssignedBookings(currentUserId)
+                    .onEach { _assignedBookingsError.value = null }
+                    .map { list ->
+                        list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+                    }
+                    .catch { error ->
+                        val fe = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (fe == null && error is CancellationException) throw error
+                        val root = fe ?: error
+                        Log.w(TAG, "Error observing assigned bookings", root)
+                        _assignedBookingsError.value = root.localizedMessage ?: "Unable to sync active rides."
+                        emit(emptyList())
+                    }
             }
-            .catch { error ->
-                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-                Log.w(TAG, "Error observing open test bookings", error)
-                emit(emptyList())
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = emptyList()
+        )
+
+    val activeAssignedBooking: StateFlow<Booking?> = assignedBookings
+        .map { list ->
+            list.firstOrNull { it.status in setOf("assigned", "arriving", "arrived", "in_progress") }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null
+        )
+
+    val openTestBookings: StateFlow<List<Booking>> = combine(
+        testRiderProfile,
+        _dispatchRefreshTrigger
+    ) { profile, trigger ->
+        (profile?.status == "approved") to trigger
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (isApproved, _) ->
+            if (!isApproved) {
+                _openTestBookingsError.value = null
+                flowOf(emptyList())
+            } else {
+                repository.observeOpenTestBookingsForTestRiders()
+                    .onEach { _openTestBookingsError.value = null }
+                    .map { list ->
+                        list.filter {
+                            (it.isTestRide || it.testMode) &&
+                                it.status == "searching" &&
+                                it.customerId != currentUserId
+                        }.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+                    }
+                    .catch { error ->
+                        val fe = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (fe == null && error is CancellationException) throw error
+                        val root = fe ?: error
+                        Log.w(TAG, "Error observing open test bookings", root)
+                        _openTestBookingsError.value = root.localizedMessage ?: "Unable to sync open TEST RIDE bookings."
+                        emit(emptyList())
+                    }
             }
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
-                initialValue = emptyList()
-            )
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = emptyList()
+        )
 
     val testRiderCompletedCount: StateFlow<Int> = assignedBookings
         .map { list -> list.count { (it.isTestRide || it.testMode) && it.status == "completed" } }

@@ -111,7 +111,11 @@ fun RiderMapHomeScreen(
     onDeclineRequest: (bookingId: String) -> Unit,
     onWithdrawOffer: (offerId: String) -> Unit,
     openRequestsError: String? = null,
-    onDirectAcceptRequest: ((booking: Booking, agreedFareInr: Double) -> Unit)? = null
+    onDirectAcceptRequest: ((booking: Booking, agreedFareInr: Double) -> Unit)? = null,
+    gpsHealth: com.example.data.tracking.DriverGpsHealth? = null,
+    onRetryRequestsSync: () -> Unit = {},
+    assignedBookingsError: String? = null,
+    onExpireRequest: ((bookingId: String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val locationAccess = remember(currentLat, currentLng, gpsIsDetecting) {
@@ -209,10 +213,25 @@ fun RiderMapHomeScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${profile.vehicleCategory.uppercase()} • ${if (profile.isOnline) "Online" else "Offline"}",
+                                text = buildString {
+                                    append("${profile.vehicleCategory.uppercase()} • ${if (profile.isOnline) "Online" else "Offline"}")
+                                    if (gpsHealth != null && profile.isOnline) {
+                                        val healthTag = when {
+                                            gpsHealth.gpsStatus == "permission_denied" -> " • GPS Blocked"
+                                            gpsHealth.gpsStatus == "gps_lost" ||
+                                                gpsHealth.gpsStatus == "network_interrupted" ||
+                                                gpsHealth.lastError != null -> " • GPS Issue"
+                                            gpsHealth.gpsStatus == "active" ||
+                                                (gpsHealth.lastLat != null && gpsHealth.lastLng != null) -> " • GPS Live"
+                                            else -> " • GPS Sync"
+                                        }
+                                        append(healthTag)
+                                    }
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (profile.isOnline) GolocalSuccess else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Switch(
@@ -267,47 +286,82 @@ fun RiderMapHomeScreen(
                 }
             }
 
-            if (locationAccess != LocationAccessState.GRANTED_READY) {
+            val combinedSyncError = openRequestsError ?: assignedBookingsError
+            if (!combinedSyncError.isNullOrBlank()) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 4.dp,
-                    modifier = Modifier.fillMaxWidth()
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shadowElevation = 3.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rider_requests_error_card")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Filled.GpsFixed, contentDescription = null, tint = GolocalWarning)
                         Text(
-                            text = if (locationAccess == LocationAccessState.GPS_DISABLED) {
-                                "Turn on GPS to broadcast live location"
-                            } else {
-                                "Allow Location permission for live pickup dispatch"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f)
+                            text = "Dispatch sync warning: $combinedSyncError",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         TextButton(
-                            onClick = {
-                                if (locationAccess == LocationAccessState.GPS_DISABLED) {
-                                    LocationCoordinator.openLocationSettings(context)
-                                } else {
-                                    onRequestLocationSync()
-                                }
-                            }
+                            onClick = onRetryRequestsSync,
+                            modifier = Modifier.testTag("rider_requests_retry_button")
                         ) {
-                            Text(if (locationAccess == LocationAccessState.GPS_DISABLED) "GPS Settings" else "Allow")
+                            Text("Retry", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
 
-            NotificationPermissionBannerCard(
-                title = "Enable Rider Ride & Chat Alerts",
-                description = "Receive instant ride requests, trip assignments, and passenger updates."
-            )
+            if (incomingRequest == null) {
+                if (locationAccess != LocationAccessState.GRANTED_READY) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(Icons.Filled.GpsFixed, contentDescription = null, tint = GolocalWarning)
+                            Text(
+                                text = if (locationAccess == LocationAccessState.GPS_DISABLED) {
+                                    "Turn on GPS to broadcast live location"
+                                } else {
+                                    "Allow Location permission for live pickup dispatch"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (locationAccess == LocationAccessState.GPS_DISABLED) {
+                                        LocationCoordinator.openLocationSettings(context)
+                                    } else {
+                                        onRequestLocationSync()
+                                    }
+                                }
+                            ) {
+                                Text(if (locationAccess == LocationAccessState.GPS_DISABLED) "GPS Settings" else "Allow")
+                            }
+                        }
+                    }
+                }
+
+                NotificationPermissionBannerCard(
+                    title = "Enable Rider Ride & Chat Alerts",
+                    description = "Receive instant ride requests, trip assignments, and passenger updates."
+                )
+            }
 
             if (expiryAlerts.isNotEmpty()) {
                 Surface(
@@ -326,28 +380,9 @@ fun RiderMapHomeScreen(
                     )
                 }
             }
-            if (!openRequestsError.isNullOrBlank()) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shadowElevation = 3.dp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("rider_requests_error_card")
-                ) {
-                    Text(
-                        text = "Dispatch sync warning: $openRequestsError",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
         }
 
-        // Bottom Area: High-Contrast Incoming Ride Request Overlay OR Clean White Online/Offline Dock
+        // Bottom Area: High-Contrast Incoming Ride Request Overlay OR Clean Online/Offline Dock
         if (incomingRequest != null) {
             IncomingRideRequestOverlayCard(
                 booking = incomingRequest,
@@ -367,6 +402,9 @@ fun RiderMapHomeScreen(
                 },
                 onDirectAccept = onDirectAcceptRequest?.let { directFn ->
                     { fare -> directFn(incomingRequest, fare) }
+                },
+                onExpire = {
+                    (onExpireRequest ?: onDeclineRequest)(incomingRequest.id)
                 },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
@@ -393,8 +431,8 @@ fun IncomingRideRequestOverlayCard(
     booking: Booking,
     queueIndex: Int = 0,
     queueTotal: Int = 1,
-    riderLat: Double = 22.9041,
-    riderLng: Double = 88.3976,
+    riderLat: Double = com.example.domain.BoraiLaunchConfig.DEFAULT_LAT,
+    riderLng: Double = com.example.domain.BoraiLaunchConfig.DEFAULT_LNG,
     initialSeconds: Int = 25,
     onPreviousRequest: () -> Unit = {},
     onNextRequest: () -> Unit = {},
@@ -419,14 +457,16 @@ fun IncomingRideRequestOverlayCard(
         }
     }
     var remainingSeconds by remember(booking.id) { mutableIntStateOf(effectiveSeconds) }
-    val etaMins = remember(booking.id, riderLat, riderLng) {
-        val approxKm = com.example.domain.FareCalculator.haversineDistanceKm(
+    val pickupDistanceKm = remember(booking.id, riderLat, riderLng) {
+        com.example.domain.FareCalculator.haversineDistanceKm(
             riderLat,
             riderLng,
             booking.pickupLat,
             booking.pickupLng
         )
-        ((approxKm / 22.0) * 60.0).roundToInt().coerceIn(3, 35).toLong()
+    }
+    val etaMins = remember(pickupDistanceKm) {
+        ((pickupDistanceKm / 22.0) * 60.0).roundToInt().coerceIn(2, 45).toLong()
     }
 
     LaunchedEffect(booking.id) {
@@ -574,22 +614,29 @@ fun IncomingRideRequestOverlayCard(
                 }
             }
 
-            // Duration + Distance & Route Summary
+            // Pickup + Trip Duration + Distance & Route Summary
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
-                    text = "${booking.estimatedDurationMin} mins  •  ${String.format(Locale.US, "%.2f", booking.distanceKm)} kms",
-                    style = MaterialTheme.typography.titleMedium,
+                    text = String.format(
+                        Locale.US,
+                        "Pickup %.1f km away (~%d min)  •  Trip %.2f km (%d min)",
+                        pickupDistanceKm,
+                        etaMins,
+                        booking.distanceKm,
+                        booking.estimatedDurationMin
+                    ),
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = GolocalPureWhite
                 )
                 Text(
                     text = "${booking.pickupLabel} → ${booking.destinationLabel}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = GolocalPureWhite.copy(alpha = 0.78f),
+                    color = GolocalPureWhite.copy(alpha = 0.82f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -820,7 +867,7 @@ private fun RiderIdleDashboardDock(
                 val topOffer = activePendingOffers.first()
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = GolocalLightBlue,
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -831,7 +878,7 @@ private fun RiderIdleDashboardDock(
                         Text(
                             text = "Offer ₹${topOffer.proposedFareInr.toInt()} awaiting customer (${activePendingOffers.size} sent)",
                             style = MaterialTheme.typography.labelMedium,
-                            color = GolocalDeepNavy,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.weight(1f)
                         )
                         TextButton(

@@ -167,7 +167,7 @@ fun SampleRiderRequestsTab(
                                 "₹${ride.estimatedFareInr.toInt()} • ${String.format(Locale.US, "%.1f", ride.distanceKm)} km",
                                 fontFamily = JetBrainsMono,
                                 fontWeight = FontWeight.Bold,
-                                color = GolocalDeepNavy
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                         Text("Pickup: ${ride.pickupLabel}", style = MaterialTheme.typography.bodyMedium)
@@ -325,12 +325,13 @@ fun SampleRiderNotificationsTab(
                 Surface(
                     onClick = { if (!notif.read) onMarkRead(notif.id) },
                     shape = RoundedCornerShape(14.dp),
-                    color = if (notif.read) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f) else GolocalLightBlue,
+                    color = if (notif.read) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    val contentColor = if (notif.read) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimaryContainer
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(notif.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        Text(notif.body, style = MaterialTheme.typography.bodySmall)
+                        Text(notif.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = contentColor)
+                        Text(notif.body, style = MaterialTheme.typography.bodySmall, color = contentColor.copy(alpha = 0.9f))
                     }
                 }
             }
@@ -377,7 +378,7 @@ fun SampleRiderProfileAndSettingsTab(
                 modifier = Modifier
                     .size(64.dp)
                     .clip(CircleShape)
-                    .background(GolocalLightBlue),
+                    .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
                 if (photoUrl.isNotBlank()) {
@@ -387,7 +388,7 @@ fun SampleRiderProfileAndSettingsTab(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Icon(Icons.Filled.Person, contentDescription = "Sample Rider", tint = GolocalPrimaryBlue, modifier = Modifier.size(34.dp))
+                    Icon(Icons.Filled.Person, contentDescription = "Sample Rider", tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(34.dp))
                 }
             }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

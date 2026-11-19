@@ -537,14 +537,16 @@ fun RiderHomeDashboardTab(
             .filter { it.status == ExpiryStatus.EXPIRED || it.status == ExpiryStatus.EXPIRING_SOON }
     }
 
-    val currentLat = gps.lat ?: 22.9041
-    val currentLng = gps.lng ?: 88.3976
+    val currentLat = gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT
+    val currentLng = gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
 
     val isVerifyingTestOtp by driverViewModel.isVerifyingTestOtp.collectAsStateWithLifecycle()
     val testOtpError by driverViewModel.testOtpError.collectAsStateWithLifecycle()
     val isVerifyingCommercialOtp by driverViewModel.isVerifyingCommercialOtp.collectAsStateWithLifecycle()
     val commercialOtpError by driverViewModel.commercialOtpError.collectAsStateWithLifecycle()
     val openRequestsError by driverViewModel.openRequestsError.collectAsStateWithLifecycle()
+    val assignedBookingsError by driverViewModel.assignedBookingsError.collectAsStateWithLifecycle()
+    val gpsHealth by com.example.data.tracking.RiderLocationForegroundService.gpsHealth.collectAsStateWithLifecycle()
 
     if (activeTrip != null) {
         RiderActiveTripSheet(
@@ -637,6 +639,13 @@ fun RiderHomeDashboardTab(
             onDirectAcceptRequest = { booking, fareInr ->
                 com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, booking.id)
                 driverViewModel.acceptRideDirectly(booking, fareInr, currentLat, currentLng)
+            },
+            gpsHealth = gpsHealth,
+            onRetryRequestsSync = { driverViewModel.refreshDispatchFeeds() },
+            assignedBookingsError = assignedBookingsError,
+            onExpireRequest = { bookingId ->
+                com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, bookingId)
+                driverViewModel.rejectRequest(bookingId, isExpired = true)
             }
         )
     }

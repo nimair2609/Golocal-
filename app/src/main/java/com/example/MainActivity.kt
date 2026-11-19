@@ -20,6 +20,19 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 
+internal data class FirebaseAuthSnapshot(
+    val isInitialized: Boolean = false,
+    val currentUser: FirebaseUser? = null
+)
+
+internal fun FirebaseAuth.authSnapshotFlow(): Flow<FirebaseAuthSnapshot> = callbackFlow {
+    val listener = FirebaseAuth.AuthStateListener { auth ->
+        trySend(FirebaseAuthSnapshot(isInitialized = true, currentUser = auth.currentUser))
+    }
+    addAuthStateListener(listener)
+    awaitClose { removeAuthStateListener(listener) }
+}
+
 internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
     val listener = FirebaseAuth.AuthStateListener { auth ->
         trySend(auth.currentUser)

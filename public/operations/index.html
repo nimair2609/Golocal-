@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Operations Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.3.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge">OP</div>
+      <div>
+        <h1>GoLocal Operations &amp; Dispatch Dashboard</h1>
+        <p class="muted">Live Fleet Tracking • Delayed/Escalated Rides • Dispatch Notes • Complaints &amp; SOS</p>
+      </div>
+    </div>
+    <div class="row-between">
+      <span class="pill">Default Launch Focus: Borai (721457)</span>
+      <button id="opsSignOutBtn" class="secondary hidden">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="opsAuthGate" class="card" style="max-width: 520px; margin: 32px auto;">
+      <h2>Operations Coordinator Phone OTP Sign-In</h2>
+      <p class="muted">Authorized via <span class="mono">/operations_staff/{uid}</span>. Financial ledgers, pricing matrices, and customer private PII remain strictly isolated.</p>
+      <div id="opsAuthStatus" class="status-banner">Waiting for authentication…</div>
+      <form id="opsAuthForm" class="form-grid" style="grid-template-columns: 1fr;">
+        <label>
+          Operations Phone Number (E.164 or 10-digit India)
+          <input id="opsPhoneInput" type="tel" placeholder="+919876543210" required />
+        </label>
+        <div id="opsRecaptcha"></div>
+        <button id="opsSendOtpBtn" type="button">Send Phone OTP</button>
+        <label class="hidden">
+          6-Digit OTP Code
+          <input id="opsOtpInput" type="text" maxlength="6" placeholder="123456" />
+        </label>
+        <button id="opsVerifyOtpBtn" type="submit" class="hidden">Verify OTP &amp; Open Operations Desk</button>
+      </form>
+    </section>
+
+    <section id="opsDashboard" class="hidden">
+      <div class="kpi-grid">
+        <div class="kpi-card"><div id="opsKpiActiveRides" class="kpi-value">0</div><div class="kpi-label">Active / Live Rides</div></div>
+        <div class="kpi-card"><div id="opsKpiLiveDrivers" class="kpi-value">0</div><div class="kpi-label">Online Fleet (RTDB)</div></div>
+        <div class="kpi-card"><div id="opsKpiDelayed" class="kpi-value">0</div><div class="kpi-label">Delayed / Escalated</div></div>
+        <div class="kpi-card"><div id="opsKpiSos" class="kpi-value">0</div><div class="kpi-label">Active SOS Alerts</div></div>
+        <div class="kpi-card"><div id="opsKpiIssues" class="kpi-value">0</div><div class="kpi-label">Open Complaints / Disputes</div></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="row-between" style="margin-bottom:10px;">
+            <h3>Live OSM + MapLibre Dispatch Map</h3>
+            <button id="opsCenterBoraiBtn" type="button" class="secondary">Center Borai</button>
+          </div>
+          <div id="opsMap" class="map-canvas"></div>
+          <p id="opsMapInfo" class="muted" style="font-size:0.8rem; margin-top:8px;">
+            Click any active booking below to trace its OSRM corridor and live RTDB vehicle marker on the map.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>Active &amp; Delayed Trips Monitor</h3>
+          <div class="checkbox-row">
+            <select id="opsBookingFilter" style="max-width:230px;">
+              <option value="active">Active Trips</option>
+              <option value="delayed">Delayed (&gt; 15 min) / Escalated</option>
+              <option value="searching">Searching Drivers</option>
+              <option value="all">All Recent Rides</option>
+            </select>
+          </div>
+          <div id="opsBookingsList" class="list-stack"></div>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:16px;">
+        <div class="card">
+          <h3>Emergency SOS &amp; Support Triage</h3>
+          <div id="opsSosList" class="list-stack"></div>
+          <h4 style="margin-top:14px;">Complaints &amp; Formal Disputes (Non-Refund Resolution)</h4>
+          <div id="opsDisputesList" class="list-stack"></div>
+        </div>
+
+        <div class="card">
+          <h3>Verified Driver Availability Directory (No PII)</h3>
+          <div id="opsFleetList" class="list-stack"></div>
+          <h4 style="margin-top:14px;">Read-Only Active Coverage Zones</h4>
+          <div id="opsZonesReadOnlyList" class="list-stack"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@5.3.0/dist/maplibre-gl.js"></script>
+  <script type="module" src="./operations.js"></script>
+</body>
+</html>

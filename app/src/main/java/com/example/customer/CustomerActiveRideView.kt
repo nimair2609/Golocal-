@@ -247,7 +247,7 @@ fun CustomerActiveRideView(
                                 .height(4.dp)
                                 .clip(RoundedCornerShape(999.dp)),
                             color = GolocalPrimaryBlue,
-                            trackColor = GolocalLightBlue
+                            trackColor = MaterialTheme.colorScheme.primaryContainer
                         )
 
                         Text(
@@ -297,7 +297,10 @@ fun CustomerActiveRideView(
                             }
                             Button(
                                 onClick = onOpenCancel,
-                                colors = ButtonDefaults.buttonColors(containerColor = GolocalErrorContainerFallback, contentColor = GolocalError),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                ),
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
@@ -418,7 +421,7 @@ fun CustomerActiveRideView(
                     if (booking.assignedDriverId.isNotBlank()) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = GolocalLightBlue.copy(alpha = 0.65f),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
                             modifier = Modifier.fillMaxWidth().testTag("customer_test_driver_card")
                         ) {
                             Column(
@@ -434,19 +437,19 @@ fun CustomerActiveRideView(
                                         text = booking.assignedDriverName.ifBlank { "Simulated Test Driver" },
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
-                                        color = GolocalDeepNavy
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                     GolocalStatusBadge(label = "TEST DRIVER", tone = "warning")
                                 }
                                 Text(
                                     text = booking.assignedVehicleLabel.ifBlank { "TEST VEHICLE" },
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = GolocalPrimaryBlue
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
                                     text = "Simulated Driver • Controlled via Admin Portal",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
                                 )
                             }
                         }
@@ -457,7 +460,7 @@ fun CustomerActiveRideView(
                         booking.status in setOf("assigned", "arriving", "arrived")
                     ) {
                         Surface(
-                            color = GolocalLightBlue.copy(alpha = 0.78f),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f),
                             shape = RoundedCornerShape(16.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -474,12 +477,12 @@ fun CustomerActiveRideView(
                                         text = "Share 6-Digit Test Pickup OTP",
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.Bold,
-                                        color = GolocalDeepNavy
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                     Text(
                                         text = "Give this OTP to your Test Rider at pickup (valid until ride starts).",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = GolocalDeepNavy.copy(alpha = 0.78f)
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                     )
                                 }
                                 Text(
@@ -487,7 +490,7 @@ fun CustomerActiveRideView(
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontFamily = JetBrainsMono,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = GolocalPrimaryBlue,
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.testTag("customer_test_otp_secret_value")
                                 )
                             }
@@ -505,7 +508,7 @@ fun CustomerActiveRideView(
                     if (booking.status in setOf("assigned", "arriving", "arrived")) {
                         if (rideOtpSecret != null && rideOtpSecret.otpPlaintext.length == 6) {
                             Surface(
-                                color = GolocalLightBlue.copy(alpha = 0.78f),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f),
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -522,12 +525,12 @@ fun CustomerActiveRideView(
                                             text = "Share 6-Digit Pickup OTP with Rider",
                                             style = MaterialTheme.typography.labelLarge,
                                             fontWeight = FontWeight.Bold,
-                                            color = GolocalDeepNavy
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
                                         )
                                         Text(
                                             text = "Only share this OTP when your Rider arrives at pickup. Protected from driver until verified.",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = GolocalDeepNavy.copy(alpha = 0.78f)
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                         )
                                     }
                                     Text(
@@ -535,14 +538,14 @@ fun CustomerActiveRideView(
                                         style = MaterialTheme.typography.headlineSmall,
                                         fontFamily = JetBrainsMono,
                                         fontWeight = FontWeight.ExtraBold,
-                                        color = GolocalPrimaryBlue,
+                                        color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.testTag("customer_commercial_otp_value")
                                     )
                                 }
                             }
                         } else if (booking.tripPin.isNotBlank()) {
                             Surface(
-                                color = GolocalLightBlue.copy(alpha = 0.7f),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -693,8 +696,6 @@ fun CustomerActiveRideView(
     }
 }
 
-private val GolocalErrorContainerFallback = Color(0xFFFFEDEB)
-
 @Composable
 private fun IncomingOfferCard(
     offer: RideOffer,
@@ -722,14 +723,14 @@ private fun IncomingOfferCard(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(GolocalLightBlue),
+                        .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = offer.driverName.trim().take(2).uppercase().ifBlank { "DR" },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = GolocalPrimaryBlue
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
@@ -755,13 +756,13 @@ private fun IncomingOfferCard(
                 }
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = GolocalDeepNavy
+                    color = MaterialTheme.colorScheme.primary
                 ) {
                     Text(
                         text = "₹${offer.proposedFareInr.toInt()}",
                         style = MaterialTheme.typography.titleSmall,
                         fontFamily = JetBrainsMono,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onPrimary,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                     )
@@ -870,17 +871,17 @@ fun RideCompletedReceiptDialog(
                 Text("${booking.pickupLabel} -> ${booking.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = GolocalLightBlue.copy(alpha = 0.45f),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Total Paid (${booking.paymentMethod.uppercase()})", style = MaterialTheme.typography.bodySmall)
-                            Text("₹${settlement.grossFareInr.toInt()}", fontFamily = JetBrainsMono, fontWeight = FontWeight.Bold)
+                            Text("Total Paid (${booking.paymentMethod.uppercase()})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("₹${settlement.grossFareInr.toInt()}", fontFamily = JetBrainsMono, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Included GST (${booking.gstPercent.toInt()}%)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("₹${settlement.gstInr}", fontFamily = JetBrainsMono, style = MaterialTheme.typography.labelSmall)
+                            Text("Included GST (${booking.gstPercent.toInt()}%)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                            Text("₹${settlement.gstInr}", fontFamily = JetBrainsMono, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
                         }
                     }
                 }

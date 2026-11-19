@@ -8,19 +8,20 @@ data class WestBengalPlace(
     val block: String,
     val category: String, // railway_station, bus_stand, airport, village, hospital, school, market, town
     val lat: Double,
-    val lng: Double
+    val lng: Double,
+    val pinCode: String = ""
 )
 
 object WestBengalCatalog {
     val places: List<WestBengalPlace> = listOf(
         // Default Launch Cluster: Borai (PIN 721457), Mohanpur Block, Paschim Medinipur
-        WestBengalPlace("borai_721457", "Borai Market & Stand (PIN 721457)", "বড়াই বাজার ও স্ট্যান্ড (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8160, 87.3703),
-        WestBengalPlace("mohanpur_block", "Mohanpur Block HQ & Market", "মোহনপুর ব্লক ও বাজার", "Paschim Medinipur", "Mohanpur", "town", 21.8439, 87.4191),
-        WestBengalPlace("gholai_721457", "Gholai Village (PIN 721457)", "ঘোলাই গ্রাম (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8050, 87.3590),
-        WestBengalPlace("paikbar_721457", "Paikbar Village (PIN 721457)", "পাইকবাড় গ্রাম (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8255, 87.3845),
-        WestBengalPlace("agarara_721457", "Agarara More (PIN 721457)", "আগরআড়া মোড় (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8325, 87.3520),
-        WestBengalPlace("jaysankhapur_721457", "Jaysankhapur Village", "জয়শঙ্খপুর গ্রাম", "Paschim Medinipur", "Mohanpur", "village", 21.7975, 87.3860),
-        WestBengalPlace("nilda_mohanpur", "Nilda Gram Panchayat", "নিলদা গ্রাম পঞ্চায়েত", "Paschim Medinipur", "Mohanpur", "village", 21.8552, 87.3920),
+        WestBengalPlace("borai_721457", "Borai Market & Stand (PIN 721457)", "বড়াই বাজার ও স্ট্যান্ড (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8160, 87.3703, "721457"),
+        WestBengalPlace("mohanpur_block", "Mohanpur Block HQ & Market", "মোহনপুর ব্লক ও বাজার", "Paschim Medinipur", "Mohanpur", "town", 21.8439, 87.4191, "721436"),
+        WestBengalPlace("gholai_721457", "Gholai Village (PIN 721457)", "ঘোলাই গ্রাম (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8050, 87.3590, "721457"),
+        WestBengalPlace("paikbar_721457", "Paikbar Village (PIN 721457)", "পাইকবাড় গ্রাম (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8255, 87.3845, "721457"),
+        WestBengalPlace("agarara_721457", "Agarara More (PIN 721457)", "আগরআড়া মোড় (৭২১৪৫৭)", "Paschim Medinipur", "Mohanpur", "village", 21.8325, 87.3520, "721457"),
+        WestBengalPlace("jaysankhapur_721457", "Jaysankhapur Village", "জয়শঙ্খপুর গ্রাম", "Paschim Medinipur", "Mohanpur", "village", 21.7975, 87.3860, "721457"),
+        WestBengalPlace("nilda_mohanpur", "Nilda Gram Panchayat", "নিলদা গ্রাম পঞ্চায়েত", "Paschim Medinipur", "Mohanpur", "village", 21.8552, 87.3920, "721436"),
         WestBengalPlace("dantan_stn", "Dantan Railway Station & Town", "দাঁতন রেল স্টেশন ও শহর", "Paschim Medinipur", "Dantan I", "railway_station", 21.9504, 87.2693),
         WestBengalPlace("egra_bus_stand", "Egra Central Bus Stand", "এগরা বাস স্ট্যান্ড", "Purba Medinipur", "Egra I", "bus_stand", 21.9001, 87.5378),
         WestBengalPlace("belda_stn", "Belda Railway Station", "বেলদা রেল স্টেশন", "Paschim Medinipur", "Narayangarh", "railway_station", 22.0835, 87.3452),
@@ -67,9 +68,22 @@ object WestBengalCatalog {
                 place.nameBn.contains(q) ||
                 place.district.lowercase().contains(q) ||
                 place.block.lowercase().contains(q) ||
+                place.pinCode.contains(q) ||
                 place.category.lowercase().contains(q) ||
                 (q.contains("721457") && place.block.equals("Mohanpur", ignoreCase = true))
             catMatch && textMatch
         }
+    }
+
+    fun nearestPlace(
+        lat: Double,
+        lng: Double,
+        maxKm: Double = Double.MAX_VALUE
+    ): WestBengalPlace? {
+        return places
+            .map { it to FareCalculator.haversineDistanceKm(lat, lng, it.lat, it.lng) }
+            .filter { (_, distKm) -> distKm <= maxKm }
+            .minByOrNull { (_, distKm) -> distKm }
+            ?.first
     }
 }

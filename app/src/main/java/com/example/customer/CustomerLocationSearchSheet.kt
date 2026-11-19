@@ -383,13 +383,13 @@ fun CustomerLocationSearchSheet(
                                 modifier = Modifier
                                     .size(48.dp)
                                     .clip(CircleShape)
-                                    .background(GolocalLightBlue.copy(alpha = 0.6f))
+                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f))
                                     .testTag("swap_locations_button")
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.SwapVert,
                                     contentDescription = "Swap pickup and destination",
-                                    tint = GolocalPrimaryBlue
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                             }
                         }
@@ -466,7 +466,7 @@ fun CustomerLocationSearchSheet(
                     item {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = GolocalErrorContainer.copy(alpha = 0.55f),
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.75f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -474,7 +474,12 @@ fun CustomerLocationSearchSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Icon(Icons.Filled.LocationOff, contentDescription = null, tint = GolocalError, modifier = Modifier.size(18.dp))
+                                Icon(
+                                    Icons.Filled.LocationOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Text(
                                     text = gps.error
                                         ?: if (accessState == LocationAccessState.GPS_DISABLED) {
@@ -483,7 +488,7 @@ fun CustomerLocationSearchSheet(
                                             "Grant location permission for live pickup detection, or search manually."
                                         },
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = GolocalDeepNavy,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
                                     modifier = Modifier.weight(1f)
                                 )
                                 if (accessState == LocationAccessState.GRANTED_READY) {
@@ -499,7 +504,7 @@ fun CustomerLocationSearchSheet(
                     item {
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = GolocalLightBlue.copy(alpha = 0.5f),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
@@ -514,11 +519,15 @@ fun CustomerLocationSearchSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Icon(Icons.Filled.AddLocationAlt, contentDescription = null, tint = GolocalPrimaryBlue)
+                                Icon(
+                                    Icons.Filled.AddLocationAlt,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
                                 Text(
                                     text = "Use \"${searchQuery.trim()}\" as custom locality",
                                     style = MaterialTheme.typography.labelLarge,
-                                    color = GolocalPrimaryBlue
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                             }
                         }
@@ -627,12 +636,12 @@ private fun RouteStopPill(
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(14.dp),
-        color = if (selected) GolocalLightBlue.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
         modifier = modifier
             .fillMaxWidth()
             .border(
                 width = if (selected) 1.5.dp else 1.dp,
-                color = if (selected) GolocalPrimaryBlue else Color.Transparent,
+                color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
                 shape = RoundedCornerShape(14.dp)
             )
     ) {
@@ -686,10 +695,10 @@ private fun LocationResultRow(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(GolocalLightBlue.copy(alpha = 0.5f)),
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, contentDescription = null, tint = GolocalPrimaryBlue, modifier = Modifier.size(18.dp))
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)

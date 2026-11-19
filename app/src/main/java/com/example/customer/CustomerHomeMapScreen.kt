@@ -389,7 +389,7 @@ fun CustomerHomeMapScreen(
                 Surface(
                     onClick = { onOpenBookRide("now") },
                     shape = RoundedCornerShape(18.dp),
-                    color = GolocalLightBlue.copy(alpha = 0.42f),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 56.dp)
@@ -420,7 +420,7 @@ fun CustomerHomeMapScreen(
                                 text = "Where would you like to go?",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = GolocalDeepNavy
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "Pickup • Station • Bus Stand • Airport • Village",
@@ -487,7 +487,7 @@ fun CustomerHomeMapScreen(
                                     Text(
                                         text = "TEST DRIVER: ${activeBooking.assignedDriverName} (${activeBooking.assignedVehicleLabel.ifBlank { "TEST VEHICLE" }})",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = GolocalDeepNavy
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                 } else {
                                     BookingCommunicationBar(
@@ -678,10 +678,10 @@ private fun HomeServiceChip(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(GolocalLightBlue),
+                    .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, contentDescription = title, tint = GolocalPrimaryBlue, modifier = Modifier.size(18.dp))
+                Icon(icon, contentDescription = title, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
             }
             Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)

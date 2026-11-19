@@ -31,6 +31,22 @@ android {
       .replace("\\", "\\\\")
       .replace("\"", "\\\"")
     buildConfigField("String", "UPDATE_MANIFEST_URL", "\"$manifestUrl\"")
+    val osmTileUrl = (System.getenv("OSM_TILE_URL_TEMPLATE") ?: "")
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "OSM_TILE_URL_TEMPLATE", "\"$osmTileUrl\"")
+    val osrmUrl = (System.getenv("OSRM_BASE_URL") ?: "")
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "OSRM_BASE_URL", "\"$osrmUrl\"")
+    val geocodingUrl = (System.getenv("GEOCODING_BASE_URL") ?: "")
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "GEOCODING_BASE_URL", "\"$geocodingUrl\"")
+    val rtdbUrl = (System.getenv("FIREBASE_RTDB_URL") ?: "")
+      .replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+    buildConfigField("String", "FIREBASE_RTDB_URL", "\"$rtdbUrl\"")
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

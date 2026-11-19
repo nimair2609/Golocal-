@@ -131,8 +131,11 @@ fun SampleRiderDashboardShell(
         }
     )
 
+    val profileState by sampleViewModel.profileState.collectAsStateWithLifecycle()
     val profile by sampleViewModel.profile.collectAsStateWithLifecycle()
     val incomingRides by sampleViewModel.incomingRides.collectAsStateWithLifecycle()
+    val incomingError by sampleViewModel.incomingError.collectAsStateWithLifecycle()
+    val assignedError by sampleViewModel.assignedError.collectAsStateWithLifecycle()
     val activeRide by sampleViewModel.activeRide.collectAsStateWithLifecycle()
     val completedRides by sampleViewModel.completedRides.collectAsStateWithLifecycle()
     val rideHistory by sampleViewModel.rideHistory.collectAsStateWithLifecycle()
@@ -148,6 +151,7 @@ fun SampleRiderDashboardShell(
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
 
     var selectedTab by remember { mutableStateOf("home") }
+    var lastAutoFocusedSampleId by remember { mutableStateOf<String?>(null) }
     var showSosDialog by remember { mutableStateOf(false) }
     var previouslyAlertedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
@@ -234,25 +238,95 @@ fun SampleRiderDashboardShell(
         previouslyAlertedIds = currentIds
     }
 
+    LaunchedEffect(activeRide?.rideId) {
+        val currentId = activeRide?.rideId
+        if (currentId != null && currentId != lastAutoFocusedSampleId) {
+            lastAutoFocusedSampleId = currentId
+            selectedTab = "home"
+        } else if (currentId == null) {
+            lastAutoFocusedSampleId = null
+        }
+    }
+
     LaunchedEffect(deepLinkTarget) {
         val target = deepLinkTarget ?: return@LaunchedEffect
-        if (target.isSampleRide || target.targetScreen == "requests") {
-            selectedTab = "requests"
+        val normType = target.type.trim().lowercase()
+        val normScreen = target.targetScreen.trim().lowercase()
+        if (target.isSampleRide || normType.startsWith("sample_") || normScreen in setOf("requests", "rider_home", "home")) {
+            selectedTab = when {
+                normType == "sample_request" || normScreen == "requests" -> "requests"
+                else -> "home"
+            }
             onDeepLinkHandled()
         }
     }
 
     BackHandler(enabled = selectedTab != "home") { selectedTab = "home" }
 
-    val loadedProfile = profile
+    val loadedProfile = when (val state = profileState) {
+        is com.example.data.model.UiState.Loading -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+            return
+        }
+        is com.example.data.model.UiState.Error -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Unable to load Sample Rider profile: ${state.message}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                Button(
+                    onClick = { sampleViewModel.retryStreams() },
+                    modifier = Modifier.testTag("sample_profile_retry_button")
+                ) {
+                    Text("Retry Sync")
+                }
+                TextButton(onClick = { signOut(scope, context) }) {
+                    Text("Sign Out")
+                }
+            }
+            return
+        }
+        is com.example.data.model.UiState.Success -> state.data
+    }
+
     if (loadedProfile == null) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing),
-            contentAlignment = Alignment.Center
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            CircularProgressIndicator()
+            Text(
+                text = "Sample Rider profile record was not found for this account.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Button(
+                onClick = { sampleViewModel.retryStreams() },
+                modifier = Modifier.testTag("sample_profile_retry_button")
+            ) {
+                Text("Retry Sync")
+            }
+            TextButton(onClick = { signOut(scope, context) }) {
+                Text("Sign Out")
+            }
         }
         return
     }
@@ -382,7 +456,11 @@ fun SampleRiderDashboardShell(
                                     }
                                 },
                                 onCancelActiveRide = { reason -> sampleViewModel.cancelActiveRide(reason) },
-                                onOpenSos = { showSosDialog = true }
+                                onOpenSos = { showSosDialog = true },
+                                topIncomingRide = incomingRides.firstOrNull(),
+                                incomingError = incomingError ?: assignedError,
+                                onAcceptIncoming = { sampleViewModel.acceptIncomingRide(it) },
+                                onRetrySync = { sampleViewModel.retryStreams() }
                             )
                             "requests" -> SampleRiderRequestsTab(
                                 profile = loadedProfile,
@@ -415,6 +493,32 @@ fun SampleRiderDashboardShell(
                                     signOut(scope, context)
                                 }
                             )
+                        }
+                    }
+
+                    val activeSampleBanner = activeRide
+                    if (activeSampleBanner != null && selectedTab != "home") {
+                        Surface(
+                            onClick = { selectedTab = "home" },
+                            shape = RoundedCornerShape(16.dp),
+                            color = GolocalSuccess,
+                            shadowElevation = 8.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("sample_active_trip_resume_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "Active Sample Ride (${activeSampleBanner.status.uppercase()}) • Return to Trip",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Color.White
+                                )
+                            }
                         }
                     }
 
@@ -526,7 +630,11 @@ internal fun SampleRiderHomeTab(
     onVerifyOtpAndStart: (String) -> Unit,
     onCompleteRide: () -> Unit,
     onCancelActiveRide: (String) -> Unit,
-    onOpenSos: () -> Unit
+    onOpenSos: () -> Unit,
+    topIncomingRide: SampleRide? = null,
+    incomingError: String? = null,
+    onAcceptIncoming: ((SampleRide) -> Unit)? = null,
+    onRetrySync: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -676,6 +784,32 @@ internal fun SampleRiderHomeTab(
             )
         }
 
+        if (!incomingError.isNullOrBlank()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("sample_requests_error_card")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Sample sync error: $incomingError",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onRetrySync) {
+                        Text("Retry", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         if (activeRide != null) {
             SampleRiderActiveTripCard(
                 ride = activeRide,
@@ -697,9 +831,11 @@ internal fun SampleRiderHomeTab(
         } else {
             Surface(
                 shape = RoundedCornerShape(18.dp),
-                color = if (incomingCount > 0) GolocalLightBlue else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                color = if (incomingCount > 0) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                 modifier = Modifier.fillMaxWidth()
             ) {
+                val cardTextColor = if (incomingCount > 0) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                val cardSubColor = if (incomingCount > 0) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -713,18 +849,49 @@ internal fun SampleRiderHomeTab(
                             "You are Offline"
                         },
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = cardTextColor
                     )
-                    Text(
-                        text = "Dispatch a sample ride from Customer Test Mode or the Admin Portal to experience live accept, GPS broadcast, Google Maps navigation, OTP verification, and ride completion.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(
-                        onClick = onOpenRequests,
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("open_sample_requests_button")
+                    if (topIncomingRide != null) {
+                        Text(
+                            text = "${topIncomingRide.pickupLabel} → ${topIncomingRide.destinationLabel} • ${String.format(Locale.US, "%.1f", topIncomingRide.distanceKm)} km • ₹${topIncomingRide.estimatedFareInr.toInt()}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = cardTextColor
+                        )
+                    } else {
+                        Text(
+                            text = "Dispatch a sample ride from Customer Test Mode or the Admin Portal to experience live accept, GPS broadcast, Google Maps navigation, OTP verification, and ride completion.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cardSubColor
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(if (incomingCount > 0) "View Incoming Requests ($incomingCount)" else "Open Requests Queue")
+                        if (topIncomingRide != null && onAcceptIncoming != null) {
+                            Button(
+                                onClick = { onAcceptIncoming(topIncomingRide) },
+                                enabled = !isBusy,
+                                colors = ButtonDefaults.buttonColors(containerColor = GolocalSuccess),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("home_accept_top_sample_button")
+                            ) {
+                                Text("Accept Top Ride", maxLines = 1)
+                            }
+                        }
+                        Button(
+                            onClick = onOpenRequests,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("open_sample_requests_button")
+                        ) {
+                            Text(if (incomingCount > 0) "View Queue ($incomingCount)" else "Open Requests Queue", maxLines = 1)
+                        }
                     }
                 }
             }

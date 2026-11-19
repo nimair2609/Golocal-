@@ -471,7 +471,20 @@ fun RiderAuthenticatedShell(
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Unable to load Rider profile: ${state.message}")
+                        Text(
+                            text = "Unable to load Rider profile: ${state.message}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = { driverViewModel.refreshDispatchFeeds() },
+                            modifier = Modifier.testTag("rider_profile_retry_button")
+                        ) {
+                            Text("Retry Sync")
+                        }
+                        TextButton(onClick = { signOut(scope = scope, context = context) }) {
+                            Text("Sign Out")
+                        }
                     }
                 }
 
@@ -497,6 +510,16 @@ fun RiderAuthenticatedShell(
                         }
                     } else {
                         var selectedTab by remember { mutableStateOf("home") }
+                        var lastAutoFocusedBookingId by remember { mutableStateOf<String?>(null) }
+                        LaunchedEffect(activeAssignedBooking?.id) {
+                            val activeId = activeAssignedBooking?.id
+                            if (activeId != null && activeId != lastAutoFocusedBookingId) {
+                                lastAutoFocusedBookingId = activeId
+                                selectedTab = "home"
+                            } else if (activeId == null) {
+                                lastAutoFocusedBookingId = null
+                            }
+                        }
                         LaunchedEffect(deepLinkTarget) {
                             val target = deepLinkTarget ?: return@LaunchedEffect
                             selectedTab = resolveRiderDeepLinkTab(target = target, inTestMode = false)
@@ -594,8 +617,8 @@ fun RiderAuthenticatedShell(
                                                 "requests" -> RiderRequestsTab(
                                                     profile = profile,
                                                     driverViewModel = driverViewModel,
-                                                    currentLat = gps.lat ?: 22.9041,
-                                                    currentLng = gps.lng ?: 88.3976
+                                                    currentLat = gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT,
+                                                    currentLng = gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
                                                 )
                                                 "earnings" -> RiderEarningsHistoryTab(profile = profile, driverViewModel = driverViewModel)
                                                 "notifications" -> RiderNotificationsTab(
@@ -612,6 +635,32 @@ fun RiderAuthenticatedShell(
                                                     onOpenEarnings = { selectedTab = "earnings" },
                                                     onOpenNotifications = { selectedTab = "notifications" }
                                                 )
+                                            }
+                                        }
+
+                                        val activeBannerBooking = activeAssignedBooking
+                                        if (activeBannerBooking != null && selectedTab != "home") {
+                                            androidx.compose.material3.Surface(
+                                                onClick = { selectedTab = "home" },
+                                                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                                                color = com.example.ui.theme.GolocalSuccess,
+                                                shadowElevation = 8.dp,
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomCenter)
+                                                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                                                    .testTag("rider_active_trip_resume_banner")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "Active Ride (${activeBannerBooking.status.replace('_', ' ').uppercase()}) • Return to Trip",
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        color = com.example.ui.theme.GolocalPureWhite
+                                                    )
+                                                }
                                             }
                                         }
 
@@ -666,7 +715,17 @@ internal fun resolveRiderDeepLinkTab(
             normScreen in setOf("summary", "earnings") -> "summary"
             normScreen == "profile" || normType == "test_rider_status" -> "profile"
             normScreen in setOf("home", "test_rider_dashboard", "active_trip", "booking", "chat") ||
-                normType in setOf("chat", "booking_chat", "booking", "test_ride", "test_otp") ||
+                normType in setOf(
+                    "chat",
+                    "booking_chat",
+                    "booking",
+                    "booking_assigned",
+                    "assigned",
+                    "ride_accepted",
+                    "test_ride",
+                    "test_otp",
+                    "trip_status"
+                ) ||
                 normType.startsWith("test_driver_booking") -> "home"
             else -> "alerts"
         }
@@ -679,8 +738,19 @@ internal fun resolveRiderDeepLinkTab(
             normType in setOf("settlement", "payout") -> "earnings"
         normScreen == "profile" ||
             normType in setOf("kyc_status_update", "document_expiry_reminder", "kyc") -> "profile"
-        normScreen in setOf("home", "active_trip", "booking", "chat") ||
-            normType in setOf("chat", "booking_chat", "booking", "ride_offer", "driver_assigned", "trip_status", "booking_exception") ||
+        normScreen in setOf("home", "active_trip", "booking", "chat", "rider_home") ||
+            normType in setOf(
+                "chat",
+                "booking_chat",
+                "booking",
+                "booking_assigned",
+                "assigned",
+                "ride_accepted",
+                "ride_offer",
+                "driver_assigned",
+                "trip_status",
+                "booking_exception"
+            ) ||
             normType.startsWith("driver_booking") -> "home"
         else -> "notifications"
     }

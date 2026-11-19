@@ -62,14 +62,15 @@ import kotlin.math.roundToInt
 fun RiderRequestsTab(
     profile: DriverProfile,
     driverViewModel: DriverViewModel,
-    currentLat: Double = 22.9041,
-    currentLng: Double = 88.3976
+    currentLat: Double = com.example.domain.BoraiLaunchConfig.DEFAULT_LAT,
+    currentLng: Double = com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
 ) {
     val openRequests by driverViewModel.openRequests.collectAsStateWithLifecycle()
     val openRequestsError by driverViewModel.openRequestsError.collectAsStateWithLifecycle()
     val myOffers by driverViewModel.myOffers.collectAsStateWithLifecycle()
     var proposalTarget by remember { mutableStateOf<Booking?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val pendingOfferCount = remember(myOffers) { myOffers.count { it.status == "pending" } }
 
     Column(
         modifier = Modifier
@@ -80,11 +81,36 @@ fun RiderRequestsTab(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text(
-            text = "Incoming Ride Requests",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Incoming Ride Requests",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            TextButton(
+                onClick = { driverViewModel.refreshDispatchFeeds() },
+                modifier = Modifier.testTag("requests_tab_refresh_button")
+            ) {
+                Text("Refresh")
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Status: ${if (profile.isOnline) "Online" else "Offline"} • Category: ${profile.vehicleCategory.uppercase()} • ${openRequests.size} open • $pendingOfferCount pending proposal(s)",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
 
         if (!openRequestsError.isNullOrBlank()) {
             Surface(
@@ -94,12 +120,21 @@ fun RiderRequestsTab(
                     .fillMaxWidth()
                     .testTag("rider_requests_error_card")
             ) {
-                Text(
-                    text = "Request listener error: $openRequestsError",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.padding(12.dp)
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Request listener error: $openRequestsError",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { driverViewModel.refreshDispatchFeeds() }) {
+                        Text("Retry", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
 
@@ -112,6 +147,7 @@ fun RiderRequestsTab(
                 Text(
                     text = "Tip: Toggle Online on the Home map so nearby passengers see your vehicle availability.",
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.padding(12.dp)
                 )
             }
@@ -130,6 +166,13 @@ fun RiderRequestsTab(
                     gstPercent = booking.gstPercent,
                     commissionPercent = booking.commissionPercent
                 ).toInt()
+                val pickupKm = com.example.domain.FareCalculator.haversineDistanceKm(
+                    currentLat,
+                    currentLng,
+                    booking.pickupLat,
+                    booking.pickupLng
+                )
+                val pickupEtaMin = ((pickupKm / 22.0) * 60.0).roundToInt().coerceIn(2, 45)
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surface,
@@ -172,12 +215,12 @@ fun RiderRequestsTab(
                         }
                         Text("${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            text = "Passenger: $passengerFirst • ${booking.distanceKm} km (~${booking.estimatedDurationMin} min) • ${booking.paymentMethod.uppercase()}",
+                            text = "Pickup ${String.format(java.util.Locale.US, "%.1f", pickupKm)} km away (~$pickupEtaMin min) • Trip ${booking.distanceKm} km (~${booking.estimatedDurationMin} min)",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Permitted Proposal Range: ₹${booking.minPermittedFareInr.toInt()} – ₹${booking.maxPermittedFareInr.toInt()}",
+                            text = "Passenger: $passengerFirst • ${booking.paymentMethod.uppercase()} • Permitted Band: ₹${booking.minPermittedFareInr.toInt()}–₹${booking.maxPermittedFareInr.toInt()}",
                             style = MaterialTheme.typography.labelMedium,
                             color = GolocalSuccess
                         )

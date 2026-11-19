@@ -294,6 +294,67 @@ class GolocalRepositoryRuleTest : FirestoreEmulatorTestBase() {
         assertTrue("Other users must receive PERMISSION_DENIED reading emergency_contacts/{uid}", denied)
     }
 
+    @Test
+    fun ensureOwnProfileDocuments_healsMissingDocsAndIsolatesPrivateProfiles() = runBlocking {
+        val aliceUid = signInTestUser("alice_profile_${UUID.randomUUID()}@test.com")
+        val aliceRepo = GolocalRepository(firestore, auth)
+
+        // Fresh user opens Profile Details -> ensureUserAccount creates/heals users/{uid} and customer_profiles/{uid}
+        val ensuredAccount = withTimeout(TIMEOUT_MS) {
+            aliceRepo.ensureUserAccount("Alice Sen", "alice@test.com", "").getOrThrow()
+        }
+        assertEquals(aliceUid, ensuredAccount.userId)
+
+        // Owner updates profile details safely
+        withTimeout(TIMEOUT_MS) {
+            aliceRepo.updateUserPreferences(
+                fullName = "Srijita Chatterjee",
+                email = "srijita@example.com"
+            ).getOrThrow()
+            aliceRepo.saveCustomerProfile(
+                CustomerProfile(
+                    userId = aliceUid,
+                    homeAddress = "Chinsurah Station Para",
+                    workAddress = "Salt Lake Sector V",
+                    nativeVillage = "Bandel",
+                    nativeDistrict = "Hooghly"
+                )
+            ).getOrThrow()
+        }
+
+        val reloadedCustomer = withTimeout(FLOW_TIMEOUT_MS) {
+            aliceRepo.observeCustomerProfile(aliceUid).first { it?.nativeDistrict == "Hooghly" }
+        }
+        assertEquals("Chinsurah Station Para", reloadedCustomer?.homeAddress)
+
+        // Switch to another user (Bob) -> Bob CANNOT read Alice's users/{aliceUid} or customer_profiles/{aliceUid}
+        signInTestUser("bob_profile_${UUID.randomUUID()}@test.com")
+
+        var userProfileDenied = false
+        try {
+            withTimeout(TIMEOUT_MS) {
+                firestore.collection("users").document(aliceUid).get().await()
+            }
+        } catch (e: Exception) {
+            if (e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                userProfileDenied = true
+            }
+        }
+        assertTrue("Cross-user read on users/{uid} must fail with PERMISSION_DENIED", userProfileDenied)
+
+        var custProfileDenied = false
+        try {
+            withTimeout(TIMEOUT_MS) {
+                firestore.collection("customer_profiles").document(aliceUid).get().await()
+            }
+        } catch (e: Exception) {
+            if (e.unwrapFirestoreException()?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                custProfileDenied = true
+            }
+        }
+        assertTrue("Cross-user read on customer_profiles/{uid} must fail with PERMISSION_DENIED", custProfileDenied)
+    }
+
     private companion object {
         const val TIMEOUT_MS = 5000L
         const val FLOW_TIMEOUT_MS = 4000L

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Owner Admin Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.3.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge">OA</div>
+      <div>
+        <h1>GoLocal Owner Admin Dashboard</h1>
+        <p class="muted">Service Boundaries • Vehicles • Fares &amp; GST • KYC • Operations Allowlist</p>
+      </div>
+    </div>
+    <div class="row-between">
+      <a href="../operations/" class="pill">Switch to Operations View</a>
+      <button id="ownerSignOutBtn" class="secondary hidden">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="ownerAuthGate" class="card" style="max-width: 520px; margin: 32px auto;">
+      <h2>Owner Admin Phone OTP Sign-In</h2>
+      <p class="muted">Sign in with your verified Owner Admin Firebase Phone number (allowlisted in <span class="mono">/admins/{uid}</span>).</p>
+      <div id="ownerAuthStatus" class="status-banner">Waiting for authentication…</div>
+      <form id="ownerAuthForm" class="form-grid" style="grid-template-columns: 1fr;">
+        <label>
+          Admin Phone Number (E.164 or 10-digit India)
+          <input id="ownerPhoneInput" type="tel" placeholder="+919876543210" required />
+        </label>
+        <div id="ownerRecaptcha"></div>
+        <button id="ownerSendOtpBtn" type="button">Send Phone OTP</button>
+        <label class="hidden">
+          6-Digit OTP Code
+          <input id="ownerOtpInput" type="text" maxlength="6" placeholder="123456" />
+        </label>
+        <button id="ownerVerifyOtpBtn" type="submit" class="hidden">Verify OTP &amp; Enter Owner Admin</button>
+      </form>
+    </section>
+
+    <section id="ownerDashboard" class="hidden">
+      <div class="kpi-grid">
+        <div class="kpi-card"><div id="kpiZones" class="kpi-value">0</div><div class="kpi-label">Configured Service Zones</div></div>
+        <div class="kpi-card"><div id="kpiOnlineDrivers" class="kpi-value">0</div><div class="kpi-label">Live RTDB Drivers</div></div>
+        <div class="kpi-card"><div id="kpiBookings" class="kpi-value">0</div><div class="kpi-label">Total Bookings</div></div>
+        <div class="kpi-card"><div id="kpiRevenue" class="kpi-value">₹0</div><div class="kpi-label">Gross Revenue</div></div>
+        <div class="kpi-card"><div id="kpiPendingKyc" class="kpi-value">0</div><div class="kpi-label">Pending Driver KYC</div></div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="zones">Service Areas &amp; MapLibre Boundaries</button>
+        <button class="tab-btn" data-tab="fares">Fares &amp; Commission</button>
+        <button class="tab-btn" data-tab="kyc">Driver KYC Queue</button>
+        <button class="tab-btn" data-tab="staff">Operations Staff Allowlist</button>
+        <button class="tab-btn" data-tab="endpoints">OSM / OSRM / Nominatim Config</button>
+      </div>
+
+      <div id="tab-zones" class="tab-panel">
+        <div class="grid-2">
+          <div class="card">
+            <div class="row-between" style="margin-bottom: 10px;">
+              <h3>Service Boundary &amp; Live Fleet Map (OSM + MapLibre)</h3>
+              <span class="pill">Default: Borai 721457</span>
+            </div>
+            <div class="form-grid" style="margin-bottom: 10px;">
+              <label>
+                Search Locality (Nominatim)
+                <input id="zoneGeoSearchInput" type="text" placeholder="Borai, Mohanpur, Dantan, Kharagpur…" />
+              </label>
+              <div style="display:flex; align-items:flex-end; gap:8px;">
+                <button id="zoneGeoSearchBtn" type="button" class="secondary">Find &amp; Center</button>
+                <button id="resetBoraiBtn" type="button" class="secondary">Center Borai</button>
+              </div>
+            </div>
+            <div id="ownerMap" class="map-canvas"></div>
+            <div class="checkbox-row" style="margin-top:10px;">
+              <button id="togglePolyDrawBtn" type="button" class="secondary">Draw Polygon Vertices: OFF</button>
+              <button id="clearPolyBtn" type="button" class="secondary">Clear Custom Polygon</button>
+              <button id="testOsrmBtn" type="button" class="secondary">Test OSRM Route (Borai → Kharagpur)</button>
+            </div>
+            <p id="mapActionHint" class="muted" style="font-size:0.8rem;">
+              Click anywhere on the map to set Zone Center, or enable Polygon Vertices mode to click custom boundary corners.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3 id="zoneFormTitle">Configure Service Area</h3>
+            <form id="serviceAreaForm" class="form-grid">
+              <input id="zoneDocId" type="hidden" />
+              <label>Area Name * <input id="zoneName" type="text" value="Borai Launch Zone" required /></label>
+              <label>Bengali Name <input id="zoneNameBn" type="text" value="বোরাই" /></label>
+              <label>District * <input id="zoneDistrict" type="text" value="Paschim Medinipur" required /></label>
+              <label>Block / Town <input id="zoneBlock" type="text" value="Mohanpur" /></label>
+              <label>PIN Code <input id="zonePin" type="text" value="721457" /></label>
+              <label>Zone Type
+                <select id="zoneType">
+                  <option value="village">village</option>
+                  <option value="town">town</option>
+                  <option value="railway_station">railway_station</option>
+                  <option value="bus_stand">bus_stand</option>
+                  <option value="market">market</option>
+                  <option value="hospital">hospital</option>
+                  <option value="airport">airport</option>
+                </select>
+              </label>
+              <label>Center Latitude <input id="zoneLat" type="number" step="0.0001" value="21.8160" required /></label>
+              <label>Center Longitude <input id="zoneLng" type="number" step="0.0001" value="87.3703" required /></label>
+              <label>Coverage Radius (km) <input id="zoneRadiusKm" type="number" step="0.5" min="0.5" max="250" value="8" /></label>
+              <label>Operational Hours <input id="zoneHours" type="text" value="24x7" /></label>
+            </form>
+            <label style="margin-top:10px;">
+              Covered Villages / Wards (comma-separated)
+              <input id="zoneVillages" type="text" value="Borai, Mohanpur, Dantan, Belda, Begunia" />
+            </label>
+            <label style="margin-top:10px;">
+              Optional Boundary Polygon GeoJSON / [lng, lat] Ring
+              <textarea id="zonePolygonJson" placeholder='[[87.34,21.79],[87.40,21.79],[87.40,21.84],[87.34,21.84],[87.34,21.79]]'></textarea>
+            </label>
+            <div class="checkbox-row">
+              <label class="checkbox-chip"><input id="zonePickupEnabled" type="checkbox" checked /> Pickup Enabled</label>
+              <label class="checkbox-chip"><input id="zoneDropoffEnabled" type="checkbox" checked /> Drop-off Enabled</label>
+              <label class="checkbox-chip"><input id="zoneServiceAvailable" type="checkbox" checked /> Service Available</label>
+              <label class="checkbox-chip"><input id="zoneParcelApproved" type="checkbox" /> Parcel Approved</label>
+            </div>
+            <p class="muted" style="font-size:0.8rem; margin:4px 0;">Supported Vehicle Categories:</p>
+            <div class="checkbox-row">
+              <label class="checkbox-chip"><input type="checkbox" class="veh-cat" value="toto" checked /> TOTO</label>
+              <label class="checkbox-chip"><input type="checkbox" class="veh-cat" value="auto" checked /> AUTO</label>
+              <label class="checkbox-chip"><input type="checkbox" class="veh-cat" value="bike" checked /> BIKE</label>
+              <label class="checkbox-chip"><input type="checkbox" class="veh-cat" value="cab" checked /> CAB</label>
+              <label class="checkbox-chip"><input type="checkbox" class="veh-cat" value="outstation" /> OUTSTATION</label>
+              <label class="checkbox-chip"><input type="checkbox" class="veh-cat" value="parcel" /> PARCEL</label>
+            </div>
+            <div class="row-between" style="margin-top:10px;">
+              <button id="saveZoneBtn" type="button">Save Service Area to Firestore</button>
+              <button id="resetZoneFormBtn" type="button" class="secondary">New Zone</button>
+            </div>
+            <div id="zoneSaveStatus" class="muted" style="font-size:0.82rem; margin-top:8px;"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3>Configured Service Areas</h3>
+          <div id="zonesList" class="list-stack"></div>
+        </div>
+      </div>
+
+      <div id="tab-fares" class="tab-panel hidden">
+        <div class="card">
+          <h3>Versioned Fare &amp; Commission Rules</h3>
+          <p class="muted">Changes apply exclusively from Owner Admin and affect new bookings immediately.</p>
+          <div id="faresList" class="list-stack"></div>
+        </div>
+      </div>
+
+      <div id="tab-kyc" class="tab-panel hidden">
+        <div class="card">
+          <h3>Driver KYC Verification Queue</h3>
+          <div id="kycList" class="list-stack"></div>
+        </div>
+      </div>
+
+      <div id="tab-staff" class="tab-panel hidden">
+        <div class="grid-2">
+          <div class="card">
+            <h3>Grant Operations Dashboard Access</h3>
+            <p class="muted">Operations Staff can monitor live MapLibre fleet &amp; OSRM trips and update booking dispatch notes/escalations, without pricing, boundary-edit, payout, or PII access.</p>
+            <div class="form-grid" style="grid-template-columns:1fr;">
+              <label>Firebase Auth UID * <input id="opsUidInput" type="text" placeholder="Firebase UID" /></label>
+              <label>Display Name * <input id="opsNameInput" type="text" placeholder="Coordinator Name" /></label>
+              <label>Phone or Email <input id="opsContactInput" type="text" placeholder="+91..." /></label>
+              <label>Assigned District <input id="opsDistrictInput" type="text" value="Paschim Medinipur" /></label>
+              <button id="grantOpsBtn" type="button">Grant Operations Access</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Active Operations Staff (<span id="opsCount">0</span>)</h3>
+            <div id="opsList" class="list-stack"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-endpoints" class="tab-panel hidden">
+        <div class="card" style="max-width: 720px;">
+          <h3>Self-Hosted / Custom OSM, OSRM &amp; Nominatim Endpoints (Browser Session Override)</h3>
+          <p class="muted">Configure dedicated self-hosted tile, routing, or geocoding endpoints for production traffic.</p>
+          <div class="form-grid" style="grid-template-columns: 1fr;">
+            <label>OSM Tile URL Template <input id="cfgTileUrl" type="url" /></label>
+            <label>OSRM Routing Base URL <input id="cfgOsrmUrl" type="url" /></label>
+            <label>Nominatim Geocoding Base URL <input id="cfgNominatimUrl" type="url" /></label>
+            <div class="row-between">
+              <button id="saveEndpointCfgBtn" type="button">Apply &amp; Reload Map</button>
+              <button id="resetEndpointCfgBtn" type="button" class="secondary">Reset Defaults</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@5.3.0/dist/maplibre-gl.js"></script>
+  <script type="module" src="./owner.js"></script>
+</body>
+</html>

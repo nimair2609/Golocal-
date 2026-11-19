@@ -34,8 +34,14 @@ fun handleFirestoreError(
         }
     } ?: emptyList()
 
+    val trimmedPath = path?.trim()?.trimStart('/')
+    val pathSegments = trimmedPath?.split('/')?.filter { it.isNotBlank() }.orEmpty()
+    val collectionName = pathSegments.firstOrNull().orEmpty()
+    val documentPath = if (pathSegments.size >= 2) trimmedPath else null
+
     val authInfoJson = JSONObject().apply {
         put("userId", currentUser?.uid)
+        put("authenticatedUid", currentUser?.uid)
         put("hasEmail", !currentUser?.email.isNullOrBlank())
         put("emailVerified", currentUser?.isEmailVerified)
         put("tenantId", currentUser?.tenantId)
@@ -47,7 +53,10 @@ fun handleFirestoreError(
         put("error", rootError.message ?: rootError.toString())
         put("firebaseErrorCode", firestoreCode ?: "none")
         put("operationType", operationType.value)
+        put("collection", collectionName)
+        put("documentPath", documentPath ?: JSONObject.NULL)
         put("path", path)
+        put("authenticatedUid", currentUser?.uid ?: JSONObject.NULL)
         put("authInfo", authInfoJson)
     }
 

@@ -481,6 +481,7 @@ fun RiderTestModeDashboardShell(
     val scope = rememberCoroutineScope()
     val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
     val openTestBookings by driverViewModel.openTestBookings.collectAsStateWithLifecycle()
+    val openTestBookingsError by driverViewModel.openTestBookingsError.collectAsStateWithLifecycle()
     val assignedBookings by driverViewModel.assignedBookings.collectAsStateWithLifecycle()
     val activeAssignedBooking by driverViewModel.activeAssignedBooking.collectAsStateWithLifecycle()
     val completedTestCount by driverViewModel.testRiderCompletedCount.collectAsStateWithLifecycle()
@@ -488,13 +489,16 @@ fun RiderTestModeDashboardShell(
     val testOtpError by driverViewModel.testOtpError.collectAsStateWithLifecycle()
     val driverMsg by driverViewModel.message.collectAsStateWithLifecycle()
     val sessionMsg by sessionViewModel.statusMessage.collectAsStateWithLifecycle()
+    val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
 
     var selectedTab by remember { mutableStateOf("home") }
+    var lastAutoFocusedTestId by remember { mutableStateOf<String?>(null) }
+    var alertedTestIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showCancelDialog by remember { mutableStateOf(false) }
 
     val activeTestTrip = activeAssignedBooking?.takeIf { it.isTestRide || it.testMode }
-    val currentLat = gps.lat ?: profile.currentLat.takeIf { it != 0.0 } ?: 22.9041
-    val currentLng = gps.lng ?: profile.currentLng.takeIf { it != 0.0 } ?: 88.3976
+    val currentLat = gps.lat ?: profile.currentLat.takeIf { it != 0.0 } ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT
+    val currentLng = gps.lng ?: profile.currentLng.takeIf { it != 0.0 } ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
 
     val locationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -502,6 +506,51 @@ fun RiderTestModeDashboardShell(
         if (result.values.any { it }) {
             sessionViewModel.detectDeviceLocation(context)
         }
+    }
+
+    LaunchedEffect(activeTestTrip?.id) {
+        val currentId = activeTestTrip?.id
+        if (currentId != null && currentId != lastAutoFocusedTestId) {
+            lastAutoFocusedTestId = currentId
+            selectedTab = "home"
+        } else if (currentId == null) {
+            lastAutoFocusedTestId = null
+        }
+    }
+
+    LaunchedEffect(
+        openTestBookings,
+        profile.isOnline,
+        activeTestTrip?.id,
+        prefs.notificationsEnabled,
+        prefs.rideRequestSoundEnabled,
+        prefs.rideRequestVibrationEnabled
+    ) {
+        val currentIds = openTestBookings.map { it.id }.toSet()
+        (alertedTestIds - currentIds).forEach {
+            com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, it)
+        }
+        val canAlert = profile.isOnline && activeTestTrip == null && prefs.notificationsEnabled
+        if (!canAlert) {
+            currentIds.forEach {
+                com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, it)
+            }
+            alertedTestIds = currentIds
+            return@LaunchedEffect
+        }
+        openTestBookings.filter { it.id !in alertedTestIds }.forEach { req ->
+            com.example.notifications.NotificationHelper.displayRideRequestAlert(
+                context = context,
+                bookingId = req.id,
+                title = "TEST RIDE • ${req.vehicleCategory.uppercase()} (₹0)",
+                body = "${req.pickupLabel} -> ${req.destinationLabel} (${req.distanceKm} km)",
+                isTestRide = true,
+                soundEnabled = prefs.rideRequestSoundEnabled,
+                vibrationEnabled = prefs.rideRequestVibrationEnabled,
+                notificationsEnabled = prefs.notificationsEnabled
+            )
+        }
+        alertedTestIds = currentIds
     }
 
     LaunchedEffect(deepLinkTarget) {
@@ -643,27 +692,31 @@ fun RiderTestModeDashboardShell(
                                             onToggleOnline = { online ->
                                                 driverViewModel.toggleTestRiderOnline(online, currentLat, currentLng)
                                             },
-                                            onSyncLocation = {
-                                                if (LocationCoordinator.resolveAccessState(context) == LocationAccessState.GRANTED_READY) {
-                                                    sessionViewModel.detectDeviceLocation(context)
-                                                } else {
-                                                    locationLauncher.launch(
-                                                        arrayOf(
-                                                            Manifest.permission.ACCESS_FINE_LOCATION,
-                                                            Manifest.permission.ACCESS_COARSE_LOCATION
-                                                        )
-                                                    )
-                                                }
-                                            },
-                                            onClaimBooking = { b -> driverViewModel.claimTestBooking(b, currentLat, currentLng) }
-                                        )
-                                    }
-                                }
+                                             onSyncLocation = {
+                                                 if (LocationCoordinator.resolveAccessState(context) == LocationAccessState.GRANTED_READY) {
+                                                     sessionViewModel.detectDeviceLocation(context)
+                                                 } else {
+                                                     locationLauncher.launch(
+                                                         arrayOf(
+                                                             Manifest.permission.ACCESS_FINE_LOCATION,
+                                                             Manifest.permission.ACCESS_COARSE_LOCATION
+                                                         )
+                                                     )
+                                                 }
+                                             },
+                                             onClaimBooking = { b -> driverViewModel.claimTestBooking(b, currentLat, currentLng) },
+                                             openTestBookingsError = openTestBookingsError,
+                                             onRetryTestFeed = { driverViewModel.refreshDispatchFeeds() }
+                                         )
+                                     }
+                                 }
                                 "rides" -> TestRiderQueueTab(
                                     profile = profile,
                                     openTestBookings = openTestBookings,
                                     completedOrActiveTest = assignedBookings.filter { it.isTestRide || it.testMode },
-                                    onClaimBooking = { b -> driverViewModel.claimTestBooking(b, currentLat, currentLng) }
+                                    onClaimBooking = { b -> driverViewModel.claimTestBooking(b, currentLat, currentLng) },
+                                    openTestBookingsError = openTestBookingsError,
+                                    onRetryTestFeed = { driverViewModel.refreshDispatchFeeds() }
                                 )
                                 "summary" -> TestRiderSummaryTab(
                                     profile = profile,
@@ -688,6 +741,31 @@ fun RiderTestModeDashboardShell(
                                         onSwitchToCommercialMode()
                                     },
                                     onSignOut = { signOut(scope = scope, context = context) }
+                                )
+                            }
+                        }
+                    }
+
+                    if (activeTestTrip != null && selectedTab != "home") {
+                        Surface(
+                            onClick = { selectedTab = "home" },
+                            shape = RoundedCornerShape(16.dp),
+                            color = GolocalSuccess,
+                            shadowElevation = 8.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("test_active_trip_resume_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "Active Test Ride (${activeTestTrip.status.uppercase()}) • Return to Trip",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = androidx.compose.ui.graphics.Color.White
                                 )
                             }
                         }
@@ -753,7 +831,9 @@ private fun TestRiderHomeMapTab(
     openTestBookings: List<Booking>,
     onToggleOnline: (Boolean) -> Unit,
     onSyncLocation: () -> Unit,
-    onClaimBooking: (Booking) -> Unit
+    onClaimBooking: (Booking) -> Unit,
+    openTestBookingsError: String? = null,
+    onRetryTestFeed: () -> Unit = {}
 ) {
     val firstOpen = openTestBookings.firstOrNull()
     Box(modifier = Modifier.fillMaxSize()) {
@@ -784,7 +864,7 @@ private fun TestRiderHomeMapTab(
             cornerRadius = 0.dp,
             showBorder = false,
             showTopRouteChip = false,
-            recenterBottomPadding = 250.dp,
+            recenterBottomPadding = 260.dp,
             userLat = currentLat,
             userLng = currentLng
         )
@@ -793,7 +873,7 @@ private fun TestRiderHomeMapTab(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .heightIn(max = 320.dp),
+                .heightIn(max = 360.dp),
             shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 16.dp
@@ -805,6 +885,29 @@ private fun TestRiderHomeMapTab(
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                if (!openTestBookingsError.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth().testTag("test_requests_error_card")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Test feed sync warning: $openTestBookingsError",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = onRetryTestFeed) {
+                                Text("Retry", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -828,6 +931,41 @@ private fun TestRiderHomeMapTab(
                         colors = SwitchDefaults.colors(checkedTrackColor = GolocalSuccess),
                         modifier = Modifier.testTag("test_rider_online_switch")
                     )
+                }
+                if (firstOpen != null) {
+                    val pickupKm = com.example.domain.FareCalculator.haversineDistanceKm(
+                        currentLat,
+                        currentLng,
+                        firstOpen.pickupLat,
+                        firstOpen.pickupLng
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text(
+                                text = "${firstOpen.pickupLabel} → ${firstOpen.destinationLabel}",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = String.format(
+                                    java.util.Locale.US,
+                                    "Pickup %.1f km away • Trip %.1f km • Non-commercial ₹0",
+                                    pickupKm,
+                                    firstOpen.distanceKm
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                            )
+                        }
+                    }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
@@ -857,18 +995,53 @@ internal fun TestRiderQueueTab(
     profile: TestRiderProfile,
     openTestBookings: List<Booking>,
     completedOrActiveTest: List<Booking>,
-    onClaimBooking: (Booking) -> Unit
+    onClaimBooking: (Booking) -> Unit,
+    openTestBookingsError: String? = null,
+    onRetryTestFeed: () -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Text(
-                text = "Open TEST RIDE Queue (${openTestBookings.size})",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Open TEST RIDE Queue (${openTestBookings.size})",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(onClick = onRetryTestFeed) {
+                    Text("Refresh")
+                }
+            }
+        }
+        if (!openTestBookingsError.isNullOrBlank()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth().testTag("test_requests_error_card")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Sync warning: $openTestBookingsError",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = onRetryTestFeed) {
+                            Text("Retry", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
         }
         if (openTestBookings.isEmpty()) {
             item {

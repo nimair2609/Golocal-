@@ -27,6 +27,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.FirebaseAuthSnapshot
+import com.example.authSnapshotFlow
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalDeepNavy
 import com.example.ui.theme.GolocalLightBlue
@@ -37,6 +40,7 @@ import com.example.ui.theme.JetBrainsMono
 import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.flow.flowOf
 
 @Composable
 fun PhoneAuthFormContent(
@@ -363,9 +367,17 @@ fun VerifiedMobileBadgeCard(
     fallbackAccountPhone: String
 ) {
     val context = LocalContext.current
-    val currentUser = remember(fallbackAccountPhone) {
-        if (FirebaseApp.getApps(context).isNotEmpty()) Firebase.auth.currentUser else null
-    }
+    val hasFirebaseApp = remember(context) { FirebaseApp.getApps(context).isNotEmpty() }
+    val authSnapshot by remember(hasFirebaseApp) {
+        if (hasFirebaseApp) Firebase.auth.authSnapshotFlow()
+        else flowOf(FirebaseAuthSnapshot(isInitialized = true, currentUser = null))
+    }.collectAsStateWithLifecycle(
+        initialValue = FirebaseAuthSnapshot(
+            isInitialized = !hasFirebaseApp,
+            currentUser = if (hasFirebaseApp) Firebase.auth.currentUser else null
+        )
+    )
+    val currentUser = authSnapshot.currentUser
     val verifiedPhone = currentUser?.phoneNumber?.takeIf { it.isNotBlank() } ?: fallbackAccountPhone
 
     Surface(
@@ -440,9 +452,17 @@ fun AccountSecurityLinkingCard(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val currentUser = remember(fallbackAccountPhone, fallbackAccountEmail) {
-        if (FirebaseApp.getApps(context).isNotEmpty()) Firebase.auth.currentUser else null
-    }
+    val hasFirebaseApp = remember(context) { FirebaseApp.getApps(context).isNotEmpty() }
+    val authSnapshot by remember(hasFirebaseApp) {
+        if (hasFirebaseApp) Firebase.auth.authSnapshotFlow()
+        else flowOf(FirebaseAuthSnapshot(isInitialized = true, currentUser = null))
+    }.collectAsStateWithLifecycle(
+        initialValue = FirebaseAuthSnapshot(
+            isInitialized = !hasFirebaseApp,
+            currentUser = if (hasFirebaseApp) Firebase.auth.currentUser else null
+        )
+    )
+    val currentUser = authSnapshot.currentUser
     val providerIds = currentUser?.providerData?.map { it.providerId }?.toSet().orEmpty()
     var linkedPhone by remember(currentUser?.phoneNumber, providerIds) {
         mutableStateOf(currentUser?.phoneNumber?.takeIf { it.isNotBlank() } ?: "")

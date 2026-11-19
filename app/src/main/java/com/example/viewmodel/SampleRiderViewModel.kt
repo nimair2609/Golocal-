@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.model.AppNotification
 import com.example.data.model.SampleRide
 import com.example.data.model.SampleRiderProfile
+import com.example.data.model.UiState
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.SampleAcceptOutcome
 import com.example.data.repository.SampleRiderRepository
@@ -14,17 +15,23 @@ import com.example.shared.DeviceGpsFix
 import com.example.shared.LocationAccessState
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SampleRiderViewModel(
     private val sampleRepository: SampleRiderRepository,
     private val golocalRepository: GolocalRepository,
@@ -49,35 +56,98 @@ class SampleRiderViewModel(
     private val _lastCompletedRide = MutableStateFlow<SampleRide?>(null)
     val lastCompletedRide: StateFlow<SampleRide?> = _lastCompletedRide.asStateFlow()
 
-    val profile: StateFlow<SampleRiderProfile?> = sampleRepository.observeMySampleRiderProfile(currentUserId)
-        .catch { error ->
-            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            Log.w(TAG, "Error observing sample rider profile", error)
-            emit(null)
+    private val _refreshTrigger = MutableStateFlow(0)
+
+    private val _incomingError = MutableStateFlow<String?>(null)
+    val incomingError: StateFlow<String?> = _incomingError.asStateFlow()
+
+    private val _assignedError = MutableStateFlow<String?>(null)
+    val assignedError: StateFlow<String?> = _assignedError.asStateFlow()
+
+    fun retryStreams() {
+        _incomingError.value = null
+        _assignedError.value = null
+        _refreshTrigger.value += 1
+    }
+
+    val profileState: StateFlow<UiState<SampleRiderProfile?>> = _refreshTrigger
+        .flatMapLatest {
+            sampleRepository.observeMySampleRiderProfile(currentUserId)
+                .map<SampleRiderProfile?, UiState<SampleRiderProfile?>> { UiState.Success(it) }
+                .catch { error ->
+                    val fe = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (fe == null && error is CancellationException) throw error
+                    val root = fe ?: error
+                    Log.w(TAG, "Error observing sample rider profile", root)
+                    emit(UiState.Error(root.localizedMessage ?: "Failed to load Sample Rider profile."))
+                }
         }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
+
+    val profile: StateFlow<SampleRiderProfile?> = profileState
+        .map { (it as? UiState.Success)?.data }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
 
-    private val rawIncomingRides = sampleRepository.observeIncomingSampleRides()
-        .catch { error ->
-            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            emit(emptyList())
+    private val isApprovedSampleFlow = combine(profileState, _refreshTrigger) { state, trigger ->
+        val p = (state as? UiState.Success)?.data
+        val eligible = p != null && !p.isSuspendedOrRevoked()
+        eligible to trigger
+    }.distinctUntilChanged()
+
+    private val rawIncomingRides = isApprovedSampleFlow
+        .flatMapLatest { (eligible, _) ->
+            if (!eligible) {
+                _incomingError.value = null
+                flowOf(emptyList())
+            } else {
+                sampleRepository.observeIncomingSampleRides()
+                    .onEach { _incomingError.value = null }
+                    .catch { error ->
+                        val fe = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (fe == null && error is CancellationException) throw error
+                        val root = fe ?: error
+                        Log.w(TAG, "Error observing incoming sample rides", root)
+                        _incomingError.value = root.localizedMessage ?: "Unable to sync incoming sample requests."
+                        emit(emptyList())
+                    }
+            }
         }
 
-    private val dismissedRideIds = sampleRepository.observeDismissedRideIds(currentUserId)
-        .catch { error ->
-            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            emit(emptySet())
-        }
+    private val dismissedRideIds = _refreshTrigger.flatMapLatest {
+        sampleRepository.observeDismissedRideIds(currentUserId)
+            .catch { error ->
+                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                emit(emptySet())
+            }
+    }
 
     val incomingRides: StateFlow<List<SampleRide>> = combine(rawIncomingRides, dismissedRideIds) { list, dismissed ->
         list.filter { it.rideId !in dismissed }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
-    val assignedRides: StateFlow<List<SampleRide>> = sampleRepository.observeAssignedSampleRides(currentUserId)
-        .catch { error ->
-            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            Log.w(TAG, "Error observing assigned sample rides", error)
-            emit(emptyList())
+    val assignedRides: StateFlow<List<SampleRide>> = isApprovedSampleFlow
+        .flatMapLatest { (eligible, _) ->
+            if (!eligible) {
+                _assignedError.value = null
+                flowOf(emptyList())
+            } else {
+                sampleRepository.observeAssignedSampleRides(currentUserId)
+                    .onEach { _assignedError.value = null }
+                    .catch { error ->
+                        val fe = generateSequence(error) { it.cause }
+                            .filterIsInstance<FirebaseFirestoreException>()
+                            .firstOrNull()
+                        if (fe == null && error is CancellationException) throw error
+                        val root = fe ?: error
+                        Log.w(TAG, "Error observing assigned sample rides", root)
+                        _assignedError.value = root.localizedMessage ?: "Unable to sync active sample rides."
+                        emit(emptyList())
+                    }
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 

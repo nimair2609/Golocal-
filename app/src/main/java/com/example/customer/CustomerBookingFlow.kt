@@ -330,7 +330,7 @@ fun CustomerBookRideScreen(
                             text = "${String.format(java.util.Locale.US, "%.1f", roadDistanceKm)} km • ~$roadDurationMin min",
                             style = MaterialTheme.typography.labelLarge,
                             fontFamily = JetBrainsMono,
-                            color = GolocalDeepNavy,
+                            color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                         )
                     }
@@ -429,7 +429,7 @@ fun CustomerBookRideScreen(
                         Surface(
                             onClick = { showServiceOptionsSheet = true },
                             shape = RoundedCornerShape(999.dp),
-                            color = GolocalLightBlue.copy(alpha = 0.65f),
+                            color = MaterialTheme.colorScheme.primaryContainer,
                             modifier = Modifier.testTag("booking_service_options_chip")
                         ) {
                             Row(
@@ -437,11 +437,11 @@ fun CustomerBookRideScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(Icons.Filled.Tune, contentDescription = null, tint = GolocalPrimaryBlue, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Filled.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(14.dp))
                                 Text(
                                     text = formatBookingTypeLabel(draft.bookingType),
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = GolocalPrimaryBlue
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
                             }
                         }
@@ -468,9 +468,13 @@ fun CustomerBookRideScreen(
                             Surface(
                                 onClick = { selectedFilter = filter },
                                 shape = RoundedCornerShape(999.dp),
-                                color = if (selected) GolocalDeepNavy else MaterialTheme.colorScheme.surface,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
                                 modifier = Modifier
-                                    .border(1.dp, if (selected) GolocalDeepNavy else MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
+                                    .border(
+                                        1.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                        RoundedCornerShape(999.dp)
+                                    )
                                     .testTag("ride_filter_${filter.name.lowercase()}")
                             ) {
                                 Row(
@@ -481,13 +485,13 @@ fun CustomerBookRideScreen(
                                     Icon(
                                         imageVector = icon,
                                         contentDescription = null,
-                                        tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
                                         text = filter.label,
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface
+                                        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                             }
@@ -524,7 +528,7 @@ fun CustomerBookRideScreen(
                             Surface(
                                 onClick = { customerViewModel.selectCategory(option.id) },
                                 shape = RoundedCornerShape(16.dp),
-                                color = if (isSelected) GolocalLightBlue.copy(alpha = 0.42f) else MaterialTheme.colorScheme.surface,
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surface,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .border(
@@ -543,13 +547,13 @@ fun CustomerBookRideScreen(
                                         modifier = Modifier
                                             .size(44.dp)
                                             .clip(RoundedCornerShape(12.dp))
-                                            .background(if (isSelected) GolocalPrimaryBlue else GolocalLightBlue),
+                                            .background(if (isSelected) GolocalPrimaryBlue else MaterialTheme.colorScheme.primaryContainer),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = option.icon,
                                             contentDescription = option.title,
-                                            tint = if (isSelected) Color.White else GolocalPrimaryBlue,
+                                            tint = if (isSelected) Color.White else MaterialTheme.colorScheme.onPrimaryContainer,
                                             modifier = Modifier.size(22.dp)
                                         )
                                     }
@@ -571,7 +575,7 @@ fun CustomerBookRideScreen(
                                         Text(
                                             text = "$availabilityText • ${option.seatsLabel}",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = if (enabled) GolocalPrimaryBlue else GolocalError,
+                                            color = if (enabled) MaterialTheme.colorScheme.primary else GolocalError,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -581,7 +585,7 @@ fun CustomerBookRideScreen(
                                         style = MaterialTheme.typography.titleMedium,
                                         fontFamily = JetBrainsMono,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (enabled) GolocalDeepNavy else MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -635,7 +639,7 @@ fun CustomerBookRideScreen(
                                         style = MaterialTheme.typography.titleLarge,
                                         fontFamily = JetBrainsMono,
                                         fontWeight = FontWeight.Bold,
-                                        color = GolocalDeepNavy
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
                                         text = "Band ₹${quote.minPermittedFareInr.toInt()}–₹${quote.maxPermittedFareInr.toInt()}",
@@ -670,7 +674,7 @@ fun CustomerBookRideScreen(
                                             Text(
                                                 text = "Non-commercial ₹0 simulated or test-partner trip",
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                color = GolocalDeepNavy.copy(alpha = 0.78f)
                                             )
                                         }
                                         Switch(

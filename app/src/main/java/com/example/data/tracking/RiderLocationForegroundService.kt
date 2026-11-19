@@ -29,11 +29,23 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+data class DriverGpsHealth(
+    val isServiceRunning: Boolean = false,
+    val gpsStatus: String = "inactive", // inactive, active, gps_lost, permission_denied, network_interrupted
+    val lastLat: Double? = null,
+    val lastLng: Double? = null,
+    val lastUpdatedEpochMs: Long = 0L,
+    val lastError: String? = null
+)
 
 /**
  * Foreground Location Service (location-only, no background permission requested) that keeps
- * rider live coordinates broadcasting to RTDB & Firestore while navigating in Google Maps or paused.
+ * rider live coordinates broadcasting to RTDB & Firestore while navigating or offline-recovered.
  */
 class RiderLocationForegroundService : Service() {
 
@@ -82,6 +94,11 @@ class RiderLocationForegroundService : Service() {
             }
             ACTION_START_OR_UPDATE, null -> {
                 if (!LocationCoordinator.hasLocationPermission(applicationContext)) {
+                    _gpsHealth.value = DriverGpsHealth(
+                        isServiceRunning = false,
+                        gpsStatus = "permission_denied",
+                        lastError = "Grant location permission before going online."
+                    )
                     stopTrackingAndSelf()
                     return START_NOT_STICKY
                 }
@@ -100,6 +117,11 @@ class RiderLocationForegroundService : Service() {
                 }
 
                 startForegroundCompat()
+                _gpsHealth.value = _gpsHealth.value.copy(
+                    isServiceRunning = true,
+                    gpsStatus = if (_gpsHealth.value.gpsStatus == "inactive") "active" else _gpsHealth.value.gpsStatus,
+                    lastError = null
+                )
                 startLocationStream()
                 return START_STICKY
             }
@@ -159,8 +181,17 @@ class RiderLocationForegroundService : Service() {
             onFix = { lat, lng, accuracy, speed, heading ->
                 lastLat = lat
                 lastLng = lng
+                val nowMs = System.currentTimeMillis()
+                _gpsHealth.value = DriverGpsHealth(
+                    isServiceRunning = true,
+                    gpsStatus = "active",
+                    lastLat = lat,
+                    lastLng = lng,
+                    lastUpdatedEpochMs = nowMs,
+                    lastError = null
+                )
                 val accepted = throttle.acceptIfQualified(
-                    LocationSample(lat = lat, lng = lng, accuracyMeters = accuracy, timestampMs = System.currentTimeMillis())
+                    LocationSample(lat = lat, lng = lng, accuracyMeters = accuracy, timestampMs = nowMs)
                 )
                 if (!accepted) return@startTracking
 
@@ -219,10 +250,20 @@ class RiderLocationForegroundService : Service() {
                         }
                     }.onFailure { err ->
                         Log.w(TAG, "Foreground telemetry publish failed", err)
+                        _gpsHealth.value = _gpsHealth.value.copy(
+                            gpsStatus = "network_interrupted",
+                            lastError = "Network interrupted while syncing live location"
+                        )
                     }
                 }
             },
             onSignalAvailabilityChanged = { available ->
+                if (!available) {
+                    _gpsHealth.value = _gpsHealth.value.copy(
+                        gpsStatus = "gps_lost",
+                        lastError = "GPS signal lost — searching for satellites"
+                    )
+                }
                 if (!isSampleMode && !available && activeBookingId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lastLat, lastLng)) {
                     val booking = Booking(
                         id = activeBookingId,
@@ -264,6 +305,9 @@ class RiderLocationForegroundService : Service() {
                 rtdbRepo?.stopTripTracking(dId, bId.takeIf { it.isNotBlank() }, cId.takeIf { it.isNotBlank() }, lat, lng)
             }
         }
+        if (_gpsHealth.value.gpsStatus != "permission_denied") {
+            _gpsHealth.value = DriverGpsHealth(isServiceRunning = false, gpsStatus = "inactive")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -276,6 +320,9 @@ class RiderLocationForegroundService : Service() {
     override fun onDestroy() {
         tracker?.stopTracking("Service destroyed")
         serviceScope.cancel()
+        if (_gpsHealth.value.gpsStatus != "permission_denied") {
+            _gpsHealth.value = DriverGpsHealth(isServiceRunning = false, gpsStatus = "inactive")
+        }
         super.onDestroy()
     }
 
@@ -291,6 +338,47 @@ class RiderLocationForegroundService : Service() {
         const val EXTRA_IS_TEST_MODE = "extra_is_test_mode"
         const val EXTRA_IS_SAMPLE_MODE = "extra_is_sample_mode"
         const val EXTRA_IS_ONLINE = "extra_is_online"
+
+        private val _gpsHealth = MutableStateFlow(DriverGpsHealth())
+        val gpsHealth: StateFlow<DriverGpsHealth> = _gpsHealth.asStateFlow()
+
+        fun hasLocationPermission(context: Context): Boolean =
+            LocationCoordinator.hasLocationPermission(context)
+
+        fun startOrUpdate(
+            context: Context,
+            driverId: String,
+            driverName: String = "",
+            vehicleCategory: String = "toto",
+            bookingId: String = "",
+            customerId: String = "",
+            tripStatus: String = "",
+            isTestMode: Boolean = false
+        ) {
+            if (!hasLocationPermission(context)) {
+                _gpsHealth.value = DriverGpsHealth(
+                    isServiceRunning = false,
+                    gpsStatus = "permission_denied",
+                    lastError = "Grant location permission before going online."
+                )
+                return
+            }
+            val intent = Intent(context, RiderLocationForegroundService::class.java).apply {
+                action = ACTION_START_OR_UPDATE
+                putExtra(EXTRA_DRIVER_ID, driverId)
+                putExtra(EXTRA_BOOKING_ID, bookingId)
+                putExtra(EXTRA_CUSTOMER_ID, customerId)
+                putExtra(EXTRA_TRIP_STATUS, tripStatus)
+                putExtra(EXTRA_IS_TEST_MODE, isTestMode)
+                putExtra(EXTRA_IS_SAMPLE_MODE, false)
+                putExtra(EXTRA_IS_ONLINE, true)
+            }
+            runCatching {
+                ContextCompat.startForegroundService(context, intent)
+            }.onFailure { err ->
+                Log.w(TAG, "Unable to start foreground location service", err)
+            }
+        }
 
         fun syncTracking(
             context: Context,
