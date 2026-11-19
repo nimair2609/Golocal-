@@ -1,5 +1,13 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.time.Duration
+import kotlin.math.PI
+import kotlin.math.exp
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 plugins {
   alias(libs.plugins.android.application)
@@ -84,6 +92,84 @@ secrets {
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
+
+abstract class EnsureRideRequestSoundTask : DefaultTask() {
+  @get:InputFiles
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  abstract val existingRawFiles: ConfigurableFileCollection
+
+  @get:OutputDirectory
+  abstract val outputResDir: DirectoryProperty
+
+  @TaskAction
+  fun ensureSound() {
+    val outDir = outputResDir.get().asFile
+    val targetWav = File(outDir, "raw/golocal_ride_request.wav")
+    if (!existingRawFiles.isEmpty) {
+      if (targetWav.exists()) targetWav.delete()
+      return
+    }
+    targetWav.parentFile.mkdirs()
+
+    val sampleRate = 22050
+    val durationSec = 0.85
+    val totalSamples = (sampleRate * durationSec).toInt()
+    val dataBytes = totalSamples * 2
+    val buffer = ByteBuffer.allocate(44 + dataBytes).order(ByteOrder.LITTLE_ENDIAN)
+
+    buffer.put("RIFF".toByteArray(Charsets.US_ASCII))
+    buffer.putInt(36 + dataBytes)
+    buffer.put("WAVE".toByteArray(Charsets.US_ASCII))
+    buffer.put("fmt ".toByteArray(Charsets.US_ASCII))
+    buffer.putInt(16)
+    buffer.putShort(1.toShort())
+    buffer.putShort(1.toShort())
+    buffer.putInt(sampleRate)
+    buffer.putInt(sampleRate * 2)
+    buffer.putShort(2.toShort())
+    buffer.putShort(16.toShort())
+    buffer.put("data".toByteArray(Charsets.US_ASCII))
+    buffer.putInt(dataBytes)
+
+    for (i in 0 until totalSamples) {
+      val t = i.toDouble() / sampleRate
+      val (freq, localT) = when {
+        t < 0.16 -> 880.0 to t
+        t < 0.34 -> 1174.66 to (t - 0.16)
+        else -> 1318.51 to (t - 0.34)
+      }
+      val attack = min(1.0, localT / 0.012)
+      val decay = exp(-localT * 5.2)
+      val tailFade = if (i > totalSamples - 600) (totalSamples - i) / 600.0 else 1.0
+      val wave = (0.78 * sin(2.0 * PI * freq * t) + 0.22 * sin(2.0 * PI * freq * 2.0 * t))
+      val sample = (wave * attack * decay * tailFade * 0.65 * Short.MAX_VALUE)
+        .roundToInt()
+        .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        .toShort()
+      buffer.putShort(sample)
+    }
+
+    targetWav.writeBytes(buffer.array())
+  }
+}
+
+androidComponents {
+  onVariants { variant ->
+    val capName = variant.name.replaceFirstChar { it.uppercase() }
+    val ensureSoundTask = tasks.register<EnsureRideRequestSoundTask>("ensure${capName}RideRequestSound") {
+      existingRawFiles.from(
+        layout.projectDirectory.dir("src/main/res/raw").asFileTree.matching {
+          include("golocal_ride_request.*")
+        }
+      )
+      outputResDir.set(layout.buildDirectory.dir("generated/res/golocalSound/${variant.name}"))
+    }
+    variant.sources.res?.addGeneratedSourceDirectory(
+      ensureSoundTask,
+      EnsureRideRequestSoundTask::outputResDir
+    )
+  }
+}
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.

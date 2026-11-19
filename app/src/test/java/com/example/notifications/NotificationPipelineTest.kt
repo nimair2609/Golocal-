@@ -161,10 +161,16 @@ class NotificationPipelineTest {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelIds = nm.notificationChannels.map { it.id }.toSet()
         assertTrue(NotificationHelper.CHANNEL_RIDES in channelIds)
+        assertTrue(NotificationHelper.CHANNEL_RIDE_REQUESTS_V2 in channelIds)
+        assertTrue(NotificationHelper.CHANNEL_TEST_RIDE_REQUESTS_V2 in channelIds)
         assertTrue(NotificationHelper.CHANNEL_CHAT in channelIds)
         assertTrue(NotificationHelper.CHANNEL_SOS in channelIds)
         assertTrue(NotificationHelper.CHANNEL_TEST_RIDES in channelIds)
         assertTrue(NotificationHelper.CHANNEL_GENERAL in channelIds)
+
+        val soundUri = NotificationHelper.rideRequestSoundUri(context).toString()
+        assertTrue(soundUri.startsWith("android.resource://${context.packageName}/"))
+        assertTrue(com.example.R.raw.golocal_ride_request != 0)
 
         val scrubbed = NotificationPrivacySanitizer.sanitizeText("Share OTP 492817 or call +919876543210")
         assertFalse(scrubbed.contains("492817"))
