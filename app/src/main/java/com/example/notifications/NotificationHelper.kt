@@ -35,6 +35,7 @@ object NotificationDeepLinkExtras {
     const val EXTRA_NOTIFICATION_TYPE = "extra_notification_type"
     const val EXTRA_TARGET_APP = "extra_target_app"
     const val EXTRA_IS_TEST_RIDE = "extra_is_test_ride"
+    const val EXTRA_IS_SAMPLE_RIDE = "extra_is_sample_ride"
 
     const val ACTION_OPEN_CUSTOMER = "com.aistudio.golocal.OPEN_CUSTOMER"
     const val ACTION_OPEN_RIDER = "com.aistudio.golocal.OPEN_RIDER"
@@ -46,7 +47,8 @@ data class NotificationDeepLinkTarget(
     val bookingId: String = "",
     val type: String = "",
     val targetApp: String = "",
-    val isTestRide: Boolean = false
+    val isTestRide: Boolean = false,
+    val isSampleRide: Boolean = false
 ) {
     companion object {
         fun fromIntent(intent: Intent?): NotificationDeepLinkTarget? {
@@ -90,9 +92,15 @@ data class NotificationDeepLinkTarget(
                 "targetRole"
             ).ifBlank { appFromAction }
 
-            val isTestRide = intent.getBooleanExtra(NotificationDeepLinkExtras.EXTRA_IS_TEST_RIDE, false) ||
-                str("isTestRide", "is_test_ride").equals("true", ignoreCase = true) ||
-                type.startsWith("test_", ignoreCase = true)
+            val isSampleRide = intent.getBooleanExtra(NotificationDeepLinkExtras.EXTRA_IS_SAMPLE_RIDE, false) ||
+                str("isSampleRide", "is_sample_ride", "isSample").equals("true", ignoreCase = true) ||
+                type.startsWith("sample_", ignoreCase = true)
+
+            val isTestRide = !isSampleRide && (
+                intent.getBooleanExtra(NotificationDeepLinkExtras.EXTRA_IS_TEST_RIDE, false) ||
+                    str("isTestRide", "is_test_ride").equals("true", ignoreCase = true) ||
+                    type.startsWith("test_", ignoreCase = true)
+                )
 
             return if (screen.isNotBlank() || bookingId.isNotBlank() || type.isNotBlank()) {
                 NotificationDeepLinkTarget(
@@ -100,7 +108,8 @@ data class NotificationDeepLinkTarget(
                     bookingId = bookingId,
                     type = type,
                     targetApp = targetApp,
-                    isTestRide = isTestRide
+                    isTestRide = isTestRide,
+                    isSampleRide = isSampleRide
                 )
             } else {
                 null
@@ -108,12 +117,14 @@ data class NotificationDeepLinkTarget(
         }
 
         fun fromAppNotification(notif: AppNotification): NotificationDeepLinkTarget {
+            val isSample = notif.type.startsWith("sample_", ignoreCase = true)
             return NotificationDeepLinkTarget(
                 targetScreen = notif.targetScreen,
                 bookingId = notif.bookingId.ifBlank { notif.entityId },
                 type = notif.type,
                 targetApp = notif.targetApp,
-                isTestRide = notif.isTestNotification()
+                isTestRide = !isSample && notif.isTestNotification(),
+                isSampleRide = isSample
             )
         }
     }
@@ -141,6 +152,8 @@ object NotificationHelper {
     const val CHANNEL_RIDES = "golocal_rides"
     const val CHANNEL_RIDE_REQUESTS_V2 = "golocal_ride_requests_v2"
     const val CHANNEL_TEST_RIDE_REQUESTS_V2 = "golocal_test_ride_requests_v2"
+    const val CHANNEL_SAMPLE_RIDE_REQUESTS_V2 = "golocal_sample_ride_requests_v2"
+    const val CHANNEL_SAMPLE_RIDES = "golocal_sample_rides"
     const val CHANNEL_LIVE_TRACKING = "golocal_live_tracking"
     const val CHANNEL_CHAT = "golocal_chat"
     const val CHANNEL_SOS = "golocal_sos"
@@ -374,6 +387,28 @@ object NotificationHelper {
                 vibrationPattern = longArrayOf(0, 160, 100, 160)
             },
             NotificationChannel(
+                CHANNEL_SAMPLE_RIDE_REQUESTS_V2,
+                context.getString(R.string.notif_channel_sample_ride_requests_v2),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Incoming isolated Sample Ride requests with GoLocal chime and vibration"
+                setSound(customRideRequestSound, rideRequestAudio)
+                enableVibration(true)
+                vibrationPattern = RIDE_REQUEST_VIBRATION_PATTERN
+                enableLights(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            },
+            NotificationChannel(
+                CHANNEL_SAMPLE_RIDES,
+                context.getString(R.string.notif_channel_sample_rides),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Isolated Sample Rider trip lifecycle notifications"
+                setSound(defaultSound, notifAudio)
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 180, 100, 180)
+            },
+            NotificationChannel(
                 CHANNEL_GENERAL,
                 context.getString(R.string.notif_channel_general),
                 NotificationManager.IMPORTANCE_DEFAULT
@@ -386,9 +421,14 @@ object NotificationHelper {
         channels.forEach { manager.createNotificationChannel(it) }
     }
 
-    fun channelForType(type: String): String = channelForType(type = type, isTestRide = false)
+    fun channelForType(type: String): String = channelForType(type = type, isTestRide = false, isSampleRide = false)
 
-    fun channelForType(type: String, isTestRide: Boolean): String = when {
+    fun channelForType(type: String, isTestRide: Boolean): String =
+        channelForType(type = type, isTestRide = isTestRide, isSampleRide = false)
+
+    fun channelForType(type: String, isTestRide: Boolean, isSampleRide: Boolean): String = when {
+        type.equals("sample_request", true) -> CHANNEL_SAMPLE_RIDE_REQUESTS_V2
+        isSampleRide || type.startsWith("sample_", ignoreCase = true) -> CHANNEL_SAMPLE_RIDES
         type.equals("test_request", true) -> CHANNEL_TEST_RIDE_REQUESTS_V2
         type.equals("new_ride_request", true) ->
             if (isTestRide) CHANNEL_TEST_RIDE_REQUESTS_V2 else CHANNEL_RIDE_REQUESTS_V2
@@ -493,11 +533,110 @@ object NotificationHelper {
         }
     }
 
+    fun playSampleRequestSoundAndVibrate(
+        context: Context,
+        soundEnabled: Boolean = true,
+        vibrationEnabled: Boolean = true
+    ) {
+        if (isDeviceDoNotDisturbActive(context)) return
+        if (soundEnabled) {
+            runCatching {
+                val ringtone = RingtoneManager.getRingtone(context.applicationContext, rideRequestSoundUri(context))
+                ringtone?.play()
+            }
+        }
+        if (vibrationEnabled) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                    manager?.defaultVibrator?.vibrate(
+                        android.os.VibrationEffect.createWaveform(RIDE_REQUEST_VIBRATION_PATTERN, -1)
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator?.vibrate(android.os.VibrationEffect.createWaveform(RIDE_REQUEST_VIBRATION_PATTERN, -1))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(RIDE_REQUEST_VIBRATION_PATTERN, -1)
+                    }
+                }
+            }
+        }
+    }
+
+    fun displaySampleRideRequestAlert(
+        context: Context,
+        rideId: String,
+        title: String,
+        body: String,
+        soundEnabled: Boolean = true,
+        vibrationEnabled: Boolean = true,
+        notificationsEnabled: Boolean = true
+    ) {
+        if (rideId.isBlank() || !notificationsEnabled) return
+        val safeTitle = NotificationPrivacySanitizer.sanitizeText(title)
+        val safeBody = NotificationPrivacySanitizer.sanitizeText(body)
+        if (safeTitle.isBlank() && safeBody.isBlank()) return
+
+        val dedupeKey = "sample_ride_alert|${rideId.trim()}"
+        if (!shouldDisplayNotification(dedupeKey)) return
+
+        ensureChannels(context)
+        if (!hasNotificationPermission(context)) return
+
+        val intent = Intent(context, RiderActivity::class.java).apply {
+            action = NotificationDeepLinkExtras.ACTION_OPEN_RIDER
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN, "requests")
+            putExtra(NotificationDeepLinkExtras.EXTRA_BOOKING_ID, rideId)
+            putExtra(NotificationDeepLinkExtras.EXTRA_NOTIFICATION_TYPE, "sample_request")
+            putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_APP, "rider")
+            putExtra(NotificationDeepLinkExtras.EXTRA_IS_SAMPLE_RIDE, true)
+        }
+        val notifId = rideRequestNotificationId("sample|$rideId")
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notifId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val dndActive = isDeviceDoNotDisturbActive(context)
+        val builder = NotificationCompat.Builder(context, CHANNEL_SAMPLE_RIDE_REQUESTS_V2)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+            .setContentTitle(safeTitle.ifBlank { context.getString(R.string.app_name_rider) })
+            .setContentText(safeBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(safeBody))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setTimeoutAfter(45_000L)
+            .setContentIntent(pendingIntent)
+
+        if (dndActive || (!soundEnabled && !vibrationEnabled)) {
+            builder.setSilent(true)
+        } else {
+            if (soundEnabled) builder.setSound(rideRequestSoundUri(context)) else builder.setSound(null)
+            if (vibrationEnabled) builder.setVibrate(RIDE_REQUEST_VIBRATION_PATTERN) else builder.setVibrate(longArrayOf(0L))
+        }
+        try {
+            NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        } catch (se: SecurityException) {
+            Log.w(TAG, "POST_NOTIFICATIONS permission revoked while posting sample ride request", se)
+        }
+    }
+
     fun cancelRideRequestNotification(context: Context, bookingId: String) {
         val cleanId = bookingId.trim()
         if (cleanId.isBlank()) return
         runCatching {
-            NotificationManagerCompat.from(context).cancel(rideRequestNotificationId(cleanId))
+            val nm = NotificationManagerCompat.from(context)
+            nm.cancel(rideRequestNotificationId(cleanId))
+            nm.cancel(rideRequestNotificationId("sample|$cleanId"))
         }
     }
 
@@ -511,11 +650,25 @@ object NotificationHelper {
         bookingId: String = "",
         dedupeKey: String = "",
         isTestRide: Boolean = false,
+        isSampleRide: Boolean = false,
         soundEnabled: Boolean = true,
         vibrationEnabled: Boolean = true,
         notificationsEnabled: Boolean = true
     ) {
         if (!notificationsEnabled) return
+        val resolvedSample = isSampleRide || type.equals("sample_request", true) || type.startsWith("sample_", true)
+        if (type.equals("sample_request", true)) {
+            displaySampleRideRequestAlert(
+                context = context,
+                rideId = bookingId,
+                title = title,
+                body = body,
+                soundEnabled = soundEnabled,
+                vibrationEnabled = vibrationEnabled,
+                notificationsEnabled = notificationsEnabled
+            )
+            return
+        }
         if (type.equals("new_ride_request", true) || type.equals("test_request", true)) {
             displayRideRequestAlert(
                 context = context,
@@ -551,8 +704,9 @@ object NotificationHelper {
             putExtra(NotificationDeepLinkExtras.EXTRA_NOTIFICATION_TYPE, type)
             putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_APP, cleanVariant)
             putExtra(NotificationDeepLinkExtras.EXTRA_IS_TEST_RIDE, isTestRide)
+            putExtra(NotificationDeepLinkExtras.EXTRA_IS_SAMPLE_RIDE, resolvedSample)
         }
-        val requestCode = "$cleanVariant|$bookingId|$type|$targetScreen|$isTestRide".hashCode()
+        val requestCode = "$cleanVariant|$bookingId|$type|$targetScreen|$isTestRide|$resolvedSample".hashCode()
         val pendingIntent = PendingIntent.getActivity(
             context,
             requestCode,
@@ -560,7 +714,7 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val channelId = channelForType(type = type, isTestRide = isTestRide)
+        val channelId = channelForType(type = type, isTestRide = isTestRide, isSampleRide = resolvedSample)
         val defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
         val dndActive = isDeviceDoNotDisturbActive(context)
         val builder = NotificationCompat.Builder(context, channelId)

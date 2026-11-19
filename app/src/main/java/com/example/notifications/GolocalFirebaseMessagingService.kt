@@ -49,9 +49,15 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
         val targetApp = data["targetApp"] ?: data["target_app"] ?: data["targetRole"] ?: "customer"
         val targetScreen = data["targetScreen"] ?: data["target_screen"] ?: ""
         val bookingId = data["bookingId"] ?: data["booking_id"] ?: data["entityId"] ?: data["entity_id"] ?: ""
-        val isTestRide = data["isTestRide"].equals("true", ignoreCase = true) ||
-            data["is_test_ride"].equals("true", ignoreCase = true) ||
-            type.startsWith("test_", ignoreCase = true)
+        val isSampleRide = data["isSampleRide"].equals("true", ignoreCase = true) ||
+            data["is_sample_ride"].equals("true", ignoreCase = true) ||
+            data["isSample"].equals("true", ignoreCase = true) ||
+            type.startsWith("sample_", ignoreCase = true)
+        val isTestRide = !isSampleRide && (
+            data["isTestRide"].equals("true", ignoreCase = true) ||
+                data["is_test_ride"].equals("true", ignoreCase = true) ||
+                type.startsWith("test_", ignoreCase = true)
+            )
         val dedupeKey = data["dedupeKey"]
             ?: data["eventId"]
             ?: data["messageId"]
@@ -85,6 +91,7 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
             bookingId = bookingId,
             dedupeKey = dedupeKey,
             isTestRide = isTestRide,
+            isSampleRide = isSampleRide,
             soundEnabled = prefs?.rideRequestSoundEnabled ?: true,
             vibrationEnabled = prefs?.rideRequestVibrationEnabled ?: true,
             notificationsEnabled = prefs?.notificationsEnabled ?: true

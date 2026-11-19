@@ -12,8 +12,10 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.data.model.Booking
+import com.example.data.model.SampleRide
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.RealtimeLocationRepository
+import com.example.data.repository.SampleRiderRepository
 import com.example.map.GpsBroadcastThrottle
 import com.example.map.LocationSample
 import com.example.notifications.NotificationHelper
@@ -39,6 +41,7 @@ class RiderLocationForegroundService : Service() {
     private var tracker: LiveLocationTracker? = null
     private var rtdbRepo: RealtimeLocationRepository? = null
     private var firestoreRepo: GolocalRepository? = null
+    private var sampleRepo: SampleRiderRepository? = null
 
     private val throttle = GpsBroadcastThrottle(
         minIntervalMs = 4_000L,
@@ -51,6 +54,7 @@ class RiderLocationForegroundService : Service() {
     private var activeCustomerId: String = ""
     private var activeTripStatus: String = ""
     private var isTestMode: Boolean = false
+    private var isSampleMode: Boolean = false
     private var isOnline: Boolean = true
     private var lastLat: Double = 0.0
     private var lastLng: Double = 0.0
@@ -64,10 +68,9 @@ class RiderLocationForegroundService : Service() {
         rtdbRepo = RealtimeLocationRepository(applicationContext)
         if (FirebaseApp.getApps(applicationContext).isNotEmpty()) {
             val dbId = getString(R.string.firestore_database_id)
-            firestoreRepo = GolocalRepository(
-                db = FirebaseFirestore.getInstance(dbId),
-                auth = Firebase.auth
-            )
+            val db = FirebaseFirestore.getInstance(dbId)
+            firestoreRepo = GolocalRepository(db = db, auth = Firebase.auth)
+            sampleRepo = SampleRiderRepository(db = db, auth = Firebase.auth)
         }
     }
 
@@ -88,6 +91,7 @@ class RiderLocationForegroundService : Service() {
                 activeCustomerId = intent?.getStringExtra(EXTRA_CUSTOMER_ID).orEmpty()
                 activeTripStatus = intent?.getStringExtra(EXTRA_TRIP_STATUS).orEmpty()
                 isTestMode = intent?.getBooleanExtra(EXTRA_IS_TEST_MODE, false) ?: false
+                isSampleMode = intent?.getBooleanExtra(EXTRA_IS_SAMPLE_MODE, false) ?: false
                 isOnline = intent?.getBooleanExtra(EXTRA_IS_ONLINE, true) ?: true
 
                 if (activeDriverId.isBlank() || (!isOnline && activeBookingId.isBlank())) {
@@ -114,6 +118,8 @@ class RiderLocationForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val contentTitle = when {
+            isSampleMode && activeBookingId.isNotBlank() -> "SAMPLE RIDER — Live Trip GPS Active"
+            isSampleMode -> "SAMPLE RIDER — Online GPS Sharing"
             activeBookingId.isNotBlank() && isTestMode -> "GoLocal Test Ride GPS Active"
             activeBookingId.isNotBlank() -> "GoLocal Live Ride Tracking Active"
             else -> "GoLocal Rider Online — Location Sharing"
@@ -171,6 +177,15 @@ class RiderLocationForegroundService : Service() {
 
                 serviceScope.launch {
                     runCatching {
+                        if (isSampleMode) {
+                            sampleRepo?.updateSampleRiderLocation(
+                                uid = activeDriverId,
+                                lat = lat,
+                                lng = lng,
+                                activeRideId = activeBookingId.takeIf { it.isNotBlank() }
+                            )
+                            return@runCatching
+                        }
                         rtdbRepo?.publishDriverAndTripLocation(
                             driverId = activeDriverId,
                             activeBooking = booking,
@@ -208,7 +223,7 @@ class RiderLocationForegroundService : Service() {
                 }
             },
             onSignalAvailabilityChanged = { available ->
-                if (!available && activeBookingId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lastLat, lastLng)) {
+                if (!isSampleMode && !available && activeBookingId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lastLat, lastLng)) {
                     val booking = Booking(
                         id = activeBookingId,
                         customerId = activeCustomerId,
@@ -244,7 +259,7 @@ class RiderLocationForegroundService : Service() {
         val lat = lastLat
         val lng = lastLng
         tracker?.stopTracking("Rider stopped tracking")
-        if (dId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lat, lng)) {
+        if (!isSampleMode && dId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lat, lng)) {
             serviceScope.launch {
                 rtdbRepo?.stopTripTracking(dId, bId.takeIf { it.isNotBlank() }, cId.takeIf { it.isNotBlank() }, lat, lng)
             }
@@ -274,6 +289,7 @@ class RiderLocationForegroundService : Service() {
         const val EXTRA_CUSTOMER_ID = "extra_customer_id"
         const val EXTRA_TRIP_STATUS = "extra_trip_status"
         const val EXTRA_IS_TEST_MODE = "extra_is_test_mode"
+        const val EXTRA_IS_SAMPLE_MODE = "extra_is_sample_mode"
         const val EXTRA_IS_ONLINE = "extra_is_online"
 
         fun syncTracking(
@@ -301,12 +317,47 @@ class RiderLocationForegroundService : Service() {
                 putExtra(EXTRA_CUSTOMER_ID, activeTrip?.customerId.orEmpty())
                 putExtra(EXTRA_TRIP_STATUS, activeTrip?.status.orEmpty())
                 putExtra(EXTRA_IS_TEST_MODE, isTestMode || activeTrip?.isTestRide == true || activeTrip?.testMode == true)
+                putExtra(EXTRA_IS_SAMPLE_MODE, false)
                 putExtra(EXTRA_IS_ONLINE, isOnline)
             }
             runCatching {
                 ContextCompat.startForegroundService(context, intent)
             }.onFailure { err ->
                 Log.w(TAG, "Unable to start foreground location service", err)
+            }
+        }
+
+        fun syncSampleTracking(
+            context: Context,
+            sampleRiderUid: String,
+            isOnline: Boolean,
+            activeSampleRide: SampleRide?
+        ) {
+            val activeTrip = activeSampleRide?.takeIf {
+                it.assignedSampleRiderId == sampleRiderUid &&
+                    it.status in setOf("accepted", "arriving", "arrived", "in_progress")
+            }
+            val shouldTrack = sampleRiderUid.isNotBlank() &&
+                LocationCoordinator.hasLocationPermission(context) &&
+                (isOnline || activeTrip != null)
+            if (!shouldTrack) {
+                stop(context)
+                return
+            }
+            val intent = Intent(context, RiderLocationForegroundService::class.java).apply {
+                action = ACTION_START_OR_UPDATE
+                putExtra(EXTRA_DRIVER_ID, sampleRiderUid)
+                putExtra(EXTRA_BOOKING_ID, activeTrip?.rideId.orEmpty())
+                putExtra(EXTRA_CUSTOMER_ID, activeTrip?.customerId.orEmpty())
+                putExtra(EXTRA_TRIP_STATUS, activeTrip?.status.orEmpty())
+                putExtra(EXTRA_IS_TEST_MODE, false)
+                putExtra(EXTRA_IS_SAMPLE_MODE, true)
+                putExtra(EXTRA_IS_ONLINE, isOnline)
+            }
+            runCatching {
+                ContextCompat.startForegroundService(context, intent)
+            }.onFailure { err ->
+                Log.w(TAG, "Unable to start sample rider foreground location service", err)
             }
         }
 

@@ -17,6 +17,7 @@ import com.example.data.model.PlatformSettings
 import com.example.data.model.RatingRecord
 import com.example.data.model.RideOffer
 import com.example.data.model.RideOtpSecret
+import com.example.data.model.SampleRide
 import com.example.data.model.ServiceArea
 import com.example.data.model.TripLocation
 import com.example.data.model.UiState
@@ -25,9 +26,12 @@ import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
 import com.example.data.repository.RealtimeLocationRepository
+import com.example.data.repository.SampleRiderRepository
 import com.example.domain.BookingChatValidator
 import com.example.domain.FareCalculator
 import com.example.domain.FareQuote
+import com.example.domain.LocalSampleOtpEntry
+import com.example.domain.SampleOtpLocalStore
 import com.example.domain.WestBengalCatalog
 import com.example.domain.WestBengalPlace
 import com.google.firebase.Timestamp
@@ -70,7 +74,8 @@ class CustomerViewModel(
     private val customerName: String,
     private val communicationRepository: CommunicationRepository? = null,
     private val busRepository: BusRepository? = null,
-    private val realtimeLocationRepository: RealtimeLocationRepository? = null
+    private val realtimeLocationRepository: RealtimeLocationRepository? = null,
+    private val sampleRiderRepository: SampleRiderRepository? = null
 ) : ViewModel() {
 
     private val _draft = MutableStateFlow(BookingDraftState())
@@ -174,6 +179,30 @@ class CustomerViewModel(
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
             initialValue = null
         )
+
+    val mySampleRides: StateFlow<List<SampleRide>> =
+        (sampleRiderRepository?.observeCustomerSampleRides(currentUserId) ?: flowOf(emptyList()))
+            .catch { error ->
+                if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+                emit(emptyList())
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+                initialValue = emptyList()
+            )
+
+    val activeSampleRide: StateFlow<SampleRide?> = mySampleRides
+        .map { list ->
+            list.firstOrNull { it.status in setOf("incoming", "accepted", "arriving", "arrived", "in_progress") }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = null
+        )
+
+    val localSampleOtps: StateFlow<Map<String, LocalSampleOtpEntry>> = SampleOtpLocalStore.entriesFlow
 
     val activeOffers: StateFlow<List<RideOffer>> = activeBooking
         .flatMapLatest { booking ->
@@ -773,6 +802,56 @@ class CustomerViewModel(
             repository.requestRefund(bookingId, amountInr, reason)
                 .onSuccess { _actionMessage.value = "Refund request submitted for reconciliation." }
                 .onFailure { _actionMessage.value = it.localizedMessage ?: "Refund request failed" }
+        }
+    }
+
+    fun submitSampleRideBooking(
+        context: android.content.Context,
+        quote: FareQuote,
+        pickupLabel: String,
+        pickupLat: Double,
+        pickupLng: Double,
+        destinationLabel: String,
+        destinationLat: Double,
+        destinationLng: Double,
+        vehicleCategory: String,
+        onCreated: () -> Unit = {}
+    ) {
+        val sampleRepo = sampleRiderRepository ?: return
+        viewModelScope.launch {
+            _isSubmitting.value = true
+            sampleRepo.createSampleRideWithHashedOtp(
+                context = context,
+                customerId = currentUserId,
+                customerName = customerName,
+                createdByRole = "customer",
+                vehicleCategory = vehicleCategory,
+                pickupLabel = pickupLabel,
+                pickupLat = pickupLat,
+                pickupLng = pickupLng,
+                destinationLabel = destinationLabel,
+                destinationLat = destinationLat,
+                destinationLng = destinationLng,
+                distanceKm = quote.distanceKm,
+                estimatedDurationMin = (quote.distanceKm * 3.0).toInt().coerceAtLeast(3),
+                estimatedFareInr = quote.estimatedFareInr,
+                requestTtlSeconds = 180L
+            ).onSuccess { res ->
+                _actionMessage.value = "Sample Ride dispatched! Local 6-digit OTP: ${res.localOtp}"
+                onCreated()
+            }.onFailure { exc ->
+                _actionMessage.value = exc.localizedMessage ?: "Failed creating Sample Ride."
+            }
+            _isSubmitting.value = false
+        }
+    }
+
+    fun cancelSampleRide(rideId: String, reason: String = "Cancelled by customer") {
+        val sampleRepo = sampleRiderRepository ?: return
+        viewModelScope.launch {
+            sampleRepo.advanceSampleRideStatus(rideId, "cancelled", cancellationReason = reason)
+                .onSuccess { _actionMessage.value = "Sample Ride cancelled." }
+                .onFailure { _actionMessage.value = it.localizedMessage ?: "Unable to cancel Sample Ride." }
         }
     }
 

@@ -61,11 +61,20 @@ data class UserAccount(
     @PropertyName("isTestCustomer")
     val isTestCustomer: Boolean = false,
     val accountStatus: String = "active",
+    val accountType: String = "commercial", // commercial | sample
+    @get:PropertyName("isSampleRider")
+    @PropertyName("isSampleRider")
+    val isSampleRider: Boolean = false,
+    val verificationStatus: String = "", // sample_approved, suspended, revoked, etc.
+    val availabilityStatus: String = "offline", // offline | online
     @ServerTimestamp val accountCreatedAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
     fun effectiveMobileNumber(): String = mobileNumber.ifBlank { phone }
+
+    fun isSampleRiderAccount(): Boolean =
+        isSampleRider || accountType == "sample" || role == "rider"
 
     fun toCreateMap(): Map<String, Any> = buildMap {
         val resolvedUid = uid.ifBlank { userId }
@@ -80,6 +89,12 @@ data class UserAccount(
         }
         if (photoUrl.isNotBlank()) put("photoUrl", photoUrl)
         put("role", role)
+        if (isSampleRiderAccount()) {
+            put("accountType", "sample")
+            put("isSampleRider", true)
+            put("verificationStatus", verificationStatus.ifBlank { "sample_approved" })
+            put("availabilityStatus", availabilityStatus.ifBlank { "offline" })
+        }
         put("preferredLanguage", preferredLanguage)
         put("lowNetworkMode", lowNetworkMode)
         put("privacyConsentAccepted", privacyConsentAccepted)
@@ -866,6 +881,105 @@ data class RideOtpSecret(
     @PropertyName("isTestRide")
     val isTestRide: Boolean = false,
     val status: String = "pending", // pending, verified, overridden, expired, reset
+    val expiresAt: Timestamp? = null,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class SampleRiderAllowlistEntry(
+    @DocumentId val id: String = "",
+    val phoneE164: String = "",
+    val enabled: Boolean = true,
+    val label: String = "",
+    val vehicleCategory: String = "toto",
+    val addedByUid: String = "",
+    val note: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class SampleRiderProfile(
+    @DocumentId val id: String = "",
+    val uid: String = "",
+    val role: String = "rider",
+    val accountType: String = "sample",
+    @get:PropertyName("isSampleRider")
+    @PropertyName("isSampleRider")
+    val isSampleRider: Boolean = true,
+    val verificationStatus: String = "sample_approved", // sample_approved, suspended, revoked
+    val availabilityStatus: String = "offline", // offline, online
+    val displayName: String = "",
+    val phone: String = "",
+    val photoUrl: String = "",
+    val vehicleCategory: String = "toto", // bike, auto, toto, cab
+    val emergencyContactName: String = "",
+    val emergencyContactPhone: String = "",
+    val currentLat: Double? = null,
+    val currentLng: Double? = null,
+    val locationUpdatedAt: Timestamp? = null,
+    val completedSampleRides: Long = 0L,
+    val totalSampleEarningsInr: Double = 0.0,
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    fun isOnline(): Boolean = availabilityStatus == "online" && verificationStatus == "sample_approved"
+    fun isSuspendedOrRevoked(): Boolean = verificationStatus != "sample_approved" || !isSampleRider
+}
+
+@Keep
+@IgnoreExtraProperties
+data class SampleRide(
+    @DocumentId val id: String = "",
+    val rideId: String = "",
+    @get:PropertyName("isSample")
+    @PropertyName("isSample")
+    val isSample: Boolean = true,
+    val customerId: String = "",
+    val customerName: String = "",
+    val createdByUid: String = "",
+    val createdByRole: String = "customer",
+    val vehicleCategory: String = "toto",
+    val pickupLabel: String = "",
+    val pickupLat: Double = 0.0,
+    val pickupLng: Double = 0.0,
+    val destinationLabel: String = "",
+    val destinationLat: Double = 0.0,
+    val destinationLng: Double = 0.0,
+    val distanceKm: Double = 0.0,
+    val estimatedDurationMin: Int = 0,
+    val estimatedFareInr: Double = 0.0,
+    val status: String = "incoming", // incoming, accepted, arriving, arrived, in_progress, completed, cancelled, expired
+    val assignedSampleRiderId: String = "",
+    val assignedSampleRiderName: String = "",
+    val assignedSampleRiderPhone: String = "",
+    val otpVerified: Boolean = false,
+    val riderLat: Double? = null,
+    val riderLng: Double? = null,
+    val otpVerifiedAt: Timestamp? = null,
+    val completedAt: Timestamp? = null,
+    val expiresAt: Timestamp? = null,
+    val cancellationReason: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+
+@Keep
+@IgnoreExtraProperties
+data class SampleRideOtpChallenge(
+    @DocumentId val id: String = "",
+    val rideId: String = "",
+    val customerId: String = "",
+    val otpHash: String = "",
+    val submittedHash: String = "",
+    val used: Boolean = false,
+    val attempts: Int = 0,
+    val maxAttempts: Int = 5,
+    val lastAttemptAtMs: Long = 0L,
+    val verifiedByUid: String = "",
     val expiresAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null

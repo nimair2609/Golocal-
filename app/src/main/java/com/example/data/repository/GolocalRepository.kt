@@ -270,18 +270,34 @@ class GolocalRepository(
             .ifBlank { auth.currentUser?.phoneNumber.orEmpty().trim() }
             .take(25)
 
-        if (!userSnap.exists()) {
+        val accountOrNull = if (userSnap.exists()) {
+            userSnap.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+        val effectivePhoneForSample = resolvedPhone.ifBlank { accountOrNull?.effectiveMobileNumber().orEmpty() }
+        val provisionedSampleAccount = runCatching {
+            SampleRiderRepository(db, auth).autoProvisionSampleRiderIfAllowlisted(
+                uid = uid,
+                verifiedPhoneE164 = effectivePhoneForSample
+            )
+        }.getOrNull()
+        if (provisionedSampleAccount != null) {
+            AuthDiagnostics.logStage(
+                stage = AuthStage.FIRESTORE_ACCOUNT_EXISTS,
+                flow = "registration_check",
+                detail = "Allowlisted Sample Rider auto-provisioned without commercial KYC"
+            )
+            return@runCatching RegistrationStatus.Completed(provisionedSampleAccount)
+        }
+
+        if (!userSnap.exists() || accountOrNull == null) {
             return@runCatching RegistrationStatus.PendingRegistration(
                 verifiedMobileNumber = resolvedPhone,
                 existingAccount = null
             )
         }
-
-        val account = userSnap.toObject(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-            ?: return@runCatching RegistrationStatus.PendingRegistration(
-                verifiedMobileNumber = resolvedPhone,
-                existingAccount = null
-            )
+        val account = accountOrNull
 
         val emergencyExists = try {
             emergencyRef.get().await().exists()

@@ -7,6 +7,9 @@ import com.example.data.model.*
 import com.example.data.repository.BusRepository
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
+import com.example.data.repository.SampleRiderRepository
+import com.example.domain.LocalSampleOtpEntry
+import com.example.domain.SampleOtpLocalStore
 import com.example.domain.AbuseDetectionEngine
 import com.example.domain.DriverAbuseAdvisory
 import com.example.domain.FareCalculator
@@ -55,7 +58,8 @@ data class AdminDashboardMetrics(
 class AdminViewModel(
     private val repository: GolocalRepository,
     private val communicationRepository: CommunicationRepository? = null,
-    private val busRepository: BusRepository? = null
+    private val busRepository: BusRepository? = null,
+    private val sampleRiderRepository: SampleRiderRepository? = null
 ) : ViewModel() {
 
     private val _message = MutableStateFlow<String?>(null)
@@ -141,6 +145,23 @@ class AdminViewModel(
         .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val sampleAllowlist: StateFlow<List<SampleRiderAllowlistEntry>> =
+        (sampleRiderRepository?.observeAllSampleAllowlist() ?: flowOf(emptyList()))
+            .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val sampleRiders: StateFlow<List<SampleRiderProfile>> =
+        (sampleRiderRepository?.observeAllSampleRiders() ?: flowOf(emptyList()))
+            .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val sampleRides: StateFlow<List<SampleRide>> =
+        (sampleRiderRepository?.observeAllSampleRides() ?: flowOf(emptyList()))
+            .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val localSampleOtps: StateFlow<Map<String, LocalSampleOtpEntry>> = SampleOtpLocalStore.entriesFlow
 
     val cancellationAdvisories: StateFlow<List<DriverAbuseAdvisory>> = bookings
         .map { list -> AbuseDetectionEngine.evaluateCancellationAdvisories(list) }
@@ -873,6 +894,83 @@ class AdminViewModel(
                 end.lng,
                 steps = steps
             )
+        }
+    }
+
+    fun upsertSampleAllowlistPhone(
+        phoneE164: String,
+        label: String,
+        vehicleCategory: String,
+        enabled: Boolean = true,
+        note: String = ""
+    ) {
+        val repo = sampleRiderRepository ?: return
+        viewModelScope.launch {
+            repo.upsertSampleRiderAllowlist(phoneE164, label, vehicleCategory, enabled, note)
+                .onSuccess {
+                    _message.value = if (enabled) {
+                        "Allowlisted $phoneE164 as Sample Rider ($vehicleCategory)."
+                    } else {
+                        "Disabled Sample Rider allowlist access for $phoneE164."
+                    }
+                }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed saving allowlist entry." }
+        }
+    }
+
+    fun setSampleRiderStatus(uid: String, newStatus: String) {
+        val repo = sampleRiderRepository ?: return
+        viewModelScope.launch {
+            repo.setSampleRiderVerificationStatus(uid, newStatus)
+                .onSuccess { _message.value = "Sample Rider status updated to $newStatus." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed updating Sample Rider status." }
+        }
+    }
+
+    fun dispatchSampleRide(
+        context: android.content.Context,
+        customerId: String,
+        customerName: String,
+        vehicleCategory: String,
+        pickupLabel: String,
+        pickupLat: Double,
+        pickupLng: Double,
+        destinationLabel: String,
+        destinationLat: Double,
+        destinationLng: Double,
+        distanceKm: Double,
+        estimatedFareInr: Double
+    ) {
+        val repo = sampleRiderRepository ?: return
+        viewModelScope.launch {
+            repo.createSampleRideWithHashedOtp(
+                context = context,
+                customerId = customerId,
+                customerName = customerName,
+                createdByRole = "admin",
+                vehicleCategory = vehicleCategory,
+                pickupLabel = pickupLabel,
+                pickupLat = pickupLat,
+                pickupLng = pickupLng,
+                destinationLabel = destinationLabel,
+                destinationLat = destinationLat,
+                destinationLng = destinationLng,
+                distanceKm = distanceKm,
+                estimatedDurationMin = (distanceKm * 3.0).toInt().coerceAtLeast(3),
+                estimatedFareInr = estimatedFareInr,
+                requestTtlSeconds = 240L
+            ).onSuccess { res ->
+                _message.value = "Sample Ride #${res.rideId.takeLast(6)} dispatched! Local OTP: ${res.localOtp}"
+            }.onFailure { _message.value = it.localizedMessage ?: "Failed dispatching sample ride." }
+        }
+    }
+
+    fun cancelAdminSampleRide(rideId: String, reason: String = "Cancelled by Admin") {
+        val repo = sampleRiderRepository ?: return
+        viewModelScope.launch {
+            repo.advanceSampleRideStatus(rideId, "cancelled", cancellationReason = reason)
+                .onSuccess { _message.value = "Sample Ride cancelled." }
+                .onFailure { _message.value = it.localizedMessage ?: "Failed cancelling Sample Ride." }
         }
     }
 

@@ -239,6 +239,16 @@ fun RiderAuthenticatedShell(
         }
 
         val completedAccount = (registrationStatus as? RegistrationStatus.Completed)?.account
+        if (completedAccount?.isSampleRiderAccount() == true) {
+            SampleRiderDashboardShell(
+                currentUserId = currentUserId,
+                sessionViewModel = sessionViewModel,
+                deepLinkTarget = deepLinkTarget,
+                onDeepLinkHandled = onDeepLinkHandled
+            )
+            return@GolocalTheme
+        }
+
         val completedName = completedAccount?.fullName?.takeIf { it.isNotBlank() } ?: displayName
         val completedPhone = completedAccount?.effectiveMobileNumber()?.takeIf { it.isNotBlank() } ?: phoneNumber
 

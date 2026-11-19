@@ -77,6 +77,7 @@ fun AdminTestRideModule(
             ?: testBookings.firstOrNull()
     }
 
+    val sampleRiders by adminViewModel.sampleRiders.collectAsStateWithLifecycle()
     val pendingRiderCount = testRiderRequests.count { it.status == "pending" }
     val approvedRiderCount = testRiders.count { it.status == "approved" }
 
@@ -92,13 +93,19 @@ fun AdminTestRideModule(
                 selected = activeSectionTab == 1,
                 onClick = { activeSectionTab = 1 },
                 modifier = Modifier.testTag("admin_test_tab_requests"),
-                text = { Text("Rider Requests ($pendingRiderCount)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+                text = { Text("Requests ($pendingRiderCount)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             )
             Tab(
                 selected = activeSectionTab == 2,
                 onClick = { activeSectionTab = 2 },
                 modifier = Modifier.testTag("admin_test_tab_approved"),
                 text = { Text("Test Riders ($approvedRiderCount)", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
+            )
+            Tab(
+                selected = activeSectionTab == 3,
+                onClick = { activeSectionTab = 3 },
+                modifier = Modifier.testTag("admin_test_tab_sample_riders"),
+                text = { Text("Sample (${sampleRiders.size})", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
             )
         }
 
@@ -125,6 +132,9 @@ fun AdminTestRideModule(
                         adminViewModel.reviewTestRiderRequest(req, status, reason, note)
                     }
                 )
+            }
+            3 -> {
+                AdminSampleRiderPanel(adminViewModel = adminViewModel)
             }
             else -> {
                 LazyColumn(

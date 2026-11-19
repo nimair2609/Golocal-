@@ -82,6 +82,17 @@ exports.onTestRiderRequestWriteNotify = onDocumentWritten(
   }
 );
 
+exports.onSampleRideWriteNotify = onDocumentWritten(
+  { document: "sample_rides/{rideId}", database: DATABASE_ID },
+  async (event) => {
+    await handlers.handleSampleRideWrite(
+      event.params.rideId,
+      event.data?.before?.data(),
+      event.data?.after?.data()
+    );
+  }
+);
+
 exports.onEmergencyEventNotifyAdmins = onDocumentWritten(
   { document: "emergency_events/{eventId}", database: DATABASE_ID },
   async (event) => {

@@ -34,8 +34,11 @@ function clickActionForApp(targetApp) {
 
 function channelForPayload(payload) {
   const type = String(payload?.type || "").trim().toLowerCase();
+  const isSample = payload?.isSampleRide === true || type.startsWith("sample_");
   const isTest = payload?.isTestRide === true || type.startsWith("test_");
   if (payload?.channelId) return String(payload.channelId);
+  if (type === "sample_request") return "golocal_sample_ride_requests_v2";
+  if (isSample) return "golocal_sample_rides";
   if (type === "test_request") return "golocal_test_ride_requests_v2";
   if (isTest) return "golocal_test_rides";
   if (type === "new_ride_request") return "golocal_ride_requests_v2";
@@ -129,6 +132,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
         targetApp,
         targetScreen: String(payload.targetScreen || "notifications").slice(0, 64),
         isTestRide: Boolean(payload.isTestRide),
+        isSampleRide: Boolean(payload.isSampleRide),
         read: false,
         createdAt: fieldValue.serverTimestamp(),
       });
@@ -192,7 +196,9 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       if (tokens.length === 0) continue;
 
       const isRideRequestChannel =
-        channelId === "golocal_ride_requests_v2" || channelId === "golocal_test_ride_requests_v2";
+        channelId === "golocal_ride_requests_v2" ||
+        channelId === "golocal_test_ride_requests_v2" ||
+        channelId === "golocal_sample_ride_requests_v2";
       const androidSound = isRideRequestChannel ? "golocal_ride_request" : "default";
 
       const response = await messaging.sendEachForMulticast({
@@ -213,6 +219,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
           bookingId: String(payload.bookingId || ""),
           entityId: String(payload.entityId || payload.bookingId || ""),
           isTestRide: String(Boolean(payload.isTestRide)),
+          isSampleRide: String(Boolean(payload.isSampleRide)),
           channelId,
           timestampMs: String(Date.now()),
         },
@@ -750,6 +757,103 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     return notified;
   }
 
+  async function handleSampleRideWrite(rideId, before, after) {
+    if (!after) return;
+    const prevStatus = before?.status || "";
+    const newStatus = after.status || "incoming";
+    const routeLabel = `${after.pickupLabel || "Pickup"} -> ${after.destinationLabel || "Destination"}`;
+
+    if (!before && newStatus === "incoming") {
+      const sampleSnap = await db
+        .collection("sample_riders")
+        .where("verificationStatus", "==", "sample_approved")
+        .where("availabilityStatus", "==", "online")
+        .get();
+      const targetRiders = sampleSnap.docs.map((d) => d.data().uid || d.id).filter(Boolean);
+      if (targetRiders.length > 0) {
+        await sendToUserIds(targetRiders, {
+          eventId: `sample_request_${rideId}`,
+          dedupeKey: `sample_request_${rideId}`,
+          type: "sample_request",
+          targetApp: "rider",
+          targetRole: "driver",
+          targetScreen: "requests",
+          bookingId: rideId,
+          entityId: rideId,
+          isSampleRide: true,
+          channelId: "golocal_sample_ride_requests_v2",
+          title: `SAMPLE RIDE • ₹${Math.round(after.estimatedFareInr || 0)}`,
+          body: `${routeLabel} • ${(after.distanceKm || 0).toFixed(1)} km`,
+        });
+      }
+      return;
+    }
+
+    if (prevStatus !== newStatus) {
+      if (newStatus === "accepted" && after.customerId) {
+        await sendToUserIds([after.customerId], {
+          eventId: `sample_accepted_${rideId}`,
+          dedupeKey: `sample_accepted_${rideId}`,
+          type: "sample_status",
+          targetApp: "customer",
+          targetRole: "customer",
+          targetScreen: "booking",
+          bookingId: rideId,
+          entityId: rideId,
+          isSampleRide: true,
+          channelId: "golocal_sample_rides",
+          title: "SAMPLE RIDER Assigned",
+          body: `${after.assignedSampleRiderName || "Sample Rider"} accepted your sample ride.`,
+        });
+      } else if (newStatus === "arrived" && after.customerId) {
+        await sendToUserIds([after.customerId], {
+          eventId: `sample_arrived_${rideId}`,
+          dedupeKey: `sample_arrived_${rideId}`,
+          type: "sample_status",
+          targetApp: "customer",
+          targetRole: "customer",
+          targetScreen: "booking",
+          bookingId: rideId,
+          entityId: rideId,
+          isSampleRide: true,
+          channelId: "golocal_sample_rides",
+          title: "SAMPLE RIDER Arrived at Pickup",
+          body: "Share your local 6-digit Sample OTP displayed in the app to start.",
+        });
+      } else if (newStatus === "in_progress" && after.customerId) {
+        await sendToUserIds([after.customerId], {
+          eventId: `sample_started_${rideId}`,
+          dedupeKey: `sample_started_${rideId}`,
+          type: "sample_status",
+          targetApp: "customer",
+          targetRole: "customer",
+          targetScreen: "booking",
+          bookingId: rideId,
+          entityId: rideId,
+          isSampleRide: true,
+          channelId: "golocal_sample_rides",
+          title: "Sample Ride Started",
+          body: routeLabel,
+        });
+      } else if (newStatus === "completed" && after.customerId) {
+        await sendToUserIds([after.customerId], {
+          eventId: `sample_completed_${rideId}`,
+          dedupeKey: `sample_completed_${rideId}`,
+          type: "sample_status",
+          targetApp: "customer",
+          targetRole: "customer",
+          targetScreen: "booking",
+          bookingId: rideId,
+          entityId: rideId,
+          isSampleRide: true,
+          channelId: "golocal_sample_rides",
+          title: "Sample Ride Completed",
+          body: `Simulated sample fare ₹${Math.round(after.estimatedFareInr || 0)}.`,
+        });
+      }
+    }
+  }
+
   return {
     sendToUserIds,
     handleBookingWrite,
@@ -757,6 +861,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     handleBookingChatMessageCreate,
     handleDriverProfileWrite,
     handleTestRiderRequestWrite,
+    handleSampleRideWrite,
     handleEmergencyEventCreate,
     handleDisputeCreate,
     handleComplaintWrite,

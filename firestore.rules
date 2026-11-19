@@ -11,6 +11,9 @@ service cloud.firestore {
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
+    function isValidPhoneId(phoneE164) {
+      return phoneE164 is string && phoneE164.size() >= 8 && phoneE164.size() <= 20 && phoneE164.matches('^\\+[1-9][0-9]{7,15}$');
+    }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     function isSignedIn() { return request.auth != null; }
@@ -55,6 +58,38 @@ service cloud.firestore {
              get(/databases/$(database)/documents/test_riders/$(request.auth.uid)).data.status == 'approved';
     }
 
+    function isPhoneAuthUser() {
+      return isSignedIn() &&
+             'phone_number' in request.auth.token &&
+             request.auth.token.phone_number is string;
+    }
+
+    function verifiedPhone() {
+      return request.auth.token.phone_number;
+    }
+
+    function isAllowlistedSamplePhone() {
+      return isPhoneAuthUser() &&
+             exists(/databases/$(database)/documents/sample_rider_allowlist/$(verifiedPhone())) &&
+             get(/databases/$(database)/documents/sample_rider_allowlist/$(verifiedPhone())).data.enabled == true;
+    }
+
+    function isActiveSampleRider() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/sample_riders/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/sample_riders/$(request.auth.uid)).data.isSampleRider == true &&
+             get(/databases/$(database)/documents/sample_riders/$(request.auth.uid)).data.accountType == 'sample' &&
+             get(/databases/$(database)/documents/sample_riders/$(request.auth.uid)).data.verificationStatus == 'sample_approved';
+    }
+
+    function hasNoPlaintextOtpKeys(data) {
+      return !('otp' in data) &&
+             !('otpPlaintext' in data) &&
+             !('tripPin' in data) &&
+             !('code' in data) &&
+             !('pin' in data);
+    }
+
     function isAuthorizedTestPartnerId(driverId) {
       return driverId is string &&
              driverId.size() >= 1 &&
@@ -85,9 +120,13 @@ service cloud.firestore {
       return data.userId is string && data.userId.size() <= 128 &&
              (!('uid' in data) || (data.uid is string && data.uid == data.userId)) &&
              data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
-             data.role in ['customer', 'driver', 'admin'] &&
+             data.role in ['customer', 'driver', 'rider', 'admin'] &&
              data.preferredLanguage in ['en', 'bn', 'hi'] &&
              data.accountStatus in ['active', 'restricted', 'deletion_requested'] &&
+             (!('accountType' in data) || data.accountType in ['commercial', 'sample']) &&
+             (!('isSampleRider' in data) || data.isSampleRider is bool) &&
+             (!('verificationStatus' in data) || data.verificationStatus in ['', 'pending', 'verified', 'rejected', 'suspended', 'sample_approved', 'revoked']) &&
+             (!('availabilityStatus' in data) || data.availabilityStatus in ['offline', 'online']) &&
              isOptionalString(data, 'email', 150) &&
              isOptionalString(data, 'phone', 25) &&
              isOptionalString(data, 'mobileNumber', 25) &&
@@ -593,9 +632,90 @@ service cloud.firestore {
              isValidTimestamp(data.updatedAt);
     }
 
+    function isValidSampleRiderAllowlist(data, phoneE164) {
+      return data.phoneE164 == phoneE164 &&
+             isValidPhoneId(data.phoneE164) &&
+             data.enabled is bool &&
+             isOptionalString(data, 'label', 100) &&
+             (!('vehicleCategory' in data) || data.vehicleCategory in ['bike', 'auto', 'toto', 'cab']) &&
+             isOptionalString(data, 'addedByUid', 128) &&
+             isOptionalString(data, 'note', 300) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSampleRiderProfile(data) {
+      return data.uid is string && isValidId(data.uid) &&
+             data.role == 'rider' &&
+             data.accountType == 'sample' &&
+             data.isSampleRider is bool &&
+             data.verificationStatus in ['sample_approved', 'suspended', 'revoked'] &&
+             data.availabilityStatus in ['offline', 'online'] &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+             data.phone is string && data.phone.size() >= 8 && data.phone.size() <= 25 &&
+             isOptionalString(data, 'photoUrl', 500) &&
+             data.vehicleCategory in ['bike', 'auto', 'toto', 'cab'] &&
+             isOptionalString(data, 'emergencyContactName', 100) &&
+             isOptionalString(data, 'emergencyContactPhone', 25) &&
+             (!('currentLat' in data) || data.currentLat == null || data.currentLat is number) &&
+             (!('currentLng' in data) || data.currentLng == null || data.currentLng is number) &&
+             (!('locationUpdatedAt' in data) || data.locationUpdatedAt == null || data.locationUpdatedAt is timestamp) &&
+             (!('completedSampleRides' in data) || (data.completedSampleRides is int && data.completedSampleRides >= 0)) &&
+             (!('totalSampleEarningsInr' in data) || (data.totalSampleEarningsInr is number && data.totalSampleEarningsInr >= 0)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSampleRide(data, rideId) {
+      return data.rideId == rideId &&
+             data.isSample == true &&
+             data.customerId is string && isValidId(data.customerId) &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 100 &&
+             isOptionalString(data, 'createdByUid', 128) &&
+             isOptionalString(data, 'createdByRole', 30) &&
+             data.vehicleCategory in ['bike', 'auto', 'toto', 'cab'] &&
+             data.pickupLabel is string && data.pickupLabel.size() >= 1 && data.pickupLabel.size() <= 200 &&
+             data.pickupLat is number && data.pickupLng is number &&
+             data.destinationLabel is string && data.destinationLabel.size() >= 1 && data.destinationLabel.size() <= 200 &&
+             data.destinationLat is number && data.destinationLng is number &&
+             data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 2000 &&
+             (!('estimatedDurationMin' in data) || (data.estimatedDurationMin is int && data.estimatedDurationMin >= 0)) &&
+             data.estimatedFareInr is number && data.estimatedFareInr >= 0 &&
+             data.status in ['incoming', 'accepted', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled', 'expired'] &&
+             isOptionalString(data, 'assignedSampleRiderId', 128) &&
+             isOptionalString(data, 'assignedSampleRiderName', 100) &&
+             isOptionalString(data, 'assignedSampleRiderPhone', 25) &&
+             data.otpVerified is bool &&
+             (!('riderLat' in data) || data.riderLat == null || data.riderLat is number) &&
+             (!('riderLng' in data) || data.riderLng == null || data.riderLng is number) &&
+             (!('otpVerifiedAt' in data) || data.otpVerifiedAt == null || data.otpVerifiedAt is timestamp) &&
+             (!('completedAt' in data) || data.completedAt == null || data.completedAt is timestamp) &&
+             data.expiresAt is timestamp &&
+             isOptionalString(data, 'cancellationReason', 250) &&
+             hasNoPlaintextOtpKeys(data) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSampleRideOtpChallenge(data, rideId) {
+      return data.rideId == rideId &&
+             data.customerId is string && isValidId(data.customerId) &&
+             data.otpHash is string && data.otpHash.size() == 64 &&
+             isOptionalString(data, 'submittedHash', 64) &&
+             data.used is bool &&
+             data.attempts is int && data.attempts >= 0 &&
+             data.maxAttempts is int && data.maxAttempts >= 1 && data.maxAttempts <= 10 &&
+             (!('lastAttemptAtMs' in data) || (data.lastAttemptAtMs is int && data.lastAttemptAtMs >= 0)) &&
+             isOptionalString(data, 'verifiedByUid', 128) &&
+             data.expiresAt is timestamp &&
+             hasNoPlaintextOtpKeys(data) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
     // --- Collection Rules ---
 
-    // 1. User accounts (PII isolated to owner or Admin; self-assigning 'admin' or mutating role blocked)
+    // 1. User accounts (PII isolated to owner or Admin; self-assigning 'admin' or mutating role blocked; Sample Rider requires allowlisted phone)
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
@@ -603,9 +723,20 @@ service cloud.firestore {
                        isValidId(userId) &&
                        request.auth.uid == userId &&
                        incoming().userId == request.auth.uid &&
-                       (incoming().role in ['customer', 'driver'] || isAdmin()) &&
                        incoming().accountStatus == 'active' &&
-                       (!('isTestCustomer' in incoming()) || incoming().isTestCustomer == false || isAdmin()) &&
+                       (!('isTestCustomer' in incoming()) || incoming().isTestCustomer == false || isAdmin()) && (
+                         isAdmin() ||
+                         (incoming().role in ['customer', 'driver'] &&
+                          (!('accountType' in incoming()) || incoming().accountType == 'commercial') &&
+                          (!('isSampleRider' in incoming()) || incoming().isSampleRider == false) &&
+                          (!('verificationStatus' in incoming()) || incoming().verificationStatus != 'sample_approved')) ||
+                         (isAllowlistedSamplePhone() &&
+                          incoming().role == 'rider' &&
+                          incoming().accountType == 'sample' &&
+                          incoming().isSampleRider == true &&
+                          incoming().verificationStatus == 'sample_approved' &&
+                          incoming().availabilityStatus in ['offline', 'online'])
+                       ) &&
                        isValidUserAccount(incoming());
       allow update: if isSignedIn() &&
                        isValidId(userId) &&
@@ -616,12 +747,31 @@ service cloud.firestore {
                          (request.auth.uid == userId &&
                           incoming().role == existing().role &&
                           incoming().accountStatus == existing().accountStatus &&
+                          (!('accountType' in incoming()) || !('accountType' in existing()) || incoming().accountType == existing().accountType) &&
+                          (!('isSampleRider' in incoming()) || (('isSampleRider' in existing()) && incoming().isSampleRider == existing().isSampleRider) || incoming().isSampleRider == false) &&
+                          (!('verificationStatus' in incoming()) || (('verificationStatus' in existing()) && incoming().verificationStatus == existing().verificationStatus) || incoming().verificationStatus != 'sample_approved') &&
                           (!('isTestCustomer' in incoming()) || (('isTestCustomer' in existing()) && incoming().isTestCustomer == existing().isTestCustomer) || incoming().isTestCustomer == false) &&
                           incoming().diff(existing()).affectedKeys().hasOnly([
                             'uid', 'fullName', 'email', 'phone', 'mobileNumber', 'photoUrl',
                             'preferredLanguage', 'lowNetworkMode', 'privacyConsentAccepted',
                             'profileCompleted', 'emailVerified', 'mobileVerified',
                             'hasEmergencyContact', 'updatedAt'
+                          ])) ||
+                         (request.auth.uid == userId &&
+                          isAllowlistedSamplePhone() &&
+                          incoming().role == 'rider' &&
+                          incoming().accountType == 'sample' &&
+                          incoming().isSampleRider == true &&
+                          incoming().verificationStatus == 'sample_approved' &&
+                          incoming().availabilityStatus in ['offline', 'online'] &&
+                          incoming().accountStatus == existing().accountStatus &&
+                          (!('isTestCustomer' in incoming()) || (('isTestCustomer' in existing()) && incoming().isTestCustomer == existing().isTestCustomer) || incoming().isTestCustomer == false) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'uid', 'fullName', 'email', 'phone', 'mobileNumber', 'photoUrl',
+                            'preferredLanguage', 'lowNetworkMode', 'privacyConsentAccepted',
+                            'profileCompleted', 'emailVerified', 'mobileVerified',
+                            'hasEmergencyContact', 'role', 'accountType', 'isSampleRider',
+                            'verificationStatus', 'availabilityStatus', 'updatedAt'
                           ]))
                        );
       allow delete: if isAdmin();
@@ -1762,6 +1912,219 @@ service cloud.firestore {
          isValidTimestamp(incoming().updatedAt))
       );
       allow delete: if false;
+    }
+
+    // 29. Sample Rider phone-auth allowlist (Admin-managed; owner phone can only read their own allowlist doc to check eligibility)
+    match /sample_rider_allowlist/{phoneE164} {
+      allow get: if isValidPhoneId(phoneE164) &&
+                    (isAdmin() || (isPhoneAuthUser() && verifiedPhone() == phoneE164));
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() &&
+                               isValidPhoneId(phoneE164) &&
+                               isValidSampleRiderAllowlist(incoming(), phoneE164);
+      allow delete: if isAdmin() && isValidPhoneId(phoneE164);
+    }
+
+    // 30. Isolated Sample Rider profiles (linked to authenticated Firebase UID; zero commercial KYC required; non-allowlisted users cannot self-create)
+    match /sample_riders/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && (request.auth.uid == uid || isStaffOrAdmin());
+      allow list: if isStaffOrAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn() &&
+                       isValidId(uid) &&
+                       isValidSampleRiderProfile(incoming()) && (
+                         isAdmin() ||
+                         (request.auth.uid == uid &&
+                          isAllowlistedSamplePhone() &&
+                          incoming().uid == request.auth.uid &&
+                          incoming().phone == verifiedPhone() &&
+                          incoming().role == 'rider' &&
+                          incoming().accountType == 'sample' &&
+                          incoming().isSampleRider == true &&
+                          incoming().verificationStatus == 'sample_approved' &&
+                          incoming().availabilityStatus == 'offline' &&
+                          (!('completedSampleRides' in incoming()) || incoming().completedSampleRides == 0) &&
+                          (!('totalSampleEarningsInr' in incoming()) || incoming().totalSampleEarningsInr == 0))
+                       );
+      allow update: if isSignedIn() &&
+                       isValidId(uid) &&
+                       isValidSampleRiderProfile(incoming()) &&
+                       incoming().uid == existing().uid &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (request.auth.uid == uid &&
+                          isAllowlistedSamplePhone() &&
+                          existing().isSampleRider == true &&
+                          existing().accountType == 'sample' &&
+                          existing().verificationStatus == 'sample_approved' &&
+                          incoming().role == 'rider' &&
+                          incoming().accountType == 'sample' &&
+                          incoming().isSampleRider == true &&
+                          incoming().verificationStatus == 'sample_approved' &&
+                          incoming().phone == existing().phone &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'displayName', 'photoUrl', 'vehicleCategory', 'availabilityStatus',
+                            'emergencyContactName', 'emergencyContactPhone',
+                            'currentLat', 'currentLng', 'locationUpdatedAt', 'updatedAt'
+                          ]))
+                       );
+      allow delete: if isAdmin() && isValidId(uid);
+
+      match /dismissed_rides/{rideId} {
+        allow get, list: if isSignedIn() && isValidId(uid) && isValidId(rideId) &&
+                           (request.auth.uid == uid || isAdmin());
+        allow create, delete: if isSignedIn() && isValidId(uid) && isValidId(rideId) &&
+                                 (request.auth.uid == uid || isAdmin());
+      }
+    }
+
+    // 31. Isolated Sample Rides (strictly isolated from commercial `bookings`; atomic accept & OTP-gated `in_progress`)
+    match /sample_rides/{rideId} {
+      allow get: if isSignedIn() && isValidId(rideId) && (
+        isStaffOrAdmin() ||
+        existing().customerId == request.auth.uid ||
+        existing().assignedSampleRiderId == request.auth.uid ||
+        (isActiveSampleRider() && existing().status == 'incoming')
+      );
+      allow list: if isSignedIn() && (
+        isStaffOrAdmin() ||
+        resource.data.customerId == request.auth.uid ||
+        resource.data.assignedSampleRiderId == request.auth.uid ||
+        (isActiveSampleRider() && resource.data.status == 'incoming')
+      );
+      allow create: if isSignedIn() &&
+                       isValidId(rideId) &&
+                       isValidSampleRide(incoming(), rideId) &&
+                       (isAdmin() || (isAuthorizedTestCustomer() && incoming().customerId == request.auth.uid)) &&
+                       incoming().isSample == true &&
+                       incoming().status == 'incoming' &&
+                       incoming().assignedSampleRiderId == '' &&
+                       incoming().otpVerified == false &&
+                       incoming().expiresAt > request.time;
+      allow update: if isSignedIn() &&
+                       isValidId(rideId) &&
+                       isValidSampleRide(incoming(), rideId) &&
+                       incoming().rideId == existing().rideId &&
+                       incoming().customerId == existing().customerId &&
+                       incoming().isSample == true &&
+                       incoming().createdAt == existing().createdAt && (
+                         // 1. Atomic acceptance by an active Sample Rider
+                         (isActiveSampleRider() &&
+                          existing().status == 'incoming' &&
+                          existing().assignedSampleRiderId == '' &&
+                          request.time <= existing().expiresAt &&
+                          incoming().status == 'accepted' &&
+                          incoming().assignedSampleRiderId == request.auth.uid &&
+                          incoming().otpVerified == false &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'assignedSampleRiderId', 'assignedSampleRiderName',
+                            'assignedSampleRiderPhone', 'riderLat', 'riderLng', 'updatedAt'
+                          ])) ||
+                         // 2. Assigned Sample Rider pre-OTP progression (accepted -> arriving -> arrived) & real GPS updates
+                         (isActiveSampleRider() &&
+                          existing().assignedSampleRiderId == request.auth.uid &&
+                          existing().status in ['accepted', 'arriving', 'arrived'] &&
+                          incoming().status in ['accepted', 'arriving', 'arrived'] &&
+                          (incoming().status == existing().status ||
+                           (existing().status == 'accepted' && incoming().status in ['arriving', 'arrived']) ||
+                           (existing().status == 'arriving' && incoming().status == 'arrived')) &&
+                          incoming().assignedSampleRiderId == existing().assignedSampleRiderId &&
+                          incoming().otpVerified == false &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'riderLat', 'riderLng', 'updatedAt'
+                          ])) ||
+                         // 3. Assigned Sample Rider starts ride ONLY atomically with hashed OTP challenge consumption
+                         (isActiveSampleRider() &&
+                          existing().assignedSampleRiderId == request.auth.uid &&
+                          existing().status == 'arrived' &&
+                          incoming().status == 'in_progress' &&
+                          incoming().otpVerified == true &&
+                          incoming().assignedSampleRiderId == existing().assignedSampleRiderId &&
+                          existsAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)) &&
+                          get(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.used == false &&
+                          getAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.used == true &&
+                          getAfter(/databases/$(database)/documents/sample_ride_otps/$(rideId)).data.verifiedByUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'otpVerified', 'otpVerifiedAt', 'riderLat', 'riderLng', 'updatedAt'
+                          ])) ||
+                         // 4. Assigned Sample Rider live GPS & completion after OTP verified
+                         (isActiveSampleRider() &&
+                          existing().assignedSampleRiderId == request.auth.uid &&
+                          existing().status == 'in_progress' &&
+                          existing().otpVerified == true &&
+                          incoming().otpVerified == true &&
+                          incoming().status in ['in_progress', 'completed'] &&
+                          incoming().assignedSampleRiderId == existing().assignedSampleRiderId &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'riderLat', 'riderLng', 'completedAt', 'updatedAt'
+                          ])) ||
+                         // 5. Mark timed-out incoming sample ride as expired
+                         ((isActiveSampleRider() || existing().customerId == request.auth.uid || isStaffOrAdmin()) &&
+                          existing().status == 'incoming' &&
+                          request.time > existing().expiresAt &&
+                          incoming().status == 'expired' &&
+                          incoming().otpVerified == existing().otpVerified &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                         // 6. Cancel pre-start sample ride
+                         ((existing().customerId == request.auth.uid ||
+                           (isActiveSampleRider() && existing().assignedSampleRiderId == request.auth.uid) ||
+                           isStaffOrAdmin()) &&
+                          existing().status in ['incoming', 'accepted', 'arriving', 'arrived'] &&
+                          incoming().status == 'cancelled' &&
+                          incoming().otpVerified == existing().otpVerified &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt'])) ||
+                         // 7. Admin cancellation/cleanup without bypassing OTP rules
+                         (isAdmin() &&
+                          incoming().otpVerified == existing().otpVerified &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'cancellationReason', 'expiresAt', 'updatedAt'
+                          ]))
+                       );
+      allow delete: if isAdmin() && isValidId(rideId);
+    }
+
+    // 32. Hashed Sample Ride 6-digit OTP challenges (NEVER contains readable plaintext OTP; unreadable by client riders)
+    match /sample_ride_otps/{rideId} {
+      allow get, list: if isAdmin();
+      allow create: if isSignedIn() &&
+                       isValidId(rideId) &&
+                       isValidSampleRideOtpChallenge(incoming(), rideId) &&
+                       existsAfter(/databases/$(database)/documents/sample_rides/$(rideId)) &&
+                       (isAdmin() ||
+                        (isAuthorizedTestCustomer() &&
+                         incoming().customerId == request.auth.uid &&
+                         getAfter(/databases/$(database)/documents/sample_rides/$(rideId)).data.customerId == request.auth.uid)) &&
+                       incoming().used == false &&
+                       incoming().attempts == 0 &&
+                       incoming().maxAttempts == 5 &&
+                       incoming().expiresAt > request.time;
+      allow update: if isSignedIn() &&
+                       isValidId(rideId) &&
+                       isValidSampleRideOtpChallenge(incoming(), rideId) &&
+                       incoming().rideId == existing().rideId &&
+                       incoming().customerId == existing().customerId &&
+                       incoming().otpHash == existing().otpHash &&
+                       incoming().createdAt == existing().createdAt &&
+                       exists(/databases/$(database)/documents/sample_rides/$(rideId)) &&
+                       get(/databases/$(database)/documents/sample_rides/$(rideId)).data.assignedSampleRiderId == request.auth.uid &&
+                       isActiveSampleRider() &&
+                       existing().used == false &&
+                       existing().attempts < existing().maxAttempts && (
+                         // Consume challenge when SHA-256(rideId:otp) matches otpHash
+                         (request.time <= existing().expiresAt &&
+                          incoming().used == true &&
+                          incoming().submittedHash is string &&
+                          incoming().submittedHash == existing().otpHash &&
+                          incoming().verifiedByUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['used', 'submittedHash', 'verifiedByUid', 'updatedAt'])) ||
+                         // Record failed OTP attempt (anti-brute-force attempt counter + 1.5s cooldown)
+                         (incoming().used == false &&
+                          incoming().attempts == existing().attempts + 1 &&
+                          incoming().lastAttemptAtMs is int &&
+                          (!('lastAttemptAtMs' in existing()) || existing().lastAttemptAtMs == 0 ||
+                           request.time.toMillis() - existing().lastAttemptAtMs >= 1500) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['attempts', 'lastAttemptAtMs', 'updatedAt']))
+                       );
+      allow delete: if isAdmin() && isValidId(rideId);
     }
   }
 }

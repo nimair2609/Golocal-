@@ -1950,3 +1950,402 @@ test("Multi-device FCM tokens & Notification Centre isolation rules", async () =
   await assertSucceeds(adminDb.collection("notifications").doc("notif_test_1").get());
 });
 
+test("Sample Rider: allowlist-gated OTP auto-provisioning, zero plaintext OTP, atomic claim, and commercial isolation", async () => {
+  const SAMPLE_RIDER_UID = "sample_rider_phone_uid_1";
+  const SECOND_SAMPLE_UID = "sample_rider_phone_uid_2";
+  const SAMPLE_PHONE_1 = "+919800001111";
+  const SAMPLE_PHONE_2 = "+919800002222";
+  const UNAUTHORIZED_PHONE = "+919800009999";
+  const SAMPLE_RIDE_ID = "sample_ride_case_1";
+
+  const adminDb = testEnv.authenticatedContext("admin_sample_mgr", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const sampleRider1Db = testEnv.authenticatedContext(SAMPLE_RIDER_UID, { phone_number: SAMPLE_PHONE_1 }).firestore();
+  const sampleRider2Db = testEnv.authenticatedContext(SECOND_SAMPLE_UID, { phone_number: SAMPLE_PHONE_2 }).firestore();
+  const unauthorizedPhoneDb = testEnv.authenticatedContext("unlisted_phone_uid", { phone_number: UNAUTHORIZED_PHONE }).firestore();
+  const testCustDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
+  const regularCustDb = testEnv.authenticatedContext(OTHER_UID).firestore();
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("users").doc(CUSTOMER_UID).set({
+      userId: CUSTOMER_UID,
+      fullName: "Sample Test Customer",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      isTestCustomer: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await ctx.firestore().collection("users").doc(OTHER_UID).set({
+      userId: OTHER_UID,
+      fullName: "Regular Customer",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      isTestCustomer: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await ctx.firestore().collection("bookings").doc("commercial_hidden_booking").set({
+      customerId: OTHER_UID,
+      customerName: "Regular Customer",
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Station",
+      destinationLabel: "Market",
+      distanceKm: 2.0,
+      estimatedFareInr: 40,
+      minPermittedFareInr: 30,
+      maxPermittedFareInr: 50,
+      status: "searching",
+      paymentMode: "cash",
+      paymentStatus: "unpaid",
+      is_test_ride: false,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+    await ctx.firestore().collection("driver_profiles").doc("commercial_driver_hidden").set({
+      driverId: "commercial_driver_hidden",
+      legalName: "Commercial Driver",
+      phone: "+919111122222",
+      district: "Hooghly",
+      vehicleCategory: "toto",
+      vehicleRegNumber: "WB12T1234",
+      drivingLicenceNumber: "DL123456",
+      verificationStatus: "verified",
+      isOnline: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    });
+  });
+
+  // 1. Non-allowlisted user CANNOT self-assign sample rider role or create sample_riders profile
+  await assertFails(
+    unauthorizedPhoneDb.collection("users").doc("unlisted_phone_uid").set({
+      userId: "unlisted_phone_uid",
+      fullName: "Self Grant Hacker",
+      role: "rider",
+      accountType: "sample",
+      isSampleRider: true,
+      verificationStatus: "sample_approved",
+      availabilityStatus: "offline",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    unauthorizedPhoneDb.collection("sample_riders").doc("unlisted_phone_uid").set({
+      uid: "unlisted_phone_uid",
+      role: "rider",
+      accountType: "sample",
+      isSampleRider: true,
+      verificationStatus: "sample_approved",
+      availabilityStatus: "offline",
+      displayName: "Hacker",
+      phone: UNAUTHORIZED_PHONE,
+      vehicleCategory: "toto",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 2. Admin allowlists phone #1 and #2
+  await assertSucceeds(
+    adminDb.collection("sample_rider_allowlist").doc(SAMPLE_PHONE_1).set({
+      phoneE164: SAMPLE_PHONE_1,
+      enabled: true,
+      label: "Sample Rider One",
+      vehicleCategory: "toto",
+      addedByUid: "admin_sample_mgr",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("sample_rider_allowlist").doc(SAMPLE_PHONE_2).set({
+      phoneE164: SAMPLE_PHONE_2,
+      enabled: true,
+      label: "Sample Rider Two",
+      vehicleCategory: "auto",
+      addedByUid: "admin_sample_mgr",
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Allowlisted phone can check ONLY its own allowlist doc, never list all allowlist entries
+  await assertSucceeds(sampleRider1Db.collection("sample_rider_allowlist").doc(SAMPLE_PHONE_1).get());
+  await assertFails(sampleRider1Db.collection("sample_rider_allowlist").doc(SAMPLE_PHONE_2).get());
+  await assertFails(sampleRider1Db.collection("sample_rider_allowlist").get());
+
+  // 3. Allowlisted phone user provisions /users/{uid} and /sample_riders/{uid} with zero commercial KYC docs
+  await assertSucceeds(
+    sampleRider1Db.collection("users").doc(SAMPLE_RIDER_UID).set({
+      userId: SAMPLE_RIDER_UID,
+      fullName: "Sample Rider One",
+      role: "rider",
+      accountType: "sample",
+      isSampleRider: true,
+      verificationStatus: "sample_approved",
+      availabilityStatus: "offline",
+      phone: SAMPLE_PHONE_1,
+      mobileNumber: SAMPLE_PHONE_1,
+      preferredLanguage: "en",
+      accountStatus: "active",
+      mobileVerified: true,
+      profileCompleted: true,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_riders").doc(SAMPLE_RIDER_UID).set({
+      uid: SAMPLE_RIDER_UID,
+      role: "rider",
+      accountType: "sample",
+      isSampleRider: true,
+      verificationStatus: "sample_approved",
+      availabilityStatus: "offline",
+      displayName: "Sample Rider One",
+      phone: SAMPLE_PHONE_1,
+      vehicleCategory: "toto",
+      completedSampleRides: 0,
+      totalSampleEarningsInr: 0,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    sampleRider2Db.collection("sample_riders").doc(SECOND_SAMPLE_UID).set({
+      uid: SECOND_SAMPLE_UID,
+      role: "rider",
+      accountType: "sample",
+      isSampleRider: true,
+      verificationStatus: "sample_approved",
+      availabilityStatus: "offline",
+      displayName: "Sample Rider Two",
+      phone: SAMPLE_PHONE_2,
+      vehicleCategory: "auto",
+      completedSampleRides: 0,
+      totalSampleEarningsInr: 0,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Sample Rider can update real GPS, profile & online/offline status, CANNOT tamper with earnings or role
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_riders").doc(SAMPLE_RIDER_UID).update({
+      availabilityStatus: "online",
+      currentLat: 22.905,
+      currentLng: 88.392,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    sampleRider1Db.collection("sample_riders").doc(SAMPLE_RIDER_UID).update({
+      totalSampleEarningsInr: 99999,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Sample Rider is COMPLETELY isolated from commercial bookings and commercial driver_profiles
+  await assertFails(sampleRider1Db.collection("bookings").doc("commercial_hidden_booking").get());
+  await assertFails(sampleRider1Db.collection("driver_profiles").doc("commercial_driver_hidden").get());
+
+  // 4. Unauthorized regular customer cannot dispatch sample ride; authorized Test Customer creates sample_rides + hashed OTP challenge (NO plaintext OTP)
+  const SAMPLE_OTP = "482915";
+  const expiresAt = new Date(Date.now() + 180 * 1000);
+  await assertFails(
+    regularCustDb.collection("sample_rides").doc("unauth_sample").set({
+      rideId: "unauth_sample",
+      isSample: true,
+      customerId: OTHER_UID,
+      customerName: "Regular Customer",
+      vehicleCategory: "toto",
+      pickupLabel: "A",
+      pickupLat: 22.9,
+      pickupLng: 88.3,
+      destinationLabel: "B",
+      destinationLat: 22.91,
+      destinationLng: 88.31,
+      distanceKm: 2.5,
+      estimatedFareInr: 45,
+      status: "incoming",
+      assignedSampleRiderId: "",
+      otpVerified: false,
+      expiresAt,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Plaintext OTP keys are strictly rejected on sample_rides & sample_ride_otps
+  await assertFails(
+    testCustDb.collection("sample_rides").doc("bad_plaintext_ride").set({
+      rideId: "bad_plaintext_ride",
+      isSample: true,
+      customerId: CUSTOMER_UID,
+      customerName: "Sample Test Customer",
+      vehicleCategory: "toto",
+      pickupLabel: "Station",
+      pickupLat: 22.9041,
+      pickupLng: 88.3915,
+      destinationLabel: "Hospital",
+      destinationLat: 22.9182,
+      destinationLng: 88.3991,
+      distanceKm: 2.1,
+      estimatedFareInr: 40,
+      status: "incoming",
+      assignedSampleRiderId: "",
+      otpVerified: false,
+      otp: "123456",
+      expiresAt,
+      createdAt: nowTs(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  const createBatch = testCustDb.batch();
+  createBatch.set(testCustDb.collection("sample_rides").doc(SAMPLE_RIDE_ID), {
+    rideId: SAMPLE_RIDE_ID,
+    isSample: true,
+    customerId: CUSTOMER_UID,
+    customerName: "Sample Test Customer",
+    createdByUid: CUSTOMER_UID,
+    createdByRole: "customer",
+    vehicleCategory: "toto",
+    pickupLabel: "Borai Railway Crossing",
+    pickupLat: 22.9041,
+    pickupLng: 88.3915,
+    destinationLabel: "Chinsurah Court Gate",
+    destinationLat: 22.9182,
+    destinationLng: 88.3991,
+    distanceKm: 2.4,
+    estimatedDurationMin: 9,
+    estimatedFareInr: 50,
+    status: "incoming",
+    assignedSampleRiderId: "",
+    assignedSampleRiderName: "",
+    assignedSampleRiderPhone: "",
+    otpVerified: false,
+    expiresAt,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  createBatch.set(testCustDb.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID), {
+    rideId: SAMPLE_RIDE_ID,
+    customerId: CUSTOMER_UID,
+    otpHash: sha256Otp(SAMPLE_RIDE_ID, SAMPLE_OTP),
+    submittedHash: "",
+    used: false,
+    attempts: 0,
+    maxAttempts: 5,
+    lastAttemptAtMs: 0,
+    verifiedByUid: "",
+    expiresAt,
+    createdAt: nowTs(),
+    updatedAt: nowTs(),
+  });
+  await assertSucceeds(createBatch.commit());
+
+  // 5. Neither Sample Rider nor Customer can read sample_ride_otps directly
+  await assertFails(sampleRider1Db.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID).get());
+  await assertFails(testCustDb.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID).get());
+
+  // 6. Atomic acceptance: Rider 1 claims; Rider 2 claim immediately fails because status != 'incoming'
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_rides").doc(SAMPLE_RIDE_ID).update({
+      status: "accepted",
+      assignedSampleRiderId: SAMPLE_RIDER_UID,
+      assignedSampleRiderName: "Sample Rider One",
+      assignedSampleRiderPhone: SAMPLE_PHONE_1,
+      riderLat: 22.905,
+      riderLng: 88.392,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(
+    sampleRider2Db.collection("sample_rides").doc(SAMPLE_RIDE_ID).update({
+      status: "accepted",
+      assignedSampleRiderId: SECOND_SAMPLE_UID,
+      assignedSampleRiderName: "Sample Rider Two",
+      assignedSampleRiderPhone: SAMPLE_PHONE_2,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 7. Rider progresses arriving -> arrived; cannot bypass OTP verification to enter in_progress
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_rides").doc(SAMPLE_RIDE_ID).update({ status: "arriving", updatedAt: nowTs() })
+  );
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_rides").doc(SAMPLE_RIDE_ID).update({ status: "arrived", updatedAt: nowTs() })
+  );
+  await assertFails(
+    sampleRider1Db.collection("sample_rides").doc(SAMPLE_RIDE_ID).update({
+      status: "in_progress",
+      otpVerified: true,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // Wrong OTP rejected and attempt incremented cleanly; correct OTP starts ride atomically
+  await assertFails(
+    sampleRider1Db.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID).update({
+      used: true,
+      submittedHash: sha256Otp(SAMPLE_RIDE_ID, "000000"),
+      verifiedByUid: SAMPLE_RIDER_UID,
+      updatedAt: nowTs(),
+    })
+  );
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID).update({
+      attempts: 1,
+      lastAttemptAtMs: Date.now(),
+      updatedAt: nowTs(),
+    })
+  );
+
+  const startTripBatch = sampleRider1Db.batch();
+  startTripBatch.update(sampleRider1Db.collection("sample_ride_otps").doc(SAMPLE_RIDE_ID), {
+    used: true,
+    submittedHash: sha256Otp(SAMPLE_RIDE_ID, SAMPLE_OTP),
+    verifiedByUid: SAMPLE_RIDER_UID,
+    updatedAt: nowTs(),
+  });
+  startTripBatch.update(sampleRider1Db.collection("sample_rides").doc(SAMPLE_RIDE_ID), {
+    status: "in_progress",
+    otpVerified: true,
+    otpVerifiedAt: nowTs(),
+    riderLat: 22.9041,
+    riderLng: 88.3915,
+    updatedAt: nowTs(),
+  });
+  await assertSucceeds(startTripBatch.commit());
+
+  // Complete sample ride
+  await assertSucceeds(
+    sampleRider1Db.collection("sample_rides").doc(SAMPLE_RIDE_ID).update({
+      status: "completed",
+      completedAt: nowTs(),
+      riderLat: 22.9182,
+      riderLng: 88.3991,
+      updatedAt: nowTs(),
+    })
+  );
+
+  // 8. Admin revokes Sample Rider -> loses access to incoming sample rides
+  await assertSucceeds(
+    adminDb.collection("sample_riders").doc(SAMPLE_RIDER_UID).update({
+      verificationStatus: "revoked",
+      availabilityStatus: "offline",
+      updatedAt: nowTs(),
+    })
+  );
+  await assertFails(sampleRider1Db.collection("sample_rides").where("status", "==", "incoming").get());
+});
+
+

@@ -711,6 +711,37 @@ fun CustomerBookRideScreen(
                                     )
                                 }
                             }
+
+                            if (canSelectTestRide) {
+                                OutlinedButton(
+                                    onClick = {
+                                        customerViewModel.submitSampleRideBooking(
+                                            context = context,
+                                            quote = quote,
+                                            pickupLabel = pickupLabel,
+                                            pickupLat = pickupLat,
+                                            pickupLng = pickupLng,
+                                            destinationLabel = destLabel,
+                                            destinationLat = draft.destinationPlace.lat,
+                                            destinationLng = draft.destinationPlace.lng,
+                                            vehicleCategory = draft.selectedCategory,
+                                            onCreated = onBackHome
+                                        )
+                                    },
+                                    enabled = !isSubmitting,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .testTag("submit_sample_ride_button"),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text(
+                                        text = "Dispatch Sample Ride (Isolated)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                         }
                     }
                 }

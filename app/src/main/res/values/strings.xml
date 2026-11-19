@@ -16,4 +16,6 @@
     <string name="notif_channel_sos">Safety &amp; Emergency Alerts</string>
     <string name="notif_channel_general">Service &amp; Admin Notices</string>
     <string name="notif_channel_test_rides">Test Rider Sandbox Alerts</string>
+    <string name="notif_channel_sample_ride_requests_v2">Sample Ride Requests</string>
+    <string name="notif_channel_sample_rides">Sample Ride Status Updates</string>
 </resources>

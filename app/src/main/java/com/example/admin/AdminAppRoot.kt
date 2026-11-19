@@ -212,7 +212,8 @@ fun AdminAuthenticatedShell(
                     AdminViewModel(
                         repository = GolocalRepository(db),
                         communicationRepository = CommunicationRepository(db),
-                        busRepository = BusRepository(db)
+                        busRepository = BusRepository(db),
+                        sampleRiderRepository = com.example.data.repository.SampleRiderRepository(db)
                     )
                 }
             }

@@ -140,6 +140,8 @@ test("clickActionForApp and channelForPayload route role and Test Rider isolatio
   assert.equal(clickActionForApp("admin"), "com.aistudio.golocal.OPEN_ADMIN");
   assert.equal(channelForPayload({ type: "booking_assigned", isTestRide: true }), "golocal_test_rides");
   assert.equal(channelForPayload({ type: "test_request", isTestRide: true }), "golocal_test_ride_requests_v2");
+  assert.equal(channelForPayload({ type: "sample_request", isSampleRide: true }), "golocal_sample_ride_requests_v2");
+  assert.equal(channelForPayload({ type: "sample_status", isSampleRide: true }), "golocal_sample_rides");
   assert.equal(channelForPayload({ type: "new_ride_request", isTestRide: false }), "golocal_ride_requests_v2");
   assert.equal(channelForPayload({ type: "sos_alert", isTestRide: false }), "golocal_sos");
   assert.equal(channelForPayload({ type: "chat", isTestRide: false }), "golocal_chat");
@@ -251,4 +253,54 @@ test("Admin & Operations alerts fire for SOS, complaints, KYC pending, Test Ride
   assert.ok(allTokens.includes("tok_admin"));
   assert.ok(allTokens.includes("tok_ops"));
   assert.ok(!allTokens.includes("tok_revoked"));
+});
+
+test("Sample Ride dispatch notifies ONLY online sample_riders on golocal_sample_ride_requests_v2 and never leaks commercial tokens", async () => {
+  const db = createFakeFirestore({
+    driver_directory: {
+      prod_driver: { driverId: "prod_driver", verificationStatus: "verified", isOnline: true },
+    },
+    sample_riders: {
+      sample_online: { uid: "sample_online", verificationStatus: "sample_approved", availabilityStatus: "online" },
+      sample_offline: { uid: "sample_offline", verificationStatus: "sample_approved", availabilityStatus: "offline" },
+    },
+    user_tokens: {
+      "prod_driver_rider_d1": { userId: "prod_driver", appVariant: "rider", active: true, token: "tok_prod" },
+      "sample_online_rider_d2": { userId: "sample_online", appVariant: "rider", active: true, token: "tok_sample_online" },
+      "sample_offline_rider_d3": { userId: "sample_offline", appVariant: "rider", active: true, token: "tok_sample_offline" },
+      "cust1_customer_d4": { userId: "cust1", appVariant: "customer", active: true, token: "tok_cust" },
+    },
+  });
+  const messaging = createMockMessaging();
+  const handlers = createNotificationHandlers({ db, messaging, fieldValue: fakeFieldValue });
+
+  await handlers.handleSampleRideWrite("sr_1", undefined, {
+    status: "incoming",
+    customerId: "cust1",
+    pickupLabel: "Borai Station",
+    destinationLabel: "Chinsurah Court",
+    distanceKm: 2.5,
+    estimatedFareInr: 45,
+  });
+
+  assert.equal(messaging.sent.length, 1);
+  assert.deepEqual(messaging.sent[0].tokens, ["tok_sample_online"]);
+  assert.equal(messaging.sent[0].android.notification.channelId, "golocal_sample_ride_requests_v2");
+  assert.equal(messaging.sent[0].android.notification.sound, "golocal_ride_request");
+
+  await handlers.handleSampleRideWrite(
+    "sr_1",
+    { status: "incoming" },
+    {
+      status: "accepted",
+      customerId: "cust1",
+      assignedSampleRiderId: "sample_online",
+      assignedSampleRiderName: "Sample Rider One",
+      pickupLabel: "Borai Station",
+      destinationLabel: "Chinsurah Court",
+    }
+  );
+  assert.equal(messaging.sent.length, 2);
+  assert.deepEqual(messaging.sent[1].tokens, ["tok_cust"]);
+  assert.equal(messaging.sent[1].android.notification.channelId, "golocal_sample_rides");
 });

@@ -224,7 +224,8 @@ fun CustomerAuthenticatedShell(
                         customerName = completedName,
                         communicationRepository = CommunicationRepository(db),
                         busRepository = BusRepository(db),
-                        realtimeLocationRepository = com.example.data.repository.RealtimeLocationRepository(app)
+                        realtimeLocationRepository = com.example.data.repository.RealtimeLocationRepository(app),
+                        sampleRiderRepository = com.example.data.repository.SampleRiderRepository(db)
                     )
                 }
             }
@@ -248,11 +249,14 @@ fun CustomerAuthenticatedShell(
         val statusMsg by sessionViewModel.statusMessage.collectAsStateWithLifecycle()
         val customerMsg by customerViewModel.actionMessage.collectAsStateWithLifecycle()
         val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
+        val activeSampleRide by customerViewModel.activeSampleRide.collectAsStateWithLifecycle()
+        val localSampleOtps by customerViewModel.localSampleOtps.collectAsStateWithLifecycle()
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
         val verifiedPhone = (accountState as? UiState.Success)?.data?.effectiveMobileNumber().orEmpty()
         val allBookings = (bookingsState as? UiState.Success)?.data.orEmpty()
 
         var showHelpDialog by remember { mutableStateOf(false) }
+        var sampleCardExpanded by remember(activeSampleRide?.rideId) { mutableStateOf(true) }
         var previousActiveId by remember { mutableStateOf<String?>(null) }
         var completedReceiptTarget by remember { mutableStateOf<com.example.data.model.Booking?>(null) }
 
@@ -451,6 +455,46 @@ fun CustomerAuthenticatedShell(
                                         onOpenBookings = { selectedTab = "bookings" },
                                         onOpenNotifications = { selectedTab = "notifications" }
                                     )
+                                }
+                            }
+                        }
+
+                        activeSampleRide?.let { sampleRide ->
+                            if (!isBookingFlowOpen && !isBusFlowOpen) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .widthIn(max = 600.dp)
+                                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                                ) {
+                                    if (sampleCardExpanded) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            TextButton(
+                                                onClick = { sampleCardExpanded = false },
+                                                modifier = Modifier.align(Alignment.End)
+                                            ) {
+                                                Text("Minimize Sample Ride")
+                                            }
+                                            CustomerActiveSampleRideCard(
+                                                ride = sampleRide,
+                                                localOtpEntry = localSampleOtps[sampleRide.rideId],
+                                                onCancelSampleRide = {
+                                                    customerViewModel.cancelSampleRide(sampleRide.rideId)
+                                                }
+                                            )
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = { sampleCardExpanded = true },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 48.dp)
+                                                .testTag("expand_sample_ride_button")
+                                        ) {
+                                            Text("View Active Sample Ride • ${sampleRide.status.uppercase()}")
+                                        }
+                                    }
                                 }
                             }
                         }
