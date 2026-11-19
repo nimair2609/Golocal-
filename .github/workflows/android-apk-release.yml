@@ -178,11 +178,40 @@ jobs:
         run: |
           mkdir -p build-logs
           set -o pipefail
-          gradle :app:testDebugUnitTest \
-            --tests "com.example.ExampleUnitTest" \
-            --tests "com.example.ExampleRobolectricTest" \
-            --tests "com.example.ui.auth.AuthFlowUnitTest" \
-            :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build-logs/gradle-build.log
+          COMMON_HTTP_FLAGS=(
+            -Dorg.gradle.internal.http.connectionTimeout=60000
+            -Dorg.gradle.internal.http.socketTimeout=60000
+          )
+
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
+          BUILD_OK=false
+          while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+            EXTRA_FLAGS=()
+            if [ "$ATTEMPT" -gt 1 ]; then
+              EXTRA_FLAGS+=(--refresh-dependencies)
+              echo "::warning::Release Gradle attempt $((ATTEMPT - 1)) failed; retrying with --refresh-dependencies (attempt ${ATTEMPT}/${MAX_ATTEMPTS})..."
+              sleep $(( (ATTEMPT - 1) * 10 ))
+            else
+              echo "Running Release Gradle build (attempt ${ATTEMPT}/${MAX_ATTEMPTS})..."
+            fi
+
+            if gradle :app:testDebugUnitTest \
+              --tests "com.example.ExampleUnitTest" \
+              --tests "com.example.ExampleRobolectricTest" \
+              --tests "com.example.ui.auth.AuthFlowUnitTest" \
+              :app:assembleRelease "${EXTRA_FLAGS[@]}" "${COMMON_HTTP_FLAGS[@]}" --no-daemon --stacktrace 2>&1 | tee build-logs/gradle-build.log; then
+              BUILD_OK=true
+              break
+            fi
+
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+
+          if [ "$BUILD_OK" != "true" ]; then
+            echo "::error::Release Gradle build failed after ${MAX_ATTEMPTS} attempts."
+            exit 1
+          fi
 
       - name: Verify Package Identity, Signing Key & Generate SHA-256 Manifest
         id: checksum

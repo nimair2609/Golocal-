@@ -1,12 +1,12 @@
 package com.example.ui.auth
 
+import android.annotation.SuppressLint
 import android.content.Context
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
-import com.example.R
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -84,6 +84,16 @@ class DefaultGoogleSignInGateway(
 
 object GoogleAuthManager {
 
+    @SuppressLint("DiscouragedApi")
+    private fun resolveWebClientId(context: Context): String = runCatching {
+        val resId = context.resources.getIdentifier(
+            "default_web_client_id",
+            "string",
+            context.packageName
+        )
+        if (resId != 0) context.getString(resId) else ""
+    }.getOrDefault("")
+
     internal fun classifyGoogleFailure(throwable: Throwable): Pair<Boolean, String> {
         val code = (throwable as? FirebaseAuthException)?.errorCode
             ?: (throwable.cause as? FirebaseAuthException)?.errorCode
@@ -120,7 +130,7 @@ object GoogleAuthManager {
         if (!gateway.isFirebaseInitialized(context)) {
             return GoogleSignInOutcome.Error("Firebase is not initialized.")
         }
-        val webClientId = runCatching { context.getString(R.string.default_web_client_id) }.getOrDefault("")
+        val webClientId = resolveWebClientId(context)
         if (webClientId.isBlank()) {
             return GoogleSignInOutcome.Error("Google Web Client ID resource is missing.")
         }
@@ -156,7 +166,7 @@ object GoogleAuthManager {
         if (!gateway.isFirebaseInitialized(context)) {
             return GoogleSignInOutcome.Error("Firebase is not initialized. Check google-services.json.")
         }
-        val webClientId = runCatching { context.getString(R.string.default_web_client_id) }.getOrDefault("")
+        val webClientId = resolveWebClientId(context)
         if (webClientId.isBlank()) {
             return GoogleSignInOutcome.Error("Google OAuth Web Client ID is missing in configuration.")
         }

@@ -238,7 +238,36 @@ jobs:
             echo "Using Gradle 9.3.1."
           fi
 
-          "$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace
+          COMMON_HTTP_FLAGS=(
+            -Dorg.gradle.internal.http.connectionTimeout=60000
+            -Dorg.gradle.internal.http.socketTimeout=60000
+          )
+
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
+          BUILD_OK=false
+          while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+            EXTRA_FLAGS=()
+            if [ "$ATTEMPT" -gt 1 ]; then
+              EXTRA_FLAGS+=(--refresh-dependencies)
+              echo "::warning::Gradle attempt $((ATTEMPT - 1)) failed; retrying with --refresh-dependencies (attempt ${ATTEMPT}/${MAX_ATTEMPTS})..."
+              sleep $(( (ATTEMPT - 1) * 10 ))
+            else
+              echo "Running Gradle build (attempt ${ATTEMPT}/${MAX_ATTEMPTS})..."
+            fi
+
+            if "$GRADLE_CMD" :app:assembleDebug "${EXTRA_FLAGS[@]}" "${COMMON_HTTP_FLAGS[@]}" --no-daemon --stacktrace; then
+              BUILD_OK=true
+              break
+            fi
+
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+
+          if [ "$BUILD_OK" != "true" ]; then
+            echo "::error::Gradle :app:assembleDebug failed after ${MAX_ATTEMPTS} attempts."
+            exit 1
+          fi
 
       - name: Verify Debug APK & Signature
         shell: bash
