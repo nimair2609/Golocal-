@@ -66,6 +66,7 @@ import com.example.data.model.RatingRecord
 import com.example.data.model.UiState
 import com.example.notifications.NotificationHelper
 import com.example.shared.CircularBackButton
+import com.example.shared.EmergencyContactsSectionCard
 import com.example.shared.LocationCoordinator
 import com.example.shared.ProfileHeroCard
 import com.example.shared.SettingsNavigationRow
@@ -122,11 +123,13 @@ fun CustomerProfileScreen(
     var nativeDistrict by remember(customerProfile?.nativeDistrict) { mutableStateOf(customerProfile?.nativeDistrict ?: "") }
 
     var showSupportDialog by remember { mutableStateOf(false) }
-    var showEmergencyDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
     val verifiedPhone = account?.effectiveMobileNumber().orEmpty()
-    val hasEmergency = account?.hasEmergencyContact == true || privateEmergency != null
+    val emergencyContacts = remember(privateEmergency) {
+        privateEmergency?.effectiveContacts().orEmpty()
+    }
+    val hasEmergency = account?.hasEmergencyContact == true || emergencyContacts.isNotEmpty()
     val completedTripsCount = remember(bookings) {
         bookings.count { it.status == "completed" && !it.isTestRide && !it.testMode }
     }
@@ -281,32 +284,11 @@ fun CustomerProfileScreen(
                 }
 
                 CustomerProfileSubScreen.SAFETY_PRIVACY -> {
-                    val maskedEmergency = privateEmergency?.emergencyContactNumber
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { AuthDiagnostics.maskPhoneNumber(it) }
-                    SettingsSectionGroup(title = "Emergency Contact (Private)") {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                text = maskedEmergency?.let { "Protected SOS Contact: $it" }
-                                    ?: if (hasEmergency) "Protected SOS contact configured privately."
-                                    else "No private SOS contact set.",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Text(
-                                text = "Stored in isolated emergency records and never shown to drivers.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedButton(
-                                onClick = { showEmergencyDialog = true },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("update_private_emergency_button")
-                            ) {
-                                Text(if (hasEmergency) "Update Private SOS Contact" else "Set Private SOS Contact")
-                            }
-                        }
-                    }
+                    EmergencyContactsSectionCard(
+                        contacts = emergencyContacts,
+                        ownVerifiedMobileE164 = verifiedPhone,
+                        onSaveContacts = { list -> sessionViewModel.saveEmergencyContacts(list) }
+                    )
 
                     SettingsSectionGroup(title = "Device Permissions") {
                         val hasLoc = LocationCoordinator.hasLocationPermission(context)
@@ -517,64 +499,6 @@ fun CustomerProfileScreen(
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
             )
         }
-    }
-
-    if (showEmergencyDialog) {
-        var newEmergency by remember { mutableStateOf("") }
-        var relation by remember { mutableStateOf(privateEmergency?.relationshipNote ?: "Primary Emergency Contact") }
-        var localError by remember { mutableStateOf<String?>(null) }
-
-        AlertDialog(
-            onDismissRequest = { showEmergencyDialog = false },
-            title = { Text("Update Private SOS Contact") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        "Stored in isolated emergency records accessible only to you and authorized SOS responders.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (localError != null) {
-                        Text(localError ?: "", style = MaterialTheme.typography.bodySmall, color = GolocalError)
-                    }
-                    OutlinedTextField(
-                        value = newEmergency,
-                        onValueChange = {
-                            newEmergency = it.filter { ch -> ch.isDigit() || ch == '+' }.take(16)
-                            localError = null
-                        },
-                        label = { Text("Emergency Mobile Number (+91...) *") },
-                        placeholder = { Text("9876543210") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = relation,
-                        onValueChange = { relation = it.take(60) },
-                        label = { Text("Relationship Note") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val result = RegistrationValidator.validateEmergencyContact(
-                        country = SupportedCountryCodes.INDIA,
-                        rawEmergency = newEmergency,
-                        ownVerifiedMobileE164 = verifiedPhone
-                    )
-                    when (result) {
-                        is com.example.ui.auth.PhoneValidationResult.Invalid -> localError = result.message
-                        is com.example.ui.auth.PhoneValidationResult.Valid -> {
-                            sessionViewModel.updatePrivateEmergencyContact(result.e164Phone, relation)
-                            showEmergencyDialog = false
-                        }
-                    }
-                }) { Text("Save Privately") }
-            },
-            dismissButton = { TextButton(onClick = { showEmergencyDialog = false }) { Text("Cancel") } }
-        )
     }
 
     if (showDeleteDialog) {

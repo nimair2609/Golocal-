@@ -680,6 +680,7 @@ fun RiderTestModeDashboardShell(
                                 "profile" -> TestRiderProfileTab(
                                     profile = profile,
                                     completedCount = completedTestCount,
+                                    sessionViewModel = sessionViewModel,
                                     onSwitchToCommercialMode = {
                                         if (profile.isOnline) {
                                             driverViewModel.toggleTestRiderOnline(false, currentLat, currentLng)
@@ -988,9 +989,16 @@ internal fun TestRiderSummaryTab(
 private fun TestRiderProfileTab(
     profile: TestRiderProfile,
     completedCount: Int,
+    sessionViewModel: AppSessionViewModel,
     onSwitchToCommercialMode: () -> Unit,
     onSignOut: () -> Unit
 ) {
+    val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
+    val accountState by sessionViewModel.userAccountState.collectAsStateWithLifecycle()
+    val privateEmergency by sessionViewModel.privateEmergencyContactState.collectAsStateWithLifecycle()
+    val ownVerifiedPhone = (accountState as? UiState.Success)?.data?.effectiveMobileNumber().orEmpty()
+    val contacts = remember(privateEmergency) { privateEmergency?.effectiveContacts().orEmpty() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1013,6 +1021,18 @@ private fun TestRiderProfileTab(
                 Text("Completed Test Rides: $completedCount", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+
+        RiderPreferencesSubScreen(
+            prefs = prefs,
+            sessionViewModel = sessionViewModel
+        )
+
+        com.example.shared.EmergencyContactsSectionCard(
+            contacts = contacts,
+            ownVerifiedMobileE164 = ownVerifiedPhone,
+            onSaveContacts = { list -> sessionViewModel.saveEmergencyContacts(list) }
+        )
+
         Button(
             onClick = onSwitchToCommercialMode,
             modifier = Modifier

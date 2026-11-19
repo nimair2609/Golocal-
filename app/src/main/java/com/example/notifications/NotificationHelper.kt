@@ -139,13 +139,19 @@ object NotificationPrivacySanitizer {
 object NotificationHelper {
     private const val TAG = "GoLocalFCM"
     const val CHANNEL_RIDES = "golocal_rides"
+    const val CHANNEL_RIDE_REQUESTS_V2 = "golocal_ride_requests_v2"
+    const val CHANNEL_TEST_RIDE_REQUESTS_V2 = "golocal_test_ride_requests_v2"
+    const val CHANNEL_LIVE_TRACKING = "golocal_live_tracking"
     const val CHANNEL_CHAT = "golocal_chat"
     const val CHANNEL_SOS = "golocal_sos"
     const val CHANNEL_TEST_RIDES = "golocal_test_rides"
     const val CHANNEL_GENERAL = "golocal_general"
 
+    val RIDE_REQUEST_VIBRATION_PATTERN = longArrayOf(0L, 280L, 140L, 360L, 140L, 280L)
+
     private const val PREFS_FCM_META = "golocal_fcm"
     private const val KEY_APP_VARIANT_PREFIX = "app_variant_"
+    private const val KEY_DEVICE_ID = "fcm_device_id"
     val ALLOWED_APP_VARIANTS = setOf("customer", "rider", "admin")
 
     private val recentDedupeKeys: MutableSet<String> = Collections.synchronizedSet(
@@ -162,6 +168,15 @@ object NotificationHelper {
     }
 
     fun fcmVariantPrefKey(userId: String): String = "$KEY_APP_VARIANT_PREFIX${userId.trim()}"
+
+    fun getOrCreateDeviceId(context: Context): String {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_FCM_META, Context.MODE_PRIVATE)
+        val existing = prefs.getString(KEY_DEVICE_ID, null).orEmpty()
+        if (existing.isNotBlank()) return existing
+        val generated = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        prefs.edit().putString(KEY_DEVICE_ID, generated).apply()
+        return generated
+    }
 
     fun saveUserPortalVariant(context: Context, userId: String, appVariant: String): String? {
         val cleanUid = userId.trim()
@@ -216,11 +231,16 @@ object NotificationHelper {
         return uid to validVariant
     }
 
-    fun tokenDocId(userId: String, appVariant: String): String? {
+    fun tokenDocId(userId: String, appVariant: String, deviceId: String = ""): String? {
         val cleanUid = userId.trim().replace("/", "_")
         val validVariant = validateAppVariant(appVariant) ?: return null
         if (cleanUid.isBlank()) return null
-        return "${cleanUid}_${validVariant}".take(128)
+        val cleanDevice = deviceId.trim().replace("/", "_").replace(" ", "")
+        return if (cleanDevice.isNotBlank()) {
+            "${cleanUid}_${validVariant}_${cleanDevice}".take(128)
+        } else {
+            "${cleanUid}_${validVariant}".take(128)
+        }
     }
 
     fun normalizeVariant(appVariant: String): String = when (appVariant.trim().lowercase()) {
@@ -246,13 +266,30 @@ object NotificationHelper {
         }
     }
 
+    fun isDeviceDoNotDisturbActive(context: Context): Boolean {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
+        return manager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL &&
+            manager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+    }
+
+    fun rideRequestSoundUri(context: Context): android.net.Uri =
+        android.net.Uri.parse("android.resource://${context.packageName}/${R.raw.golocal_ride_request}")
+
+    fun rideRequestNotificationId(bookingId: String): Int =
+        "ride_req|${bookingId.trim()}".hashCode()
+
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
         val alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: defaultSound
+        val customRideRequestSound = rideRequestSoundUri(context)
         val notifAudio = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val rideRequestAudio = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
         val sosAudio = AudioAttributes.Builder()
@@ -266,11 +303,44 @@ object NotificationHelper {
                 context.getString(R.string.notif_channel_rides),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Ride requests, driver assignment, arrival alerts, bus bookings, and trip updates"
+                description = "Ride status, driver assignment, arrival alerts, bus bookings, and trip updates"
                 setSound(defaultSound, notifAudio)
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 220, 120, 220)
                 enableLights(true)
+            },
+            NotificationChannel(
+                CHANNEL_RIDE_REQUESTS_V2,
+                context.getString(R.string.notif_channel_ride_requests_v2),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Real-time incoming ride requests with custom GoLocal chime and vibration"
+                setSound(customRideRequestSound, rideRequestAudio)
+                enableVibration(true)
+                vibrationPattern = RIDE_REQUEST_VIBRATION_PATTERN
+                enableLights(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            },
+            NotificationChannel(
+                CHANNEL_TEST_RIDE_REQUESTS_V2,
+                context.getString(R.string.notif_channel_test_ride_requests_v2),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Incoming Test Ride requests for approved QA testers (non-commercial)"
+                setSound(customRideRequestSound, rideRequestAudio)
+                enableVibration(true)
+                vibrationPattern = RIDE_REQUEST_VIBRATION_PATTERN
+                enableLights(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            },
+            NotificationChannel(
+                CHANNEL_LIVE_TRACKING,
+                context.getString(R.string.notif_channel_live_tracking),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Ongoing foreground GPS tracking notification while active on GoLocal Rider"
+                setSound(null, null)
+                enableVibration(false)
             },
             NotificationChannel(
                 CHANNEL_CHAT,
@@ -319,6 +389,9 @@ object NotificationHelper {
     fun channelForType(type: String): String = channelForType(type = type, isTestRide = false)
 
     fun channelForType(type: String, isTestRide: Boolean): String = when {
+        type.equals("test_request", true) -> CHANNEL_TEST_RIDE_REQUESTS_V2
+        type.equals("new_ride_request", true) ->
+            if (isTestRide) CHANNEL_TEST_RIDE_REQUESTS_V2 else CHANNEL_RIDE_REQUESTS_V2
         isTestRide || type.startsWith("test_", ignoreCase = true) -> CHANNEL_TEST_RIDES
         type.equals("chat", true) || type.equals("booking_chat", true) -> CHANNEL_CHAT
         type.equals("sos", true) ||
@@ -327,7 +400,6 @@ object NotificationHelper {
             type.equals("dispute_opened", true) -> CHANNEL_SOS
         type.startsWith("booking", true) ||
             type.startsWith("driver_booking", true) ||
-            type.equals("new_ride_request", true) ||
             type.equals("ride_offer", true) ||
             type.equals("driver_assigned", true) ||
             type.equals("trip_status", true) ||
@@ -342,6 +414,93 @@ object NotificationHelper {
         return recentDedupeKeys.add(dedupeKey)
     }
 
+    fun displayRideRequestAlert(
+        context: Context,
+        bookingId: String,
+        title: String,
+        body: String,
+        isTestRide: Boolean = false,
+        soundEnabled: Boolean = true,
+        vibrationEnabled: Boolean = true,
+        notificationsEnabled: Boolean = true
+    ) {
+        if (bookingId.isBlank() || !notificationsEnabled) return
+        val safeTitle = NotificationPrivacySanitizer.sanitizeText(title)
+        val safeBody = NotificationPrivacySanitizer.sanitizeText(body)
+        if (safeTitle.isBlank() && safeBody.isBlank()) return
+
+        val dedupeKey = "ride_alert|${bookingId.trim()}|$isTestRide"
+        if (!shouldDisplayNotification(dedupeKey)) return
+
+        ensureChannels(context)
+        if (!hasNotificationPermission(context)) return
+
+        val intent = Intent(context, RiderActivity::class.java).apply {
+            action = NotificationDeepLinkExtras.ACTION_OPEN_RIDER
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN, if (isTestRide) "rides" else "requests")
+            putExtra(NotificationDeepLinkExtras.EXTRA_BOOKING_ID, bookingId)
+            putExtra(
+                NotificationDeepLinkExtras.EXTRA_NOTIFICATION_TYPE,
+                if (isTestRide) "test_request" else "new_ride_request"
+            )
+            putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_APP, "rider")
+            putExtra(NotificationDeepLinkExtras.EXTRA_IS_TEST_RIDE, isTestRide)
+        }
+        val notifId = rideRequestNotificationId(bookingId)
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            notifId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val dndActive = isDeviceDoNotDisturbActive(context)
+        val channelId = if (isTestRide) CHANNEL_TEST_RIDE_REQUESTS_V2 else CHANNEL_RIDE_REQUESTS_V2
+        val builder = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+            .setContentTitle(safeTitle.ifBlank { context.getString(R.string.app_name_rider) })
+            .setContentText(safeBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(safeBody))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setTimeoutAfter(45_000L)
+            .setContentIntent(pendingIntent)
+
+        if (dndActive || (!soundEnabled && !vibrationEnabled)) {
+            builder.setSilent(true)
+        } else {
+            if (soundEnabled) {
+                builder.setSound(rideRequestSoundUri(context))
+            } else {
+                builder.setSound(null)
+            }
+            if (vibrationEnabled) {
+                builder.setVibrate(RIDE_REQUEST_VIBRATION_PATTERN)
+            } else {
+                builder.setVibrate(longArrayOf(0L))
+            }
+        }
+
+        try {
+            NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        } catch (se: SecurityException) {
+            Log.w(TAG, "POST_NOTIFICATIONS permission revoked while posting ride request alert", se)
+        }
+    }
+
+    fun cancelRideRequestNotification(context: Context, bookingId: String) {
+        val cleanId = bookingId.trim()
+        if (cleanId.isBlank()) return
+        runCatching {
+            NotificationManagerCompat.from(context).cancel(rideRequestNotificationId(cleanId))
+        }
+    }
+
     fun displayNotification(
         context: Context,
         title: String,
@@ -351,8 +510,26 @@ object NotificationHelper {
         targetScreen: String = "",
         bookingId: String = "",
         dedupeKey: String = "",
-        isTestRide: Boolean = false
+        isTestRide: Boolean = false,
+        soundEnabled: Boolean = true,
+        vibrationEnabled: Boolean = true,
+        notificationsEnabled: Boolean = true
     ) {
+        if (!notificationsEnabled) return
+        if (type.equals("new_ride_request", true) || type.equals("test_request", true)) {
+            displayRideRequestAlert(
+                context = context,
+                bookingId = bookingId,
+                title = title,
+                body = body,
+                isTestRide = isTestRide || type.equals("test_request", true),
+                soundEnabled = soundEnabled,
+                vibrationEnabled = vibrationEnabled,
+                notificationsEnabled = notificationsEnabled
+            )
+            return
+        }
+
         val safeTitle = NotificationPrivacySanitizer.sanitizeText(title)
         val safeBody = NotificationPrivacySanitizer.sanitizeText(body)
         if (safeTitle.isBlank() && safeBody.isBlank()) return
@@ -385,14 +562,13 @@ object NotificationHelper {
 
         val channelId = channelForType(type = type, isTestRide = isTestRide)
         val defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val notification = NotificationCompat.Builder(context, channelId)
+        val dndActive = isDeviceDoNotDisturbActive(context)
+        val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setColor(ContextCompat.getColor(context, R.color.notification_accent))
             .setContentTitle(safeTitle.ifBlank { context.getString(R.string.app_name) })
             .setContentText(safeBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(safeBody))
-            .setSound(defaultSound)
-            .setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_VIBRATE)
             .setPriority(
                 if (channelId == CHANNEL_GENERAL) NotificationCompat.PRIORITY_DEFAULT
                 else NotificationCompat.PRIORITY_HIGH
@@ -406,10 +582,17 @@ object NotificationHelper {
             )
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .build()
+
+        if (dndActive || (!soundEnabled && !vibrationEnabled)) {
+            builder.setSilent(true)
+        } else {
+            if (soundEnabled) builder.setSound(defaultSound) else builder.setSound(null)
+            if (vibrationEnabled) builder.setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_VIBRATE)
+            else builder.setDefaults(NotificationCompat.DEFAULT_LIGHTS)
+        }
 
         try {
-            NotificationManagerCompat.from(context).notify(requestCode, notification)
+            NotificationManagerCompat.from(context).notify(requestCode, builder.build())
         } catch (se: SecurityException) {
             Log.w(TAG, "POST_NOTIFICATIONS permission revoked while posting notification", se)
         }
@@ -461,13 +644,15 @@ object NotificationHelper {
         saveUserPortalVariant(context, cleanUid, validVariant)
         if (FirebaseApp.getApps(context).isEmpty()) return
         try {
-            val docId = tokenDocId(cleanUid, validVariant) ?: return
+            val deviceId = getOrCreateDeviceId(context)
+            val docId = tokenDocId(cleanUid, validVariant, deviceId) ?: return
             val dbId = context.getString(R.string.firestore_database_id)
             val db = FirebaseFirestore.getInstance(dbId)
             db.collection("user_tokens").document(docId)
                 .set(
                     mapOf(
                         "userId" to cleanUid,
+                        "deviceId" to deviceId,
                         "token" to token,
                         "platform" to "android",
                         "appVariant" to validVariant,
@@ -492,23 +677,26 @@ object NotificationHelper {
         try {
             val dbId = context.getString(R.string.firestore_database_id)
             val db = FirebaseFirestore.getInstance(dbId)
+            val deviceId = getOrCreateDeviceId(context)
             val savedVariant = getSavedUserPortalVariant(context, uid)
             val variantsToDeactivate = buildSet {
                 if (savedVariant != null) add(savedVariant)
                 addAll(ALLOWED_APP_VARIANTS)
             }
             variantsToDeactivate.forEach { variant ->
-                val docId = tokenDocId(uid, variant) ?: return@forEach
-                runCatching {
-                    db.collection("user_tokens").document(docId)
-                        .update(
-                            mapOf(
-                                "active" to false,
-                                "token" to "",
-                                "updatedAt" to FieldValue.serverTimestamp()
+                listOf(deviceId, "").forEach { dev ->
+                    val docId = tokenDocId(uid, variant, dev) ?: return@forEach
+                    runCatching {
+                        db.collection("user_tokens").document(docId)
+                            .update(
+                                mapOf(
+                                    "active" to false,
+                                    "token" to "",
+                                    "updatedAt" to FieldValue.serverTimestamp()
+                                )
                             )
-                        )
-                        .await()
+                            .await()
+                    }
                 }
             }
             clearSavedUserPortalVariant(context, uid)

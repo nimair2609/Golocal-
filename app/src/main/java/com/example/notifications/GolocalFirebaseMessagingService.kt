@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class GolocalFirebaseMessagingService : FirebaseMessagingService() {
@@ -57,6 +58,23 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
             ?: message.messageId
             ?: "$targetApp|$type|$bookingId|$title|$body"
 
+        if (bookingId.isNotBlank() && type.lowercase() in setOf(
+                "ride_request_taken",
+                "ride_request_cancelled",
+                "ride_request_expired",
+                "booking_cancelled"
+            )
+        ) {
+            NotificationHelper.cancelRideRequestNotification(applicationContext, bookingId)
+            if (type.lowercase() != "booking_cancelled") return
+        }
+
+        val prefs = kotlinx.coroutines.runBlocking {
+            runCatching {
+                com.example.data.repository.PreferencesRepository(applicationContext).preferencesFlow.first()
+            }.getOrNull()
+        }
+
         NotificationHelper.displayNotification(
             context = applicationContext,
             title = title,
@@ -66,7 +84,10 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
             targetScreen = targetScreen,
             bookingId = bookingId,
             dedupeKey = dedupeKey,
-            isTestRide = isTestRide
+            isTestRide = isTestRide,
+            soundEnabled = prefs?.rideRequestSoundEnabled ?: true,
+            vibrationEnabled = prefs?.rideRequestVibrationEnabled ?: true,
+            notificationsEnabled = prefs?.notificationsEnabled ?: true
         )
     }
 

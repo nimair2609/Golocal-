@@ -109,7 +109,9 @@ fun RiderMapHomeScreen(
     onTriggerSos: () -> Unit,
     onAcceptRequestWithFare: (booking: Booking, proposedFareInr: Double, etaMinutes: Long) -> Unit,
     onDeclineRequest: (bookingId: String) -> Unit,
-    onWithdrawOffer: (offerId: String) -> Unit
+    onWithdrawOffer: (offerId: String) -> Unit,
+    openRequestsError: String? = null,
+    onDirectAcceptRequest: ((booking: Booking, agreedFareInr: Double) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val locationAccess = remember(currentLat, currentLng, gpsIsDetecting) {
@@ -324,6 +326,25 @@ fun RiderMapHomeScreen(
                     )
                 }
             }
+            if (!openRequestsError.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shadowElevation = 3.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rider_requests_error_card")
+                ) {
+                    Text(
+                        text = "Dispatch sync warning: $openRequestsError",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
 
         // Bottom Area: High-Contrast Incoming Ride Request Overlay OR Clean White Online/Offline Dock
@@ -343,6 +364,9 @@ fun RiderMapHomeScreen(
                 onDecline = { onDeclineRequest(incomingRequest.id) },
                 onAccept = { proposedFare, etaMins ->
                     onAcceptRequestWithFare(incomingRequest, proposedFare, etaMins)
+                },
+                onDirectAccept = onDirectAcceptRequest?.let { directFn ->
+                    { fare -> directFn(incomingRequest, fare) }
                 },
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
@@ -376,6 +400,8 @@ fun IncomingRideRequestOverlayCard(
     onNextRequest: () -> Unit = {},
     onDecline: () -> Unit,
     onAccept: (proposedFareInr: Double, etaMinutes: Long) -> Unit,
+    onDirectAccept: ((agreedFareInr: Double) -> Unit)? = null,
+    onExpire: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val minFare = booking.minPermittedFareInr.toFloat().coerceAtLeast(10f)
@@ -383,7 +409,16 @@ fun IncomingRideRequestOverlayCard(
     var proposedFare by remember(booking.id) {
         mutableFloatStateOf(booking.estimatedFareInr.toFloat().coerceIn(minFare, maxFare))
     }
-    var remainingSeconds by remember(booking.id) { mutableIntStateOf(initialSeconds.coerceAtLeast(1)) }
+    val effectiveSeconds = remember(booking.id, booking.requestExpiresAtMs, initialSeconds) {
+        if (booking.requestExpiresAtMs > 0L) {
+            ((booking.requestExpiresAtMs - System.currentTimeMillis()) / 1000L)
+                .toInt()
+                .coerceIn(1, 300)
+        } else {
+            initialSeconds.coerceAtLeast(1)
+        }
+    }
+    var remainingSeconds by remember(booking.id) { mutableIntStateOf(effectiveSeconds) }
     val etaMins = remember(booking.id, riderLat, riderLng) {
         val approxKm = com.example.domain.FareCalculator.haversineDistanceKm(
             riderLat,
@@ -395,19 +430,27 @@ fun IncomingRideRequestOverlayCard(
     }
 
     LaunchedEffect(booking.id) {
-        remainingSeconds = initialSeconds.coerceAtLeast(1)
+        remainingSeconds = effectiveSeconds
         while (remainingSeconds > 0) {
             delay(1000L)
             remainingSeconds -= 1
         }
+        onExpire?.invoke()
     }
 
     val ringProgress by animateFloatAsState(
-        targetValue = (remainingSeconds.toFloat() / initialSeconds.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
+        targetValue = (remainingSeconds.toFloat() / effectiveSeconds.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 350),
         label = "request_ring"
     )
     val passengerFirstName = booking.customerName.trim().substringBefore(" ").ifBlank { "Passenger" }
+    val estimatedNetInr = remember(proposedFare, booking.gstPercent, booking.commissionPercent) {
+        com.example.domain.FareCalculator.estimateDriverNetEarningsInr(
+            grossFareInr = proposedFare.toDouble(),
+            gstPercent = booking.gstPercent,
+            commissionPercent = booking.commissionPercent
+        ).roundToInt()
+    }
 
     Surface(
         modifier = modifier
@@ -442,6 +485,13 @@ fun IncomingRideRequestOverlayCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = GolocalPureWhite
+                    )
+                    Text(
+                        text = "#${booking.id.take(8)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = JetBrainsMono,
+                        color = GolocalPureWhite.copy(alpha = 0.75f),
+                        modifier = Modifier.testTag("rider_incoming_booking_id")
                     )
                     Surface(
                         shape = RoundedCornerShape(999.dp),
@@ -570,8 +620,8 @@ fun IncomingRideRequestOverlayCard(
                         }
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                text = "₹${proposedFare.roundToInt()}",
-                                style = MaterialTheme.typography.headlineSmall,
+                                text = "₹${proposedFare.roundToInt()}  •  Net ~₹$estimatedNetInr",
+                                style = MaterialTheme.typography.titleLarge,
                                 fontFamily = JetBrainsMono,
                                 fontWeight = FontWeight.Bold,
                                 color = GolocalPureWhite
@@ -607,10 +657,10 @@ fun IncomingRideRequestOverlayCard(
                 }
             }
 
-            // Decline / Accept Actions
+            // Decline / Accept / Propose Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
                     onClick = onDecline,
@@ -623,12 +673,39 @@ fun IncomingRideRequestOverlayCard(
                         .testTag("rider_decline_request_button")
                 ) {
                     Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text("Decline", fontWeight = FontWeight.SemiBold)
                 }
 
+                if (onDirectAccept != null) {
+                    OutlinedButton(
+                        onClick = { onAccept(proposedFare.roundToInt().toDouble(), etaMins) },
+                        enabled = remainingSeconds > 0,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = GolocalPureWhite),
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, GolocalPureWhite.copy(alpha = 0.65f)),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 50.dp)
+                            .testTag("rider_propose_fare_button")
+                    ) {
+                        Text(
+                            text = "Offer ₹${proposedFare.roundToInt()}",
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+
                 Button(
-                    onClick = { onAccept(proposedFare.roundToInt().toDouble(), etaMins) },
+                    onClick = {
+                        val fareDouble = proposedFare.roundToInt().toDouble()
+                        if (onDirectAccept != null) {
+                            onDirectAccept(fareDouble)
+                        } else {
+                            onAccept(fareDouble, etaMins)
+                        }
+                    },
                     enabled = remainingSeconds > 0,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = GolocalPureWhite,
@@ -636,12 +713,12 @@ fun IncomingRideRequestOverlayCard(
                     ),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1.1f)
                         .heightIn(min = 50.dp)
                         .testTag("rider_accept_request_button")
                 ) {
                     Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = if (remainingSeconds > 0) "Accept" else "Timed Out",
                         fontWeight = FontWeight.Bold

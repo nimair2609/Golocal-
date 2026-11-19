@@ -35,8 +35,10 @@ function clickActionForApp(targetApp) {
 function channelForPayload(payload) {
   const type = String(payload?.type || "").trim().toLowerCase();
   const isTest = payload?.isTestRide === true || type.startsWith("test_");
-  if (isTest) return "golocal_test_rides";
   if (payload?.channelId) return String(payload.channelId);
+  if (type === "test_request") return "golocal_test_ride_requests_v2";
+  if (isTest) return "golocal_test_rides";
+  if (type === "new_ride_request") return "golocal_ride_requests_v2";
   if (type === "chat" || type === "booking_chat") return "golocal_chat";
   if (type === "sos" || type === "emergency" || type === "sos_alert" || type === "dispute_opened") {
     return "golocal_sos";
@@ -44,7 +46,6 @@ function channelForPayload(payload) {
   if (
     type.startsWith("booking") ||
     type.startsWith("driver_booking") ||
-    type === "new_ride_request" ||
     type === "ride_offer" ||
     type === "driver_assigned" ||
     type === "trip_status" ||
@@ -190,6 +191,10 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       const tokens = [...tokenToDocs.keys()];
       if (tokens.length === 0) continue;
 
+      const isRideRequestChannel =
+        channelId === "golocal_ride_requests_v2" || channelId === "golocal_test_ride_requests_v2";
+      const androidSound = isRideRequestChannel ? "golocal_ride_request" : "default";
+
       const response = await messaging.sendEachForMulticast({
         tokens,
         notification: {
@@ -208,13 +213,14 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
           bookingId: String(payload.bookingId || ""),
           entityId: String(payload.entityId || payload.bookingId || ""),
           isTestRide: String(Boolean(payload.isTestRide)),
+          channelId,
           timestampMs: String(Date.now()),
         },
         android: {
           priority: "high",
           notification: {
             channelId,
-            sound: "default",
+            sound: androidSound,
             clickAction,
             tag: String(payload.tag || payload.bookingId || payload.entityId || payload.type || "golocal"),
           },
@@ -284,7 +290,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
             bookingId,
             entityId: bookingId,
             isTestRide: true,
-            channelId: "golocal_test_rides",
+            channelId: "golocal_test_ride_requests_v2",
             title: "[TEST RIDE] New Sandbox Request",
             body: `${after.pickupLabel} -> ${after.destinationLabel} (₹0 Test Simulation)`,
           }
@@ -311,7 +317,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
           bookingId,
           entityId: bookingId,
           isTestRide: false,
-          channelId: "golocal_rides",
+          channelId: "golocal_ride_requests_v2",
           title: "New Nearby Ride Request",
           body: `${after.pickupLabel} -> ${after.destinationLabel} (Est. ₹${Math.round(after.estimatedFareInr || 0)})`,
         }
@@ -345,7 +351,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       : {
           assigned: [
             "Rider Assigned",
-            `${after.assignedDriverName || "Your rider"} confirmed. Open Active Ride for your secure Trip PIN.`,
+            `${after.assignedDriverName || "Your rider"} confirmed. Open Active Ride for your 6-digit Pickup OTP.`,
           ],
           arriving: [
             "Rider Approaching Pickup",
@@ -353,7 +359,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
           ],
           arrived: [
             "Rider Arrived at Pickup",
-            `${after.assignedDriverName || "Your rider"} has arrived. Open Active Ride to view your Trip PIN.`,
+            `${after.assignedDriverName || "Your rider"} has arrived. Open Active Ride to view your 6-digit Pickup OTP.`,
           ],
           in_progress: ["Ride Started", `Your trip to ${after.destinationLabel} is underway.`],
           completed: [

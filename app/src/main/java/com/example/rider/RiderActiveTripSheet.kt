@@ -94,7 +94,11 @@ fun RiderActiveTripSheet(
     onVerifyTestOtp: (String) -> Unit = {},
     isVerifyingTestOtp: Boolean = false,
     testOtpError: String? = null,
-    onClearTestOtpError: () -> Unit = {}
+    onClearTestOtpError: () -> Unit = {},
+    onVerifyCommercialOtp: (String) -> Unit = {},
+    isVerifyingCommercialOtp: Boolean = false,
+    commercialOtpError: String? = null,
+    onClearCommercialOtpError: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var enteredPin by remember(booking.id) { mutableStateOf("") }
@@ -113,7 +117,7 @@ fun RiderActiveTripSheet(
     val phaseTitle = when (booking.status) {
         "assigned" -> if (isTestRide) "TEST RIDE • Go to Pickup" else "Ride Assigned • Go to Pickup"
         "arriving" -> if (isTestRide) "TEST RIDE • En Route" else "En Route to Pickup"
-        "arrived" -> if (isTestRide) "TEST RIDE • Await Customer OTP" else "Arrived • Verify Trip PIN"
+        "arrived" -> if (isTestRide) "TEST RIDE • Await Customer OTP" else "Arrived • Verify 6-Digit OTP"
         "in_progress" -> if (isTestRide) "TEST RIDE • In Progress" else "Trip in Progress"
         else -> booking.status.replace('_', ' ').uppercase()
     }
@@ -203,7 +207,11 @@ fun RiderActiveTripSheet(
                             tint = GolocalPureWhite,
                             modifier = Modifier.size(18.dp)
                         )
-                        Text("Maps Nav", color = GolocalPureWhite, style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = if (navigateToDrop) "Nav Drop" else "Nav Pickup",
+                            color = GolocalPureWhite,
+                            style = MaterialTheme.typography.labelLarge
+                        )
                     }
                 }
 
@@ -315,6 +323,23 @@ fun RiderActiveTripSheet(
                     onChatClick = onChatCustomer
                 )
 
+                if (!navigateToDrop) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("rider_destination_nav_locked")
+                    ) {
+                        Text(
+                            text = "Pickup stage: Maps Nav points to pickup (${booking.pickupLabel}). Destination navigation unlocks after 6-digit Pickup OTP verification.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+
                 when (booking.status) {
                     "assigned" -> {
                         Button(
@@ -419,28 +444,64 @@ fun RiderActiveTripSheet(
                             OutlinedTextField(
                                 value = enteredPin,
                                 onValueChange = { ch ->
-                                    if (ch.length <= 4 && ch.all { it.isDigit() }) enteredPin = ch
+                                    val digits = ch.filter { it.isDigit() }.take(6)
+                                    enteredPin = digits
+                                    if (!commercialOtpError.isNullOrBlank()) onClearCommercialOtpError()
                                 },
-                                label = { Text("Enter 4-Digit Passenger Trip PIN") },
+                                label = { Text("Enter 6-Digit Passenger Pickup OTP") },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("rider_trip_pin_input")
                             )
+                            if (!commercialOtpError.isNullOrBlank()) {
+                                Text(
+                                    text = commercialOtpError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = GolocalError,
+                                    modifier = Modifier.testTag("rider_commercial_otp_error")
+                                )
+                            }
                             Button(
-                                onClick = { onAdvanceState("in_progress", enteredPin) },
+                                onClick = { onVerifyCommercialOtp(enteredPin) },
+                                enabled = enteredPin.length == 6 && !isVerifyingCommercialOtp,
                                 contentPadding = PaddingValues(vertical = 14.dp),
                                 shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 50.dp)
+                                    .testTag("rider_verify_commercial_otp_button")
                             ) {
-                                Text("Verify PIN & Start Ride", fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (isVerifyingCommercialOtp) "Verifying OTP..." else "Verify OTP & Start Ride",
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
 
                     "in_progress" -> {
+                        Button(
+                            onClick = {
+                                LocationCoordinator.openExternalNavigation(
+                                    context = context,
+                                    lat = booking.destinationLat,
+                                    lng = booking.destinationLng,
+                                    label = booking.destinationLabel
+                                )
+                            },
+                            contentPadding = PaddingValues(vertical = 12.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("rider_navigate_destination_prompt")
+                        ) {
+                            Icon(Icons.Filled.Navigation, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Navigate to Destination (Google Maps)", fontWeight = FontWeight.Bold)
+                        }
                         Text(
                             text = String.format(
                                 Locale.US,

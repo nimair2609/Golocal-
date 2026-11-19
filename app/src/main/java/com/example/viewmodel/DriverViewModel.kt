@@ -20,6 +20,7 @@ import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.RealtimeLocationRepository
 import com.example.domain.BookingChatValidator
+import com.example.domain.FareCalculator
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -79,16 +80,50 @@ class DriverViewModel(
 
     private val _dismissedRequestIds = MutableStateFlow<Set<String>>(emptySet())
 
+    private val _openRequestsError = MutableStateFlow<String?>(null)
+    val openRequestsError: StateFlow<String?> = _openRequestsError.asStateFlow()
+
+    private val rejectedBookingIdsFlow = repository.observeMyRejectedBookingIds(currentUserId)
+        .catch { error ->
+            if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
+            Log.w(TAG, "Error observing rejected booking IDs", error)
+            emit(emptySet())
+        }
+
     val openRequests: StateFlow<List<Booking>> = combine(
-        repository.observeOpenBookingsForDrivers(),
-        _dismissedRequestIds
-    ) { list, dismissed ->
-        list.filter { !it.isTestRide && !it.testMode && it.customerId != currentUserId && it.id !in dismissed }
-            .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+        repository.observeOpenBookingsForDrivers()
+            .catch { error ->
+                val fe = generateSequence(error) { it.cause }
+                    .filterIsInstance<FirebaseFirestoreException>()
+                    .firstOrNull()
+                if (fe == null && error is CancellationException) throw error
+                val root = fe ?: error
+                Log.w(TAG, "Error observing open bookings", root)
+                _openRequestsError.value = root.localizedMessage ?: "Unable to sync nearby ride requests."
+                emit(emptyList())
+            },
+        rejectedBookingIdsFlow,
+        _dismissedRequestIds,
+        driverProfileState
+    ) { list, persistedRejected, dismissed, profileUi ->
+        _openRequestsError.value = null
+        val profile = (profileUi as? UiState.Success)?.data
+        val nowMs = System.currentTimeMillis()
+        list.filter { booking ->
+            !booking.isTestRide &&
+                !booking.testMode &&
+                booking.customerId != currentUserId &&
+                booking.id !in persistedRejected &&
+                booking.id !in dismissed &&
+                (booking.requestExpiresAtMs <= 0L || nowMs <= booking.requestExpiresAtMs) &&
+                (profile == null || FareCalculator.isCategoryCompatible(profile.vehicleCategory, booking.vehicleCategory))
+        }.sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
     }
         .catch { error ->
             if (error is CancellationException && error.cause !is FirebaseFirestoreException) throw error
-            Log.w(TAG, "Error observing open bookings", error)
+            Log.w(TAG, "Error combining open bookings", error)
+            _openRequestsError.value = error.localizedMessage ?: "Unable to sync nearby ride requests."
+            emit(emptyList())
         }
         .stateIn(
             scope = viewModelScope,
@@ -208,6 +243,12 @@ class DriverViewModel(
     private val _testOtpError = MutableStateFlow<String?>(null)
     val testOtpError: StateFlow<String?> = _testOtpError.asStateFlow()
 
+    private val _isVerifyingCommercialOtp = MutableStateFlow(false)
+    val isVerifyingCommercialOtp: StateFlow<Boolean> = _isVerifyingCommercialOtp.asStateFlow()
+
+    private val _commercialOtpError = MutableStateFlow<String?>(null)
+    val commercialOtpError: StateFlow<String?> = _commercialOtpError.asStateFlow()
+
     val activeChatMessages: StateFlow<List<BookingChatMessage>> = activeAssignedBooking
         .flatMapLatest { booking ->
             val comm = communicationRepository
@@ -289,9 +330,85 @@ class DriverViewModel(
             initialValue = emptyList()
         )
 
-    fun rejectRequest(bookingId: String) {
+    fun rejectRequest(bookingId: String, isExpired: Boolean = false) {
         _dismissedRequestIds.value = _dismissedRequestIds.value + bookingId
-        _message.value = "Request skipped."
+        _message.value = if (isExpired) "Request expired and removed." else "Request declined."
+        viewModelScope.launch {
+            repository.rejectOpenBooking(
+                bookingId = bookingId,
+                reason = if (isExpired) "expired" else "declined"
+            )
+        }
+    }
+
+    fun acceptRideDirectly(
+        booking: Booking,
+        agreedFareInr: Double,
+        lat: Double,
+        lng: Double
+    ) {
+        val profile = (driverProfileState.value as? UiState.Success)?.data
+        if (profile == null || profile.verificationStatus != "verified") {
+            _message.value = "Only verified drivers can accept ride requests."
+            return
+        }
+        viewModelScope.launch {
+            repository.acceptBookingAtomically(
+                booking = booking,
+                driver = profile,
+                fareInr = agreedFareInr,
+                currentLat = lat,
+                currentLng = lng
+            ).onSuccess {
+                _message.value = "Ride #${booking.id.take(6)} accepted! Navigate to pickup."
+                if (com.example.map.GpsBroadcastThrottle.isValidCoordinate(lat, lng)) {
+                    realtimeLocationRepository?.publishDriverAndTripLocation(
+                        driverId = currentUserId,
+                        activeBooking = booking.copy(assignedDriverId = currentUserId, status = "assigned"),
+                        lat = lat,
+                        lng = lng,
+                        accuracyMeters = 15f,
+                        speedMps = 0f,
+                        headingDeg = 0f
+                    )
+                }
+                communicationRepository?.publishParticipantContactForActiveTrip(
+                    booking = booking.copy(assignedDriverId = currentUserId, status = "assigned"),
+                    myPhone = profile.phone,
+                    myDisplayName = profile.legalName,
+                    isDriver = true
+                )
+            }.onFailure { exc ->
+                val raw = exc.localizedMessage ?: "Unable to accept ride request"
+                _message.value = if (raw.contains("already", ignoreCase = true) ||
+                    raw.contains("PERMISSION_DENIED", ignoreCase = true)
+                ) {
+                    "This ride is no longer available (already accepted or cancelled)."
+                } else {
+                    raw
+                }
+            }
+        }
+    }
+
+    fun updateDriverSelfProfile(
+        legalName: String,
+        phone: String,
+        address: String,
+        settlementUpiOrBank: String
+    ) {
+        viewModelScope.launch {
+            repository.updateDriverSelfProfile(
+                legalName = legalName,
+                phone = phone,
+                address = address,
+                settlementUpiOrBank = settlementUpiOrBank
+            ).onSuccess {
+                _message.value = "Rider contact & payout settings updated."
+            }.onFailure { exc ->
+                _message.value = exc.localizedMessage ?: "Failed to update rider profile."
+            }
+        }
     }
 
     fun withdrawOffer(offerId: String) {
@@ -494,6 +611,35 @@ class DriverViewModel(
         _testOtpError.value = null
     }
 
+    fun verifyCommercialOtp(booking: Booking, enteredOtp: String) {
+        if (_isVerifyingCommercialOtp.value) return
+        _isVerifyingCommercialOtp.value = true
+        _commercialOtpError.value = null
+        viewModelScope.launch {
+            repository.verifyCommercialRideOtpAndStartTrip(booking, enteredOtp)
+                .onSuccess {
+                    _commercialOtpError.value = null
+                    _message.value = "6-digit Pickup OTP verified! Navigate to destination."
+                }
+                .onFailure { exc ->
+                    _commercialOtpError.value = exc.localizedMessage ?: "Invalid 6-digit Pickup OTP."
+                }
+            _isVerifyingCommercialOtp.value = false
+        }
+    }
+
+    fun clearCommercialOtpError() {
+        _commercialOtpError.value = null
+    }
+
+    fun verifyPickupOtp(booking: Booking, enteredOtp: String) {
+        if (booking.isTestRide || booking.testMode) {
+            verifyTestRideOtp(booking, enteredOtp)
+        } else {
+            verifyCommercialOtp(booking, enteredOtp)
+        }
+    }
+
     fun broadcastGpsSample(
         lat: Double,
         lng: Double,
@@ -616,15 +762,18 @@ class DriverViewModel(
                     _message.value = when (nextStatus) {
                         "arriving" -> if (isTest) "TEST RIDE: Heading to pickup." else "Marked as heading to pickup."
                         "arrived" -> if (isTest) {
-                            "TEST RIDE: Arrived at pickup. Waiting for Customer 6-digit Test OTP verification."
+                            "TEST RIDE: Arrived at pickup. Ask passenger for 6-digit Test OTP."
                         } else {
-                            "Marked as arrived at pickup. Ask passenger for Trip PIN."
+                            "Marked as arrived at pickup. Ask passenger for 6-digit Pickup OTP."
                         }
                         "in_progress" -> "Trip started!"
-                        "completed" -> if (isTest) {
-                            "TEST RIDE completed with ₹0 commercial impact."
-                        } else {
-                            "Trip completed & fare settlement recorded."
+                        "completed" -> {
+                            stopLiveLocationBroadcast(lat, lng)
+                            if (isTest) {
+                                "TEST RIDE completed with ₹0 commercial impact."
+                            } else {
+                                "Trip completed & fare settlement recorded."
+                            }
                         }
                         else -> "Status updated."
                     }
@@ -638,7 +787,10 @@ class DriverViewModel(
     fun cancelActiveBookingByDriver(booking: Booking, category: String, reason: String) {
         viewModelScope.launch {
             repository.cancelBookingByDriver(booking, reason, category)
-                .onSuccess { _message.value = "Trip cancelled. Frequent cancellations are reviewed by Operations." }
+                .onSuccess {
+                    stopLiveLocationBroadcast(booking.pickupLat, booking.pickupLng)
+                    _message.value = "Trip cancelled. Frequent cancellations are reviewed by Operations."
+                }
                 .onFailure { _message.value = it.localizedMessage ?: "Failed to cancel trip" }
         }
     }

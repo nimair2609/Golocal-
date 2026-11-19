@@ -307,6 +307,18 @@ class AppSessionViewModel(
         }
     }
 
+    fun setRideRequestSoundEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefsRepository.setRideRequestSoundEnabled(enabled) }
+    }
+
+    fun setRideRequestVibrationEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefsRepository.setRideRequestVibrationEnabled(enabled) }
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefsRepository.setNotificationsEnabled(enabled) }
+    }
+
     fun updateAccountAndProfile(
         fullName: String,
         invoiceEmail: String,
@@ -363,6 +375,23 @@ class AppSessionViewModel(
                 }
                 .onFailure { err ->
                     _statusMessage.value = err.localizedMessage ?: "Failed to update private emergency contact."
+                }
+        }
+    }
+
+    fun saveEmergencyContacts(
+        contacts: List<com.example.data.model.EmergencyContactEntry>,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            repository.savePrivateEmergencyContacts(contacts)
+                .onSuccess {
+                    _statusMessage.value = "Emergency contacts saved (${contacts.size})."
+                    onComplete(true)
+                }
+                .onFailure { err ->
+                    _statusMessage.value = err.localizedMessage ?: "Failed to save emergency contacts."
+                    onComplete(false)
                 }
         }
     }

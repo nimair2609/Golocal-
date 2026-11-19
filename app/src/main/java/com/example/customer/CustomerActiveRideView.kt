@@ -502,34 +502,73 @@ fun CustomerActiveRideView(
                         onClearError = onClearTestOtpError
                     )
                 } else {
-                    if (booking.tripPin.isNotBlank() && booking.status in setOf("assigned", "arriving", "arrived")) {
-                        Surface(
-                            color = GolocalLightBlue.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("customer_trip_pin_card")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                    if (booking.status in setOf("assigned", "arriving", "arrived")) {
+                        if (rideOtpSecret != null && rideOtpSecret.otpPlaintext.length == 6) {
+                            Surface(
+                                color = GolocalLightBlue.copy(alpha = 0.78f),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, GolocalPrimaryBlue, RoundedCornerShape(16.dp))
+                                    .testTag("customer_commercial_otp_banner")
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Share 4-Digit Trip PIN", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Share 6-Digit Pickup OTP with Rider",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = GolocalDeepNavy
+                                        )
+                                        Text(
+                                            text = "Only share this OTP when your Rider arrives at pickup. Protected from driver until verified.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = GolocalDeepNavy.copy(alpha = 0.78f)
+                                        )
+                                    }
                                     Text(
-                                        text = "Verify rider before sharing PIN at pickup",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = rideOtpSecret.otpPlaintext,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        fontFamily = JetBrainsMono,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = GolocalPrimaryBlue,
+                                        modifier = Modifier.testTag("customer_commercial_otp_value")
                                     )
                                 }
-                                Text(
-                                    text = booking.tripPin,
-                                    style = MaterialTheme.typography.headlineMedium,
-                                    fontFamily = JetBrainsMono,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = GolocalPrimaryBlue
-                                )
+                            }
+                        } else if (booking.tripPin.isNotBlank()) {
+                            Surface(
+                                color = GolocalLightBlue.copy(alpha = 0.7f),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("customer_trip_pin_card")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Share Pickup PIN", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            text = "Verify rider before sharing PIN at pickup",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Text(
+                                        text = booking.tripPin,
+                                        style = MaterialTheme.typography.headlineMedium,
+                                        fontFamily = JetBrainsMono,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = GolocalPrimaryBlue
+                                    )
+                                }
                             }
                         }
                     }

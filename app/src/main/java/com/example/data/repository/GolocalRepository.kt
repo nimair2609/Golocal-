@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.Date
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
 class GolocalRepository(
@@ -592,6 +593,82 @@ class GolocalRepository(
         }
     }
 
+    suspend fun savePrivateEmergencyContacts(
+        contacts: List<EmergencyContactEntry>
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val ownPhone = auth.currentUser?.phoneNumber?.trim().orEmpty()
+        val sanitized = contacts
+            .take(5)
+            .mapIndexed { idx, entry ->
+                val cleanPhone = entry.phone.trim().take(25)
+                val cleanName = entry.name.trim().ifBlank { "Contact ${idx + 1}" }.take(80)
+                val cleanRelation = entry.relationship.trim().ifBlank { "Emergency Contact" }.take(60)
+                require(cleanPhone.length >= 8) { "Each emergency contact needs a valid phone number." }
+                if (ownPhone.isNotBlank()) {
+                    require(cleanPhone != ownPhone) { "Emergency contact number must be different from your own mobile number." }
+                }
+                EmergencyContactEntry(
+                    id = entry.id.ifBlank { "ec_${idx + 1}" }.take(40),
+                    name = cleanName,
+                    phone = cleanPhone,
+                    relationship = cleanRelation
+                )
+            }
+        require(sanitized.isNotEmpty()) { "At least one emergency contact is required." }
+        val primary = sanitized.first()
+        val emergencyRef = db.collection("emergency_contacts").document(uid)
+        val userRef = db.collection("users").document(uid)
+        val existingSnap = emergencyRef.get().await()
+        val contactMaps = sanitized.map { c ->
+            mapOf(
+                "id" to c.id,
+                "name" to c.name,
+                "phone" to c.phone,
+                "relationship" to c.relationship
+            )
+        }
+        try {
+            db.runBatch { batch ->
+                if (!existingSnap.exists()) {
+                    batch.set(
+                        emergencyRef,
+                        mapOf(
+                            "userId" to uid,
+                            "emergencyContactNumber" to primary.phone,
+                            "relationshipNote" to "${primary.name} (${primary.relationship})".take(80),
+                            "contacts" to contactMaps,
+                            "createdAt" to FieldValue.serverTimestamp(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } else {
+                    batch.update(
+                        emergencyRef,
+                        mapOf(
+                            "emergencyContactNumber" to primary.phone,
+                            "relationshipNote" to "${primary.name} (${primary.relationship})".take(80),
+                            "contacts" to contactMaps,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.update(
+                    userRef,
+                    mapOf(
+                        "hasEmergencyContact" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, emergencyRef.path, auth)
+            throw e
+        }
+    }
+
     suspend fun fetchEmergencyContactForAuthorizedResponder(targetUserId: String): Result<PrivateEmergencyContact?> = runCatching {
         requireUserId()
         val ref = db.collection("emergency_contacts").document(targetUserId)
@@ -788,6 +865,8 @@ class GolocalRepository(
             put("test_mode", booking.testMode)
             if (booking.testOtpStatus.isNotBlank()) put("test_otp_status", booking.testOtpStatus)
             if (booking.testOtpExpiresAtMs > 0L) put("test_otp_expires_at_ms", booking.testOtpExpiresAtMs)
+            val reqExpiry = if (booking.requestExpiresAtMs > 0L) booking.requestExpiresAtMs else System.currentTimeMillis() + 5 * 60_000L
+            put("requestExpiresAtMs", reqExpiry)
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
@@ -802,12 +881,22 @@ class GolocalRepository(
         docRef.id
     }
 
-    suspend fun confirmOfferAtomically(bookingId: String, offer: RideOffer): Result<String> = runCatching {
+    suspend fun confirmOfferAtomically(
+        bookingId: String,
+        offer: RideOffer,
+        otpValiditySeconds: Long = 600L
+    ): Result<String> = runCatching {
         val uid = requireUserId()
         val bookingRef = db.collection("bookings").document(bookingId)
         val offerRef = db.collection("ride_offers").document(offer.id)
         val assignmentRef = db.collection("ride_assignments").document(bookingId)
-        val tripPin = Random.nextInt(1000, 9999).toString()
+        val otpRef = db.collection("ride_otps").document(bookingId)
+        val secretRef = db.collection("ride_otp_secrets").document(bookingId)
+
+        val otpPlaintext = TestRideOtpUtil.generateSixDigitOtp()
+        val otpHash = TestRideOtpUtil.sha256Hex(bookingId, otpPlaintext)
+        val expiresAtMs = TestRideOtpUtil.computeExpiresAtMs(System.currentTimeMillis(), otpValiditySeconds)
+        val expiresAtTs = Timestamp(Date(expiresAtMs))
 
         try {
             db.runTransaction { tx ->
@@ -832,7 +921,8 @@ class GolocalRepository(
                         "assignedVehicleLabel" to offer.vehicleLabel,
                         "acceptedOfferId" to offer.id,
                         "agreedFareInr" to offer.proposedFareInr,
-                        "tripPin" to tripPin,
+                        "otp_status" to "pending",
+                        "otp_expires_at_ms" to expiresAtMs,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )
@@ -852,6 +942,42 @@ class GolocalRepository(
                         "offerId" to offer.id,
                         "lockedFareInr" to offer.proposedFareInr,
                         "status" to "active",
+                        "is_test_ride" to false,
+                        "assignedByUid" to uid,
+                        "assignedByRole" to "customer",
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.set(
+                    otpRef,
+                    mapOf(
+                        "bookingId" to bookingId,
+                        "customerId" to uid,
+                        "otpHash" to otpHash,
+                        "submittedHash" to "",
+                        "used" to false,
+                        "overridden" to false,
+                        "overrideReason" to "",
+                        "overriddenByUid" to "",
+                        "verifiedByUid" to "",
+                        "attempts" to 0L,
+                        "maxAttempts" to 5L,
+                        "lastAttemptAtMs" to 0L,
+                        "expiresAt" to expiresAtTs,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.set(
+                    secretRef,
+                    mapOf(
+                        "bookingId" to bookingId,
+                        "customerId" to uid,
+                        "otpPlaintext" to otpPlaintext,
+                        "isTestRide" to false,
+                        "status" to "pending",
+                        "expiresAt" to expiresAtTs,
                         "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
@@ -881,14 +1007,19 @@ class GolocalRepository(
                     ).await()
             }
 
-            // Notify customer
+            // Notify customer (NEVER put raw OTP in notification text!)
             val notifRef = db.collection("notifications").document()
             notifRef.set(
                 mapOf(
                     "userId" to uid,
                     "title" to "Ride Confirmed",
-                    "body" to "Driver ${offer.driverName} confirmed at ₹${offer.proposedFareInr.toInt()}. Trip PIN: $tripPin",
-                    "type" to "booking_confirmed",
+                    "body" to "Driver ${offer.driverName} confirmed at ₹${offer.proposedFareInr.toInt()}. Open Active Ride to view your 6-digit Pickup OTP.",
+                    "type" to "booking_assigned",
+                    "bookingId" to bookingId,
+                    "entityId" to bookingId,
+                    "targetApp" to "customer",
+                    "targetScreen" to "booking",
+                    "isTestRide" to false,
                     "read" to false,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
@@ -899,7 +1030,7 @@ class GolocalRepository(
             handleFirestoreError(e, OperationType.WRITE, bookingRef.path, auth)
             throw e
         }
-        tripPin
+        "otp_pending"
     }
 
     suspend fun cancelBooking(
@@ -1180,6 +1311,11 @@ class GolocalRepository(
 
     suspend fun triggerEmergencySos(bookingId: String, lat: Double, lng: Double, notes: String): Result<String> = runCatching {
         val uid = requireUserId()
+        val nowMs = System.currentTimeMillis()
+        val remainingCooldownSec = SosCooldownGuard.remainingCooldownSeconds(uid, nowMs)
+        require(remainingCooldownSec <= 0L) {
+            "SOS alert recently triggered. Please wait ${remainingCooldownSec}s before sending another SOS."
+        }
         val ref = db.collection("emergency_events").document()
         val payload = buildMap<String, Any> {
             put("userId", uid)
@@ -1187,13 +1323,14 @@ class GolocalRepository(
             put("lat", lat)
             put("lng", lng)
             put("emergencyContactRef", "emergency_contacts/$uid")
-            put("notes", notes.ifBlank { "Emergency SOS triggered from GOLOCAL app" })
+            put("notes", notes.ifBlank { "Emergency SOS triggered from GOLOCAL app" }.take(300))
             put("status", "active")
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
         }
         try {
             ref.set(payload).await()
+            SosCooldownGuard.markTriggered(uid, nowMs)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1470,6 +1607,386 @@ class GolocalRepository(
         offerRef.id
     }
 
+    suspend fun updateDriverSelfProfile(
+        legalName: String,
+        phone: String,
+        address: String,
+        settlementUpiOrBank: String
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val cleanName = legalName.trim().take(100)
+        val cleanPhone = phone.trim().take(25)
+        val cleanAddress = address.trim().take(240)
+        val cleanUpi = settlementUpiOrBank.trim().take(100)
+        require(cleanName.length >= 2) { "Full name must be at least 2 characters." }
+        require(cleanPhone.length >= 8) { "Enter a valid mobile number." }
+
+        val driverRef = db.collection("driver_profiles").document(uid)
+        val userRef = db.collection("users").document(uid)
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    driverRef,
+                    mapOf(
+                        "phone" to cleanPhone,
+                        "address" to cleanAddress,
+                        "settlementUpiOrBank" to cleanUpi,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    userRef,
+                    mapOf(
+                        "fullName" to cleanName,
+                        "phone" to cleanPhone,
+                        "mobileNumber" to cleanPhone,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, driverRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun rejectOpenBooking(
+        bookingId: String,
+        reason: String = "declined"
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        require(bookingId.isNotBlank()) { "Booking ID is required." }
+        val docId = "${bookingId}_${uid}"
+        val ref = db.collection("ride_rejections").document(docId)
+        try {
+            ref.set(
+                mapOf(
+                    "bookingId" to bookingId,
+                    "driverId" to uid,
+                    "reason" to reason.take(60),
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, ref.path, auth)
+            throw e
+        }
+    }
+
+    fun observeMyRejectedBookingIds(driverId: String): Flow<Set<String>> =
+        safeQueryFlow(
+            "ride_rejections",
+            db.collection("ride_rejections").whereEqualTo("driverId", driverId)
+        ) { doc ->
+            doc.getString("bookingId")?.takeIf { it.isNotBlank() }
+        }.map { it.toSet() }
+
+    suspend fun acceptBookingAtomically(
+        booking: Booking,
+        driver: DriverProfile,
+        fareInr: Double,
+        currentLat: Double = 22.9041,
+        currentLng: Double = 88.3976,
+        otpValiditySeconds: Long = 600L
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        require(driver.driverId == uid && driver.verificationStatus == "verified") {
+            "Only verified drivers can accept ride requests."
+        }
+        require(!booking.isTestRide && !booking.testMode) {
+            "Commercial drivers cannot accept isolated TEST RIDE bookings."
+        }
+        require(FareCalculator.isCategoryCompatible(driver.vehicleCategory, booking.vehicleCategory)) {
+            "Vehicle category (${driver.vehicleCategory.uppercase()}) does not match ${booking.vehicleCategory.uppercase()}."
+        }
+        if (booking.requestExpiresAtMs > 0L && System.currentTimeMillis() > booking.requestExpiresAtMs) {
+            throw IllegalStateException("This ride request has expired.")
+        }
+        val effectiveFare = fareInr.coerceIn(booking.minPermittedFareInr, booking.maxPermittedFareInr)
+        val vehicleLabel = listOf(driver.vehicleModel, driver.vehicleRegNumber)
+            .filter { it.isNotBlank() }.joinToString(" • ")
+        val otpPlaintext = TestRideOtpUtil.generateSixDigitOtp()
+        val otpHash = TestRideOtpUtil.sha256Hex(booking.id, otpPlaintext)
+        val expiresAtMs = TestRideOtpUtil.computeExpiresAtMs(System.currentTimeMillis(), otpValiditySeconds)
+        val expiresAtTs = Timestamp(Date(expiresAtMs))
+
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val assignmentRef = db.collection("ride_assignments").document(booking.id)
+        val otpRef = db.collection("ride_otps").document(booking.id)
+        val secretRef = db.collection("ride_otp_secrets").document(booking.id)
+
+        try {
+            db.runTransaction { tx ->
+                val snap = tx.get(bookingRef)
+                val status = snap.getString("status") ?: ""
+                val existingAssignment = tx.get(assignmentRef)
+                if (status != "searching" || existingAssignment.exists()) {
+                    throw IllegalStateException("This ride was already accepted by another rider.")
+                }
+                tx.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "assigned",
+                        "assignedDriverId" to uid,
+                        "assignedDriverName" to driver.legalName.ifBlank { "GoLocal Partner" },
+                        "assignedVehicleLabel" to vehicleLabel,
+                        "agreedFareInr" to effectiveFare,
+                        "otp_status" to "pending",
+                        "otp_expires_at_ms" to expiresAtMs,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.set(
+                    assignmentRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "driverId" to uid,
+                        "offerId" to "direct_accept_${booking.id}",
+                        "lockedFareInr" to effectiveFare,
+                        "status" to "active",
+                        "is_test_ride" to false,
+                        "assignedByUid" to uid,
+                        "assignedByRole" to "driver",
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.set(
+                    otpRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "otpHash" to otpHash,
+                        "submittedHash" to "",
+                        "used" to false,
+                        "overridden" to false,
+                        "overrideReason" to "",
+                        "overriddenByUid" to "",
+                        "verifiedByUid" to "",
+                        "attempts" to 0L,
+                        "maxAttempts" to 5L,
+                        "lastAttemptAtMs" to 0L,
+                        "expiresAt" to expiresAtTs,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.set(
+                    secretRef,
+                    mapOf(
+                        "bookingId" to booking.id,
+                        "customerId" to booking.customerId,
+                        "otpPlaintext" to otpPlaintext,
+                        "isTestRide" to false,
+                        "status" to "pending",
+                        "expiresAt" to expiresAtTs,
+                        "createdAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+
+            // Seed initial trip location & contact bridge best-effort after lock commit
+            val startLat = currentLat.takeIf { com.example.map.GpsBroadcastThrottle.isValidCoordinate(it, currentLng) }
+                ?: booking.pickupLat
+            val startLng = currentLng.takeIf { com.example.map.GpsBroadcastThrottle.isValidCoordinate(currentLat, it) }
+                ?: booking.pickupLng
+            runCatching {
+                db.runBatch { batch ->
+                    batch.set(
+                        db.collection("trip_locations").document(booking.id),
+                        mapOf(
+                            "bookingId" to booking.id,
+                            "customerId" to booking.customerId,
+                            "driverId" to uid,
+                            "lat" to startLat,
+                            "lng" to startLng,
+                            "isTestRide" to false,
+                            "isSimulated" to false,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    batch.set(
+                        db.collection("live_locations").document(uid),
+                        mapOf(
+                            "driverId" to uid,
+                            "bookingId" to booking.id,
+                            "customerId" to booking.customerId,
+                            "lat" to startLat,
+                            "lng" to startLng,
+                            "isTestRide" to false,
+                            "isSimulated" to false,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    batch.set(
+                        db.collection("booking_contacts").document(booking.id),
+                        buildMap<String, Any> {
+                            put("bookingId", booking.id)
+                            put("customerId", booking.customerId)
+                            put("driverId", uid)
+                            put("customerFirstName", booking.customerName.trim().substringBefore(" ").take(80))
+                            if (driver.phone.isNotBlank()) put("driverPhone", driver.phone.trim().take(25))
+                            put("driverName", driver.legalName.trim().take(100))
+                            put("updatedAt", FieldValue.serverTimestamp())
+                        },
+                        SetOptions.merge()
+                    )
+                }.await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, bookingRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun verifyCommercialRideOtpAndStartTrip(
+        booking: Booking,
+        enteredOtp: String
+    ): Result<Unit> = runCatching {
+        val uid = requireUserId()
+        val cleanOtp = enteredOtp.trim()
+        require(!booking.isTestRide && !booking.testMode) { "Use Test Ride OTP verification for test rides." }
+        require(booking.assignedDriverId == uid) { "Only the assigned rider can verify Pickup OTP." }
+        require(booking.status == "arrived") { "Mark arrived at pickup before verifying Pickup OTP." }
+        require(TestRideOtpUtil.isValidOtpFormat(cleanOtp)) { "Enter the exact 6-digit numeric Pickup OTP." }
+        if (booking.otpExpiresAtMs > 0L && TestRideOtpUtil.isExpired(booking.otpExpiresAtMs)) {
+            throw IllegalStateException("Pickup OTP has expired. Ask customer or Owner Admin for assistance.")
+        }
+
+        val submittedHash = TestRideOtpUtil.sha256Hex(booking.id, cleanOtp)
+        val otpRef = db.collection("ride_otps").document(booking.id)
+        val bookingRef = db.collection("bookings").document(booking.id)
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    otpRef,
+                    mapOf(
+                        "used" to true,
+                        "submittedHash" to submittedHash,
+                        "verifiedByUid" to uid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "in_progress",
+                        "otp_status" to "verified",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+            runCatching {
+                db.collection("ride_otp_secrets").document(booking.id)
+                    .update(
+                        mapOf(
+                            "status" to "verified",
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val fe = e.unwrapFirestoreError() as? FirebaseFirestoreException
+            if (fe?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                runCatching {
+                    otpRef.update(
+                        mapOf(
+                            "attempts" to FieldValue.increment(1L),
+                            "lastAttemptAtMs" to System.currentTimeMillis(),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
+                val message = if (booking.otpExpiresAtMs > 0L && TestRideOtpUtil.isExpired(booking.otpExpiresAtMs)) {
+                    "Pickup OTP expired. Ask Owner Admin for OTP override if needed."
+                } else {
+                    "Incorrect 6-digit Pickup OTP, cooldown active, or max attempts reached."
+                }
+                throw IllegalArgumentException(message)
+            }
+            handleFirestoreError(e, OperationType.WRITE, otpRef.path, auth)
+            throw e
+        }
+    }
+
+    suspend fun adminOverrideCommercialOtpAndStartRide(
+        booking: Booking,
+        reason: String,
+        actorRole: String = "admin"
+    ): Result<Unit> = runCatching {
+        val actorUid = requireUserId()
+        val actorEmail = auth.currentUser?.email ?: ""
+        val cleanReason = reason.trim()
+        require(!booking.isTestRide && !booking.testMode) { "Use Test OTP override for TEST RIDE bookings." }
+        require(booking.status == "arrived") { "Ride must be in 'arrived' state to override Pickup OTP." }
+        require(cleanReason.length >= 4) { "Provide an audit reason (at least 4 characters)." }
+
+        val otpRef = db.collection("ride_otps").document(booking.id)
+        val secretRef = db.collection("ride_otp_secrets").document(booking.id)
+        val bookingRef = db.collection("bookings").document(booking.id)
+        val auditRef = db.collection("audit_logs").document()
+
+        try {
+            db.runBatch { batch ->
+                batch.update(
+                    otpRef,
+                    mapOf(
+                        "used" to true,
+                        "overridden" to true,
+                        "overrideReason" to cleanReason.take(250),
+                        "overriddenByUid" to actorUid,
+                        "verifiedByUid" to actorUid,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    secretRef,
+                    mapOf(
+                        "status" to "overridden",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.update(
+                    bookingRef,
+                    mapOf(
+                        "status" to "in_progress",
+                        "otp_status" to "overridden",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                batch.set(
+                    auditRef,
+                    mapOf(
+                        "actorId" to actorUid,
+                        "actorEmail" to actorEmail,
+                        "action" to "COMMERCIAL_OTP_ADMIN_OVERRIDE",
+                        "targetCollection" to "ride_otps",
+                        "targetId" to booking.id,
+                        "summary" to "[$actorRole] Overrode Commercial Pickup OTP for ${booking.id}: $cleanReason",
+                        "isTestRide" to false,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }.await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, otpRef.path, auth)
+            throw e
+        }
+    }
+
     suspend fun advanceDriverTripState(
         booking: Booking,
         nextStatus: String,
@@ -1486,9 +2003,7 @@ class GolocalRepository(
             throw IllegalStateException("Test rides must be started by 6-digit Customer Test OTP or Owner Admin override.")
         }
         if (!isTest && nextStatus == "in_progress") {
-            require(enteredPin.trim() == booking.tripPin) {
-                "Invalid Trip PIN. Please verify the 4-digit PIN with the passenger."
-            }
+            throw IllegalStateException("Commercial rides must be started by verifying the Customer's 6-digit Pickup OTP or Owner Admin override.")
         }
         val bookingRef = db.collection("bookings").document(booking.id)
         val locRef = db.collection("trip_locations").document(booking.id)
@@ -3934,5 +4449,25 @@ class GolocalRepository(
             handleFirestoreError(e, OperationType.UPDATE, reqRef.path, auth)
             throw e
         }
+    }
+}
+
+internal object SosCooldownGuard {
+    private const val COOLDOWN_MS = 15_000L
+    private val lastTriggerMsByUid = ConcurrentHashMap<String, Long>()
+
+    fun remainingCooldownSeconds(uid: String, nowMs: Long = System.currentTimeMillis()): Long {
+        val last = lastTriggerMsByUid[uid] ?: return 0L
+        val elapsed = nowMs - last
+        if (elapsed >= COOLDOWN_MS) return 0L
+        return ((COOLDOWN_MS - elapsed + 999L) / 1000L).coerceAtLeast(1L)
+    }
+
+    fun markTriggered(uid: String, nowMs: Long = System.currentTimeMillis()) {
+        lastTriggerMsByUid[uid] = nowMs
+    }
+
+    fun reset() {
+        lastTriggerMsByUid.clear()
     }
 }

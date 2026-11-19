@@ -542,6 +542,9 @@ fun RiderHomeDashboardTab(
 
     val isVerifyingTestOtp by driverViewModel.isVerifyingTestOtp.collectAsStateWithLifecycle()
     val testOtpError by driverViewModel.testOtpError.collectAsStateWithLifecycle()
+    val isVerifyingCommercialOtp by driverViewModel.isVerifyingCommercialOtp.collectAsStateWithLifecycle()
+    val commercialOtpError by driverViewModel.commercialOtpError.collectAsStateWithLifecycle()
+    val openRequestsError by driverViewModel.openRequestsError.collectAsStateWithLifecycle()
 
     if (activeTrip != null) {
         RiderActiveTripSheet(
@@ -579,7 +582,11 @@ fun RiderHomeDashboardTab(
             onVerifyTestOtp = { otp -> driverViewModel.verifyTestRideOtp(activeTrip, otp) },
             isVerifyingTestOtp = isVerifyingTestOtp,
             testOtpError = testOtpError,
-            onClearTestOtpError = { driverViewModel.clearTestOtpError() }
+            onClearTestOtpError = { driverViewModel.clearTestOtpError() },
+            onVerifyCommercialOtp = { otp -> driverViewModel.verifyCommercialOtp(activeTrip, otp) },
+            isVerifyingCommercialOtp = isVerifyingCommercialOtp,
+            commercialOtpError = commercialOtpError,
+            onClearCommercialOtpError = { driverViewModel.clearCommercialOtpError() }
         )
     } else {
         RiderMapHomeScreen(
@@ -616,13 +623,20 @@ fun RiderHomeDashboardTab(
                 )
             },
             onAcceptRequestWithFare = { booking, proposedFare, etaMins ->
+                com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, booking.id)
                 driverViewModel.submitOffer(booking, proposedFare, etaMins)
             },
             onDeclineRequest = { bookingId ->
+                com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, bookingId)
                 driverViewModel.rejectRequest(bookingId)
             },
             onWithdrawOffer = { offerId ->
                 driverViewModel.withdrawOffer(offerId)
+            },
+            openRequestsError = openRequestsError,
+            onDirectAcceptRequest = { booking, fareInr ->
+                com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, booking.id)
+                driverViewModel.acceptRideDirectly(booking, fareInr, currentLat, currentLng)
             }
         )
     }

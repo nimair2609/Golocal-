@@ -233,7 +233,7 @@ class CustomerViewModel(
 
     val activeRideOtpSecret: StateFlow<RideOtpSecret?> = activeBooking
         .flatMapLatest { booking ->
-            if (booking == null || (!booking.isTestRide && !booking.testMode) || booking.assignedDriverId.isBlank()) {
+            if (booking == null || booking.assignedDriverId.isBlank()) {
                 flowOf(null)
             } else {
                 repository.observeCustomerRideOtpSecret(booking.id)
@@ -637,8 +637,8 @@ class CustomerViewModel(
     fun confirmOffer(bookingId: String, offer: RideOffer) {
         viewModelScope.launch {
             repository.confirmOfferAtomically(bookingId, offer)
-                .onSuccess { pin ->
-                    _actionMessage.value = "Ride confirmed with ${offer.driverName} at ₹${offer.proposedFareInr.toInt()}. Share Trip PIN $pin at pickup."
+                .onSuccess {
+                    _actionMessage.value = "Ride confirmed with ${offer.driverName} at ₹${offer.proposedFareInr.toInt()}. Open Active Ride to view your 6-digit Pickup OTP."
                 }
                 .onFailure { exc ->
                     _actionMessage.value = exc.localizedMessage ?: "Unable to confirm offer"

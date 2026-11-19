@@ -1,5 +1,7 @@
 package com.example
 
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasText
@@ -17,7 +19,9 @@ import com.example.customer.CustomerLocationSearchSheet
 import com.example.customer.LocationFieldTarget
 import com.example.data.model.Booking
 import com.example.data.model.DriverProfile
+import com.example.data.model.EmergencyContactEntry
 import com.example.data.model.RideOffer
+import com.example.data.model.RideOtpSecret
 import com.example.data.model.UiState
 import com.example.domain.WestBengalCatalog
 import com.example.map.GpsBroadcastThrottle
@@ -26,6 +30,7 @@ import com.example.rider.IncomingRideRequestOverlayCard
 import com.example.rider.RiderActiveTripSheet
 import com.example.rider.RiderMapHomeScreen
 import com.example.shared.CallPeerConfirmDialog
+import com.example.shared.EmergencyContactsSectionCard
 import com.example.ui.theme.GolocalTheme
 import com.example.viewmodel.BookingDraftState
 import com.example.viewmodel.GpsLocationState
@@ -297,7 +302,7 @@ class RedesignFlowsRobolectricTest {
             agreedFareInr = 85.0,
             status = "arrived"
         )
-        var capturedPin = ""
+        var capturedOtp = ""
         composeTestRule.setContent {
             GolocalTheme {
                 RiderActiveTripSheet(
@@ -317,15 +322,203 @@ class RedesignFlowsRobolectricTest {
                     onChatCustomer = {},
                     onTriggerSos = {},
                     onCancelTrip = {},
-                    onAdvanceState = { _, pin -> capturedPin = pin }
+                    onAdvanceState = { _, _ -> },
+                    onVerifyCommercialOtp = { otp -> capturedOtp = otp }
                 )
             }
         }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("rider_external_navigate_button").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("rider_trip_pin_input").performTextInput("4829")
-        composeTestRule.onNodeWithText("Verify PIN & Start Ride").performClick()
-        assertEquals("4829", capturedPin)
+        composeTestRule.onNodeWithText("Nav Pickup").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("rider_destination_nav_locked").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("rider_trip_pin_input").performScrollTo().performTextInput("482913")
+        composeTestRule.onNodeWithTag("rider_verify_commercial_otp_button").performScrollTo().performClick()
+        assertEquals("482913", capturedOtp)
+    }
+
+    @Test
+    fun `rider active trip sheet unlocks destination navigation in_progress and customer sees 6-digit OTP banner`() {
+        val inProgressBooking = Booking(
+            id = "bk_act_3",
+            customerId = "cust_3",
+            customerName = "Riya Roy",
+            assignedDriverId = "drv_1",
+            assignedDriverName = "Ramesh",
+            vehicleCategory = "toto",
+            pickupLabel = "Chinsurah",
+            pickupLat = 22.90,
+            pickupLng = 88.39,
+            destinationLabel = "Bandel Station",
+            destinationLat = 22.93,
+            destinationLng = 88.38,
+            distanceKm = 3.2,
+            agreedFareInr = 65.0,
+            status = "in_progress"
+        )
+        composeTestRule.setContent {
+            GolocalTheme {
+                RiderActiveTripSheet(
+                    booking = inProgressBooking,
+                    currentLat = 22.90,
+                    currentLng = 88.39,
+                    onlineSelf = com.example.data.model.DriverDirectoryEntry(
+                        driverId = "drv_1",
+                        isOnline = true,
+                        currentLat = 22.90,
+                        currentLng = 88.39
+                    ),
+                    lowNetworkMode = false,
+                    callContact = null,
+                    unreadChatCount = 0,
+                    onCallCustomer = {},
+                    onChatCustomer = {},
+                    onTriggerSos = {},
+                    onCancelTrip = {},
+                    onAdvanceState = { _, _ -> }
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Nav Drop").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("rider_destination_nav_locked").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("rider_navigate_destination_prompt").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `customer active ride view shows 6-digit commercial OTP banner before pickup`() {
+        val booking = Booking(
+            id = "bk_cust_otp_1",
+            customerId = "cust_1",
+            customerName = "Ananya Sen",
+            assignedDriverId = "drv_1",
+            assignedDriverName = "Ramesh",
+            vehicleCategory = "auto",
+            pickupLabel = "Chinsurah",
+            pickupLat = 22.90,
+            pickupLng = 88.39,
+            destinationLabel = "Bandel",
+            destinationLat = 22.93,
+            destinationLng = 88.38,
+            distanceKm = 4.5,
+            agreedFareInr = 85.0,
+            status = "arrived"
+        )
+        composeTestRule.setContent {
+            GolocalTheme {
+                CustomerActiveRideView(
+                    booking = booking,
+                    offers = emptyList(),
+                    drivers = emptyList(),
+                    tripLocation = null,
+                    lowNetwork = false,
+                    callContact = null,
+                    unreadChatCount = 0,
+                    onBackHome = {},
+                    onOpenCall = {},
+                    onOpenChat = {},
+                    onAcceptOffer = {},
+                    onShareTrip = {},
+                    onOpenSos = {},
+                    onOpenComplaint = {},
+                    onOpenCancel = {},
+                    rideOtpSecret = RideOtpSecret(
+                        bookingId = "bk_cust_otp_1",
+                        customerId = "cust_1",
+                        otpPlaintext = "739204"
+                    )
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("customer_commercial_otp_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("customer_commercial_otp_value").assertIsDisplayed()
+        composeTestRule.onNodeWithText("739204").assertIsDisplayed()
+    }
+
+    @Test
+    fun `rider home screen shows openRequestsError banner and incoming card triggers direct accept`() {
+        val profile = DriverProfile(
+            driverId = "drv_1",
+            legalName = "Ramesh Das",
+            vehicleCategory = "toto",
+            verificationStatus = "verified",
+            isOnline = true
+        )
+        val booking = Booking(
+            id = "bk_direct_8899",
+            customerId = "cust_1",
+            customerName = "Sourav",
+            vehicleCategory = "toto",
+            pickupLabel = "Singur Station",
+            destinationLabel = "Hooghly Ghat",
+            distanceKm = 4.0,
+            estimatedDurationMin = 12L,
+            estimatedFareInr = 100.0,
+            minPermittedFareInr = 85.0,
+            maxPermittedFareInr = 125.0,
+            commissionPercent = 10.0,
+            gstPercent = 5.0,
+            status = "searching"
+        )
+        var directAcceptedId = ""
+        composeTestRule.setContent {
+            GolocalTheme {
+                RiderMapHomeScreen(
+                    profile = profile,
+                    currentLat = 22.81,
+                    currentLng = 88.23,
+                    gpsIsDetecting = false,
+                    locationLabel = "Singur",
+                    openRequests = listOf(booking),
+                    openRequestsError = "Listener reconnecting",
+                    myOffers = emptyList(),
+                    todaysCompletedRides = 1,
+                    todaysEarningsInr = 150.0,
+                    expiryAlerts = emptyList(),
+                    lowNetworkMode = false,
+                    onToggleOnline = {},
+                    onRequestLocationSync = {},
+                    onOpenNotifications = {},
+                    onOpenRequests = {},
+                    onTriggerSos = {},
+                    onAcceptRequestWithFare = { _, _, _ -> },
+                    onDirectAcceptRequest = { b, _ -> directAcceptedId = b.id },
+                    onDeclineRequest = {},
+                    onWithdrawOffer = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("rider_requests_error_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("rider_incoming_booking_id").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("rider_accept_request_button").assertIsEnabled().performClick()
+        assertEquals("bk_direct_8899", directAcceptedId)
+    }
+
+    @Test
+    fun `emergency contacts section shows recommendation banner below 2 contacts`() {
+        val singleContact = listOf(
+            EmergencyContactEntry(
+                id = "ec_1",
+                name = "Soma Sen",
+                phone = "+919876543210",
+                relationship = "Mother"
+            )
+        )
+        composeTestRule.setContent {
+            GolocalTheme {
+                EmergencyContactsSectionCard(
+                    contacts = singleContact,
+                    ownVerifiedMobileE164 = "+919000000001",
+                    onSaveContacts = {},
+                    modifier = Modifier.testTag("emergency_contacts_section_card")
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("emergency_contacts_section_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("emergency_contacts_recommendation_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("add_emergency_contact_button").assertIsEnabled()
     }
 
     @Test

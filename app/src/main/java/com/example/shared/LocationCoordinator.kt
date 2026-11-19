@@ -88,12 +88,41 @@ object LocationCoordinator {
 
     fun openExternalNavigation(context: Context, lat: Double, lng: Double, label: String) {
         if (!GpsBroadcastThrottle.isValidCoordinate(lat, lng)) return
-        val encodedLabel = Uri.encode(label.ifBlank { "GoLocal Stop" })
-        val uri = Uri.parse("geo:$lat,$lng?q=$lat,$lng($encodedLabel)")
-        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+        val turnByTurnUri = Uri.parse(
+            String.format(Locale.US, "google.navigation:q=%.6f,%.6f&mode=d", lat, lng)
+        )
+        val navIntent = Intent(Intent.ACTION_VIEW, turnByTurnUri).apply {
+            setPackage("com.google.android.apps.maps")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        runCatching { context.startActivity(intent) }
+        if (navIntent.resolveActivity(context.packageManager) != null) {
+            val started = runCatching { context.startActivity(navIntent) }.isSuccess
+            if (started) return
+        }
+        val encodedLabel = Uri.encode(label.ifBlank { "GoLocal Stop" })
+        val webMapsUri = Uri.parse(
+            String.format(
+                Locale.US,
+                "https://www.google.com/maps/dir/?api=1&destination=%.6f,%.6f&travelmode=driving&destination_place_id=%s",
+                lat,
+                lng,
+                encodedLabel
+            )
+        )
+        val fallbackIntent = Intent(Intent.ACTION_VIEW, webMapsUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (fallbackIntent.resolveActivity(context.packageManager) != null) {
+            runCatching { context.startActivity(fallbackIntent) }
+        } else {
+            val geoIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(String.format(Locale.US, "geo:%.6f,%.6f?q=%.6f,%.6f(%s)", lat, lng, lat, lng, encodedLabel))
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(geoIntent) }
+        }
     }
 
     @SuppressLint("MissingPermission")

@@ -9,6 +9,9 @@
     <string name="sign_out">Sign out</string>
     <string name="support_helpline">+91-1800-103-0000</string>
     <string name="notif_channel_rides">Ride &amp; Trip Updates</string>
+    <string name="notif_channel_ride_requests_v2">Incoming Ride Requests</string>
+    <string name="notif_channel_test_ride_requests_v2">Incoming Test Ride Requests</string>
+    <string name="notif_channel_live_tracking">Live Rider Trip Tracking</string>
     <string name="notif_channel_chat">Driver &amp; Rider Chat</string>
     <string name="notif_channel_sos">Safety &amp; Emergency Alerts</string>
     <string name="notif_channel_general">Service &amp; Admin Notices</string>

@@ -20,6 +20,9 @@ data class ClientPreferences(
     val language: AppLanguage = AppLanguage.EN,
     val darkThemeMode: String = "system", // system, light, dark
     val lowNetworkMode: Boolean = false,
+    val rideRequestSoundEnabled: Boolean = true,
+    val rideRequestVibrationEnabled: Boolean = true,
+    val notificationsEnabled: Boolean = true,
     val draftPickupId: String = "",
     val draftDestinationId: String = "",
     val draftCategory: String = "toto",
@@ -33,6 +36,9 @@ class PreferencesRepository(private val context: Context) {
     private val keyLang = stringPreferencesKey("preferred_language")
     private val keyTheme = stringPreferencesKey("dark_theme_mode")
     private val keyLowNet = booleanPreferencesKey("low_network_mode")
+    private val keyRideSound = booleanPreferencesKey("ride_request_sound_enabled")
+    private val keyRideVibration = booleanPreferencesKey("ride_request_vibration_enabled")
+    private val keyNotificationsEnabled = booleanPreferencesKey("notifications_enabled")
     private val keyDraftPickup = stringPreferencesKey("draft_pickup_id")
     private val keyDraftDest = stringPreferencesKey("draft_dest_id")
     private val keyDraftCat = stringPreferencesKey("draft_category")
@@ -47,6 +53,9 @@ class PreferencesRepository(private val context: Context) {
             language = AppLanguage.fromCode(prefs[keyLang]),
             darkThemeMode = prefs[keyTheme] ?: "system",
             lowNetworkMode = prefs[keyLowNet] ?: false,
+            rideRequestSoundEnabled = prefs[keyRideSound] ?: true,
+            rideRequestVibrationEnabled = prefs[keyRideVibration] ?: true,
+            notificationsEnabled = prefs[keyNotificationsEnabled] ?: true,
             draftPickupId = prefs[keyDraftPickup] ?: "",
             draftDestinationId = prefs[keyDraftDest] ?: "",
             draftCategory = prefs[keyDraftCat] ?: "toto",
@@ -101,6 +110,18 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun setLowNetworkMode(enabled: Boolean) {
         context.golocalPrefs.edit { it[keyLowNet] = enabled }
+    }
+
+    suspend fun setRideRequestSoundEnabled(enabled: Boolean) {
+        context.golocalPrefs.edit { it[keyRideSound] = enabled }
+    }
+
+    suspend fun setRideRequestVibrationEnabled(enabled: Boolean) {
+        context.golocalPrefs.edit { it[keyRideVibration] = enabled }
+    }
+
+    suspend fun setNotificationsEnabled(enabled: Boolean) {
+        context.golocalPrefs.edit { it[keyNotificationsEnabled] = enabled }
     }
 
     suspend fun setCustomerOnboarded(done: Boolean) {

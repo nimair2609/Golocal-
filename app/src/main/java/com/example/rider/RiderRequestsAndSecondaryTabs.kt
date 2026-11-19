@@ -61,11 +61,15 @@ import kotlin.math.roundToInt
 @Composable
 fun RiderRequestsTab(
     profile: DriverProfile,
-    driverViewModel: DriverViewModel
+    driverViewModel: DriverViewModel,
+    currentLat: Double = 22.9041,
+    currentLng: Double = 88.3976
 ) {
     val openRequests by driverViewModel.openRequests.collectAsStateWithLifecycle()
+    val openRequestsError by driverViewModel.openRequestsError.collectAsStateWithLifecycle()
     val myOffers by driverViewModel.myOffers.collectAsStateWithLifecycle()
     var proposalTarget by remember { mutableStateOf<Booking?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Column(
         modifier = Modifier
@@ -81,6 +85,23 @@ fun RiderRequestsTab(
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold
         )
+
+        if (!openRequestsError.isNullOrBlank()) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("rider_requests_error_card")
+            ) {
+                Text(
+                    text = "Request listener error: $openRequestsError",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
 
         if (!profile.isOnline) {
             Surface(
@@ -104,6 +125,11 @@ fun RiderRequestsTab(
         } else {
             openRequests.forEach { booking ->
                 val passengerFirst = booking.customerName.trim().substringBefore(" ").ifBlank { "Passenger" }
+                val netEstimate = com.example.domain.FareCalculator.estimateDriverNetEarningsInr(
+                    grossFareInr = booking.estimatedFareInr,
+                    gstPercent = booking.gstPercent,
+                    commissionPercent = booking.commissionPercent
+                ).toInt()
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surface,
@@ -117,13 +143,32 @@ fun RiderRequestsTab(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
-                            Text(
-                                text = "Est. ₹${booking.estimatedFareInr.toInt()}",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontFamily = JetBrainsMono,
-                                color = GolocalPrimaryBlue
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
+                                Text(
+                                    text = "#${booking.id.take(8)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontFamily = JetBrainsMono,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "Est. ₹${booking.estimatedFareInr.toInt()}",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontFamily = JetBrainsMono,
+                                    color = GolocalPrimaryBlue
+                                )
+                                Text(
+                                    text = "Net ~₹$netEstimate",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = JetBrainsMono,
+                                    color = GolocalSuccess
+                                )
+                            }
                         }
                         Text("${booking.pickupLabel} → ${booking.destinationLabel}", style = MaterialTheme.typography.titleSmall)
                         Text(
@@ -136,18 +181,38 @@ fun RiderRequestsTab(
                             style = MaterialTheme.typography.labelMedium,
                             color = GolocalSuccess
                         )
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                onClick = { driverViewModel.rejectRequest(booking.id) },
-                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                onClick = {
+                                    driverViewModel.rejectRequest(booking.id)
+                                    com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, booking.id)
+                                },
+                                modifier = Modifier.weight(0.9f).heightIn(min = 48.dp)
                             ) {
                                 Text("Decline", color = GolocalError)
                             }
-                            Button(
+                            OutlinedButton(
                                 onClick = { proposalTarget = booking },
-                                modifier = Modifier.weight(1.4f).heightIn(min = 48.dp)
+                                modifier = Modifier.weight(1.0f).heightIn(min = 48.dp)
                             ) {
-                                Text("Propose Fare")
+                                Text("Offer")
+                            }
+                            Button(
+                                onClick = {
+                                    com.example.notifications.NotificationHelper.cancelRideRequestNotification(context, booking.id)
+                                    driverViewModel.acceptRideDirectly(
+                                        booking = booking,
+                                        agreedFareInr = booking.estimatedFareInr,
+                                        lat = currentLat,
+                                        lng = currentLng
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1.1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("requests_tab_accept_${booking.id}")
+                            ) {
+                                Text("Accept Ride")
                             }
                         }
                     }
@@ -617,12 +682,14 @@ fun RiderNotificationsTab(
 fun RiderProfileTab(
     profile: DriverProfile,
     sessionViewModel: AppSessionViewModel,
+    driverViewModel: DriverViewModel? = null,
     onOpenEarnings: () -> Unit = {},
     onOpenNotifications: () -> Unit = {}
 ) {
     RiderProfileScreen(
         profile = profile,
         sessionViewModel = sessionViewModel,
+        driverViewModel = driverViewModel,
         onOpenEarnings = onOpenEarnings,
         onOpenNotifications = onOpenNotifications
     )

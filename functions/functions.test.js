@@ -139,6 +139,8 @@ test("clickActionForApp and channelForPayload route role and Test Rider isolatio
   assert.equal(clickActionForApp("rider"), "com.aistudio.golocal.OPEN_RIDER");
   assert.equal(clickActionForApp("admin"), "com.aistudio.golocal.OPEN_ADMIN");
   assert.equal(channelForPayload({ type: "booking_assigned", isTestRide: true }), "golocal_test_rides");
+  assert.equal(channelForPayload({ type: "test_request", isTestRide: true }), "golocal_test_ride_requests_v2");
+  assert.equal(channelForPayload({ type: "new_ride_request", isTestRide: false }), "golocal_ride_requests_v2");
   assert.equal(channelForPayload({ type: "sos_alert", isTestRide: false }), "golocal_sos");
   assert.equal(channelForPayload({ type: "chat", isTestRide: false }), "golocal_chat");
 });
@@ -220,7 +222,8 @@ test("Test Ride isolation: test booking search notifies ONLY approved online tes
   assert.ok(sentTokens.includes("tok_c"));
   assert.ok(sentTokens.includes("tok_test_r"));
   assert.ok(!sentTokens.includes("tok_prod"), "Commercial driver must NEVER receive Test Ride push");
-  assert.equal(messaging.sent[1].android.notification.channelId, "golocal_test_rides");
+  assert.equal(messaging.sent[1].android.notification.channelId, "golocal_test_ride_requests_v2");
+  assert.equal(messaging.sent[1].android.notification.sound, "golocal_ride_request");
   assert.equal(messaging.sent[1].data.isTestRide, "true");
 });
 

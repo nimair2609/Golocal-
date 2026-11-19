@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
@@ -39,6 +40,7 @@ fun AdminBookingsModule(adminViewModel: AdminViewModel) {
     var statusFilter by remember { mutableStateOf("all") }
     var inspectingChatBooking by remember { mutableStateOf<Booking?>(null) }
     var appealDecisionTarget by remember { mutableStateOf<Pair<CancellationAppeal, String>?>(null) }
+    var commercialOtpOverrideTarget by remember { mutableStateOf<Booking?>(null) }
 
     Column(
         modifier = Modifier
@@ -90,13 +92,25 @@ fun AdminBookingsModule(adminViewModel: AdminViewModel) {
                                 Text("Customer: ${b.customerName} • Driver: ${b.assignedDriverName.ifBlank { "Unassigned" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("Category: ${b.vehicleCategory.uppercase()} • Type: ${b.bookingType} • Payment: ${b.paymentMethod.uppercase()} (${b.paymentStatus})", style = MaterialTheme.typography.labelSmall)
                                 if (b.assignedDriverId.isNotBlank()) {
-                                    TextButton(
-                                        onClick = {
-                                            adminViewModel.inspectBookingChat(b.id)
-                                            inspectingChatBooking = b
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(
+                                            onClick = {
+                                                adminViewModel.inspectBookingChat(b.id)
+                                                inspectingChatBooking = b
+                                            }
+                                        ) {
+                                            Text("Inspect Chat Archive")
                                         }
-                                    ) {
-                                        Text("Inspect Chat Archive")
+                                        if (!b.isTestRide && !b.testMode && b.status == "arrived") {
+                                            OutlinedButton(
+                                                onClick = { commercialOtpOverrideTarget = b },
+                                                modifier = Modifier
+                                                    .heightIn(min = 48.dp)
+                                                    .testTag("admin_override_commercial_otp_${b.id}")
+                                            ) {
+                                                Text("Override OTP & Start")
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -306,6 +320,42 @@ fun AdminBookingsModule(adminViewModel: AdminViewModel) {
                 ) { Text("Confirm") }
             },
             dismissButton = { TextButton(onClick = { appealDecisionTarget = null }) { Text("Cancel") } }
+        )
+    }
+
+    commercialOtpOverrideTarget?.let { target ->
+        var reason by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { commercialOtpOverrideTarget = null },
+            title = { Text("Override Commercial Pickup OTP") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Audited admin action: marks booking #${target.id.take(8)} (${target.pickupLabel} → ${target.destinationLabel}) as in_progress without passenger OTP.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Mandatory Audit Reason (min 5 chars) *") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("admin_commercial_otp_override_reason")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = reason.trim().length >= 5,
+                    onClick = {
+                        adminViewModel.overrideCommercialOtpAndStartRide(target, reason.trim())
+                        commercialOtpOverrideTarget = null
+                    },
+                    modifier = Modifier.testTag("admin_commercial_otp_override_confirm")
+                ) { Text("Override & Start") }
+            },
+            dismissButton = { TextButton(onClick = { commercialOtpOverrideTarget = null }) { Text("Cancel") } }
         )
     }
 }

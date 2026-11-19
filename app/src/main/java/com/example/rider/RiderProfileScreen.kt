@@ -21,21 +21,18 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.GppGood
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,25 +50,24 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.model.DriverProfile
+import com.example.data.tracking.RiderLocationForegroundService
 import com.example.domain.ExpiryStatus
 import com.example.domain.RequiredDocumentsCatalog
-import com.example.notifications.NotificationHelper
 import com.example.shared.CircularBackButton
-import com.example.shared.LocationCoordinator
 import com.example.shared.ProfileHeroCard
 import com.example.shared.SettingsNavigationRow
 import com.example.shared.SettingsSectionGroup
 import com.example.shared.maskPhoneNumber
-import com.example.ui.auth.VerifiedMobileBadgeCard
 import com.example.ui.auth.signOut
 import com.example.ui.components.GolocalStatusBadge
-import com.example.ui.components.LanguageSelectorRow
 import com.example.ui.theme.GolocalError
+import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.GolocalSuccess
 import com.example.updater.AppUpdateDialogHost
 import com.example.updater.CheckForAppUpdatesCard
 import com.example.updater.rememberAppUpdateController
 import com.example.viewmodel.AppSessionViewModel
+import com.example.viewmodel.DriverViewModel
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -79,15 +75,16 @@ private enum class RiderProfileSubScreen {
     MAIN,
     VEHICLE_INFO,
     KYC_DOCS,
-    PRIVACY_PERMISSIONS,
+    SAFETY_EMERGENCY,
     PREFERENCES,
-    UPDATES_POLICIES
+    SUPPORT_LEGAL
 }
 
 @Composable
 fun RiderProfileScreen(
     profile: DriverProfile,
     sessionViewModel: AppSessionViewModel,
+    driverViewModel: DriverViewModel? = null,
     onOpenEarnings: () -> Unit = {},
     onOpenNotifications: () -> Unit = {}
 ) {
@@ -95,12 +92,19 @@ fun RiderProfileScreen(
     val scope = rememberCoroutineScope()
     val prefs by sessionViewModel.clientPreferences.collectAsStateWithLifecycle()
     val platformSettings by sessionViewModel.platformSettings.collectAsStateWithLifecycle()
+    val privateEmergency by sessionViewModel.privateEmergencyContactState.collectAsStateWithLifecycle()
+    val gps by sessionViewModel.gpsLocation.collectAsStateWithLifecycle()
     val updateController = rememberAppUpdateController(platformSettings = platformSettings)
 
     var subScreen by remember { mutableStateOf(RiderProfileSubScreen.MAIN) }
     var showSupportDialog by remember { mutableStateOf(false) }
+    var supportDialogTitle by remember { mutableStateOf("Rider Partner Support") }
+    var supportDialogPrefix by remember { mutableStateOf("[Rider Support]") }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    val emergencyContacts = remember(privateEmergency) {
+        privateEmergency?.effectiveContacts().orEmpty()
+    }
     val compliance = remember(profile) {
         RequiredDocumentsCatalog.assessDriverCompliance(
             profile = profile,
@@ -128,11 +132,11 @@ fun RiderProfileScreen(
                 CircularBackButton(onClick = { subScreen = RiderProfileSubScreen.MAIN })
                 Text(
                     text = when (subScreen) {
-                        RiderProfileSubScreen.VEHICLE_INFO -> "Vehicle & Settlement"
+                        RiderProfileSubScreen.VEHICLE_INFO -> "Account & Settlement"
                         RiderProfileSubScreen.KYC_DOCS -> "KYC & Expiry Status"
-                        RiderProfileSubScreen.PRIVACY_PERMISSIONS -> "Privacy & Permissions"
-                        RiderProfileSubScreen.PREFERENCES -> "Language & Display"
-                        RiderProfileSubScreen.UPDATES_POLICIES -> "Updates & Partner Rules"
+                        RiderProfileSubScreen.SAFETY_EMERGENCY -> "Safety & Emergency Contacts"
+                        RiderProfileSubScreen.PREFERENCES -> "Alerts, Sound & Preferences"
+                        RiderProfileSubScreen.SUPPORT_LEGAL -> "Help, Support & Policies"
                         RiderProfileSubScreen.MAIN -> ""
                     },
                     style = MaterialTheme.typography.headlineSmall,
@@ -142,26 +146,10 @@ fun RiderProfileScreen(
 
             when (subScreen) {
                 RiderProfileSubScreen.VEHICLE_INFO -> {
-                    SettingsSectionGroup(title = "Registered Vehicle") {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "${profile.vehicleCategory.uppercase()} • ${profile.vehicleModel.ifBlank { "Standard Partner Vehicle" }}",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text("Plate Number: ${profile.vehicleRegNumber}", style = MaterialTheme.typography.bodyMedium)
-                            Text("Operating Area: ${profile.district} ${profile.block}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Driving Licence: ${profile.drivingLicenceNumber}", style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                text = "Settlement UPI / Bank: ${profile.settlementUpiOrBank.ifBlank { "Not configured" }}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                    VerifiedMobileBadgeCard(fallbackAccountPhone = profile.phone)
+                    RiderAccountEditSubScreen(
+                        profile = profile,
+                        driverViewModel = driverViewModel
+                    )
                 }
 
                 RiderProfileSubScreen.KYC_DOCS -> {
@@ -198,24 +186,23 @@ fun RiderProfileScreen(
                     }
                 }
 
-                RiderProfileSubScreen.PRIVACY_PERMISSIONS -> {
-                    SettingsSectionGroup(title = "Device Permissions") {
-                        val hasLoc = LocationCoordinator.hasLocationPermission(context)
-                        val hasNotif = NotificationHelper.hasNotificationPermission(context)
-                        SettingsNavigationRow(
-                            icon = Icons.Filled.GppGood,
-                            title = "Location Permission",
-                            subtitle = if (hasLoc) "Granted for live GPS dispatch" else "Tap to allow in Android settings",
-                            onClick = { LocationCoordinator.openAppPermissionSettings(context) }
-                        )
-                        SettingsNavigationRow(
-                            icon = Icons.Filled.Notifications,
-                            title = "Notifications Permission",
-                            subtitle = if (hasNotif) "Enabled for ride requests & alerts" else "Tap to enable in Android settings",
-                            showDivider = false,
-                            onClick = { LocationCoordinator.openAppPermissionSettings(context) }
-                        )
-                    }
+                RiderProfileSubScreen.SAFETY_EMERGENCY -> {
+                    RiderSafetySubScreen(
+                        ownVerifiedMobileE164 = profile.phone,
+                        contacts = emergencyContacts,
+                        platformSettings = platformSettings,
+                        onSaveContacts = { list -> sessionViewModel.saveEmergencyContacts(list) },
+                        onTriggerSos = driverViewModel?.let { vm ->
+                            {
+                                vm.triggerSos(
+                                    bookingId = "",
+                                    lat = gps.lat ?: 0.0,
+                                    lng = gps.lng ?: 0.0,
+                                    notes = "SOS triggered from Rider Safety Settings"
+                                )
+                            }
+                        }
+                    )
                     OutlinedButton(
                         onClick = { showDeleteDialog = true },
                         modifier = Modifier
@@ -229,64 +216,27 @@ fun RiderProfileScreen(
                 }
 
                 RiderProfileSubScreen.PREFERENCES -> {
-                    SettingsSectionGroup(title = "Language / ভাষা / भाषा") {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            LanguageSelectorRow(
-                                selected = prefs.language,
-                                onSelect = { sessionViewModel.setLanguage(it) }
-                            )
-                        }
-                    }
-                    SettingsSectionGroup(title = "Theme Appearance") {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            listOf("system" to "System", "light" to "Light", "dark" to "Dark").forEach { (mode, label) ->
-                                FilterChip(
-                                    selected = prefs.darkThemeMode == mode,
-                                    onClick = { sessionViewModel.setThemeMode(mode) },
-                                    label = { Text(label) }
-                                )
-                            }
-                        }
-                    }
-                    SettingsSectionGroup(title = "Connectivity") {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Low-Network Mode", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    text = "Lightweight map mode for highway & rural routes",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = prefs.lowNetworkMode,
-                                onCheckedChange = { sessionViewModel.setLowNetworkMode(it) }
-                            )
-                        }
-                    }
+                    RiderPreferencesSubScreen(
+                        prefs = prefs,
+                        sessionViewModel = sessionViewModel
+                    )
                 }
 
-                RiderProfileSubScreen.UPDATES_POLICIES -> {
+                RiderProfileSubScreen.SUPPORT_LEGAL -> {
                     CheckForAppUpdatesCard(platformSettings = platformSettings, controller = updateController)
-                    SettingsSectionGroup(title = "Partner Operating Rules") {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("GoLocal by NR Next", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = "Partners keep all fare offers inside the regulated admin band, collect the 4-digit Trip PIN before starting any ride, and communicate strictly through privacy-safe channels.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    RiderSupportAndLegalSubScreen(
+                        platformSettings = platformSettings,
+                        onOpenSupportDialog = {
+                            supportDialogTitle = "Rider Partner Support"
+                            supportDialogPrefix = "[Rider Support]"
+                            showSupportDialog = true
+                        },
+                        onOpenReportBugDialog = {
+                            supportDialogTitle = "Report a Problem"
+                            supportDialogPrefix = "[Rider Bug Report]"
+                            showSupportDialog = true
                         }
-                    }
+                    )
                 }
 
                 RiderProfileSubScreen.MAIN -> Unit
@@ -302,7 +252,7 @@ fun RiderProfileScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "Account settings",
+                text = "Settings & Partner Profile",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.testTag("rider_account_settings_title")
@@ -319,10 +269,10 @@ fun RiderProfileScreen(
                 statTwoValue = String.format(Locale.US, "%.1f ★", profile.ratingAvg)
             )
 
-            SettingsSectionGroup {
+            SettingsSectionGroup(title = "Account & Payouts") {
                 SettingsNavigationRow(
                     icon = Icons.Filled.DirectionsCar,
-                    title = "Vehicle & settlement",
+                    title = "Account, profile & settlement UPI",
                     subtitle = "${profile.vehicleModel.ifBlank { profile.vehicleCategory.uppercase() }} • ${profile.settlementUpiOrBank.ifBlank { "Add UPI" }}",
                     testTag = "rider_settings_vehicle_row",
                     onClick = { subScreen = RiderProfileSubScreen.VEHICLE_INFO }
@@ -342,44 +292,51 @@ fun RiderProfileScreen(
                 )
                 SettingsNavigationRow(
                     icon = Icons.Filled.Notifications,
-                    title = "Notifications & alerts",
+                    title = "Notifications & alerts inbox",
                     subtitle = "KYC approvals, payouts & system updates",
                     showDivider = false,
                     onClick = onOpenNotifications
                 )
             }
 
-            SettingsSectionGroup {
+            SettingsSectionGroup(title = "Preferences, Safety & Support") {
                 SettingsNavigationRow(
-                    icon = Icons.Filled.Shield,
-                    title = "Privacy & device permissions",
-                    subtitle = "Location, notifications & account controls",
-                    iconTint = GolocalSuccess,
-                    onClick = { subScreen = RiderProfileSubScreen.PRIVACY_PERMISSIONS }
-                )
-                SettingsNavigationRow(
-                    icon = Icons.Filled.Language,
-                    title = "Language, theme & low-network",
-                    subtitle = "${prefs.language.displayLabel} • ${prefs.darkThemeMode.replaceFirstChar { it.uppercase() }}",
+                    icon = Icons.Filled.Tune,
+                    title = "Sound, vibration, language & theme",
+                    subtitle = "Ride chime: ${if (prefs.rideRequestSoundEnabled) "On" else "Muted"} • Vib: ${if (prefs.rideRequestVibrationEnabled) "On" else "Off"}",
+                    iconTint = GolocalPrimaryBlue,
+                    testTag = "rider_settings_preferences_row",
                     onClick = { subScreen = RiderProfileSubScreen.PREFERENCES }
                 )
                 SettingsNavigationRow(
-                    icon = Icons.Filled.SystemUpdate,
-                    title = "App updates & policies",
-                    subtitle = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                    onClick = { subScreen = RiderProfileSubScreen.UPDATES_POLICIES }
+                    icon = Icons.Filled.Shield,
+                    title = "Safety & emergency contacts",
+                    subtitle = if (emergencyContacts.isEmpty()) "Add at least 2 trusted contacts" else "${emergencyContacts.size}/5 private contacts • SOS",
+                    iconTint = if (emergencyContacts.size >= 2) GolocalSuccess else GolocalPrimaryBlue,
+                    testTag = "rider_settings_safety_row",
+                    onClick = { subScreen = RiderProfileSubScreen.SAFETY_EMERGENCY }
                 )
                 SettingsNavigationRow(
                     icon = Icons.Filled.SupportAgent,
-                    title = "Rider partner support",
-                    subtitle = platformSettings?.helplineNumber ?: "KYC, trip & payout helpline",
+                    title = "Help, report a problem & policies",
+                    subtitle = platformSettings?.helplineNumber?.ifBlank { "FAQ, Support & Legal" } ?: "FAQ, Support & Legal",
+                    testTag = "rider_settings_support_row",
+                    onClick = { subScreen = RiderProfileSubScreen.SUPPORT_LEGAL }
+                )
+                SettingsNavigationRow(
+                    icon = Icons.Filled.SystemUpdate,
+                    title = "App version & updates",
+                    subtitle = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                     showDivider = false,
-                    onClick = { showSupportDialog = true }
+                    onClick = { subScreen = RiderProfileSubScreen.SUPPORT_LEGAL }
                 )
             }
 
             OutlinedButton(
-                onClick = { signOut(scope = scope, context = context) },
+                onClick = {
+                    RiderLocationForegroundService.stop(context)
+                    signOut(scope = scope, context = context)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
@@ -404,20 +361,30 @@ fun RiderProfileScreen(
         var issue by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showSupportDialog = false },
-            title = { Text("Rider Partner Support") },
+            title = { Text(supportDialogTitle) },
             text = {
                 OutlinedTextField(
                     value = issue,
                     onValueChange = { issue = it },
-                    label = { Text("Describe payout, KYC, or trip issue") },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("Describe payout, KYC, sound, or trip issue") },
+                    minLines = 3,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rider_support_issue_input")
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    sessionViewModel.submitSupportOrDeletion("rider_support", issue)
-                    showSupportDialog = false
-                }) { Text("Submit") }
+                Button(
+                    enabled = issue.trim().length >= 4,
+                    onClick = {
+                        sessionViewModel.submitSupportOrDeletion(
+                            requestType = "general_support",
+                            details = "$supportDialogPrefix ${issue.trim()}"
+                        )
+                        showSupportDialog = false
+                    },
+                    modifier = Modifier.testTag("rider_support_submit_button")
+                ) { Text("Submit") }
             },
             dismissButton = { TextButton(onClick = { showSupportDialog = false }) { Text("Cancel") } }
         )

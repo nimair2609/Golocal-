@@ -94,15 +94,42 @@ data class UserAccount(
     }
 }
 
+@Keep
+@IgnoreExtraProperties
+data class EmergencyContactEntry(
+    val id: String = "",
+    val name: String = "",
+    val phone: String = "",
+    val relationship: String = "Emergency Contact"
+)
+
 @IgnoreExtraProperties
 data class PrivateEmergencyContact(
     @DocumentId val id: String = "",
     val userId: String = "",
     val emergencyContactNumber: String = "",
     val relationshipNote: String = "Primary Emergency Contact",
+    val contacts: List<EmergencyContactEntry> = emptyList(),
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
-)
+) {
+    fun effectiveContacts(): List<EmergencyContactEntry> {
+        val cleaned = contacts.filter { it.phone.isNotBlank() }
+        if (cleaned.isNotEmpty()) return cleaned
+        return if (emergencyContactNumber.isNotBlank()) {
+            listOf(
+                EmergencyContactEntry(
+                    id = "primary",
+                    name = relationshipNote.ifBlank { "Primary Contact" },
+                    phone = emergencyContactNumber,
+                    relationship = relationshipNote.ifBlank { "Emergency Contact" }
+                )
+            )
+        } else {
+            emptyList()
+        }
+    }
+}
 
 @IgnoreExtraProperties
 data class CustomerProfile(
@@ -283,6 +310,13 @@ data class Booking(
     @get:PropertyName("test_otp_expires_at_ms")
     @PropertyName("test_otp_expires_at_ms")
     val testOtpExpiresAtMs: Long = 0L,
+    @get:PropertyName("otp_status")
+    @PropertyName("otp_status")
+    val otpStatus: String = "",
+    @get:PropertyName("otp_expires_at_ms")
+    @PropertyName("otp_expires_at_ms")
+    val otpExpiresAtMs: Long = 0L,
+    val requestExpiresAtMs: Long = 0L,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -583,6 +617,7 @@ data class TestRideOtpChallenge(
     val verifiedByUid: String = "",
     val attempts: Long = 0L,
     val maxAttempts: Long = 5L,
+    val lastAttemptAtMs: Long = 0L,
     val expiresAt: Timestamp? = null,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null

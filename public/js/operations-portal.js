@@ -8,7 +8,8 @@ import {
   query,
   orderBy,
   limit,
-  serverTimestamp
+  serverTimestamp,
+  Timestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
   ref as rtdbRef,
@@ -101,6 +102,18 @@ function updateDistrictOptions() {
   }
 }
 
+async function generateSixDigitOtpAndHash(bookingId) {
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  const otpPlaintext = String(100000 + (arr[0] % 900000));
+  const payload = new TextEncoder().encode(`${String(bookingId).trim()}:${otpPlaintext}`);
+  const digest = await crypto.subtle.digest("SHA-256", payload);
+  const otpHash = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return { otpPlaintext, otpHash };
+}
+
 async function assignPartnerToBooking(booking, driver) {
   if (!currentUser || !booking || !driver) return;
   const bookingRef = doc(db, "bookings", booking.id);
@@ -108,7 +121,9 @@ async function assignPartnerToBooking(booking, driver) {
     Number(booking.minPermittedFareInr || 0),
     Number(booking.agreedFareInr || booking.estimatedFareInr || 0)
   );
-  const generatedPin = booking.tripPin || String(Math.floor(1000 + Math.random() * 9000));
+  const { otpPlaintext, otpHash } = await generateSixDigitOtpAndHash(booking.id);
+  const expiresAtMs = Date.now() + 600 * 1000;
+  const expiresAtTs = Timestamp.fromMillis(expiresAtMs);
   const vehicleLabel = [driver.vehicleCategory?.toUpperCase(), driver.vehicleModel, driver.maskedPlate]
     .filter(Boolean)
     .join(" • ");
@@ -119,7 +134,8 @@ async function assignPartnerToBooking(booking, driver) {
     assignedDriverName: driver.displayName,
     assignedVehicleLabel: vehicleLabel,
     agreedFareInr: lockedFare,
-    tripPin: generatedPin,
+    otp_status: "pending",
+    otp_expires_at_ms: expiresAtMs,
     assignedByOpsUid: currentUser.uid,
     opsAssignmentNote: `Assigned from Operations Portal (${activeRole})`,
     updatedAt: serverTimestamp()
@@ -132,9 +148,41 @@ async function assignPartnerToBooking(booking, driver) {
     offerId: "",
     lockedFareInr: lockedFare,
     status: "active",
+    is_test_ride: Boolean(booking.is_test_ride || booking.test_mode),
+    assignedByUid: currentUser.uid,
+    assignedByRole: activeRole === PORTAL_ROLES.OWNER_ADMIN ? "admin" : "ops_staff",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   }, { merge: true });
+
+  await setDoc(doc(db, "ride_otps", booking.id), {
+    bookingId: booking.id,
+    customerId: booking.customerId,
+    otpHash,
+    submittedHash: "",
+    used: false,
+    overridden: false,
+    overrideReason: "",
+    overriddenByUid: "",
+    verifiedByUid: "",
+    attempts: 0,
+    maxAttempts: 5,
+    lastAttemptAtMs: 0,
+    expiresAt: expiresAtTs,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  });
+
+  await setDoc(doc(db, "ride_otp_secrets", booking.id), {
+    bookingId: booking.id,
+    customerId: booking.customerId,
+    otpPlaintext,
+    isTestRide: Boolean(booking.is_test_ride || booking.test_mode),
+    status: "pending",
+    expiresAt: expiresAtTs,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  });
 
   await addDoc(collection(db, "audit_logs"), {
     actorId: currentUser.uid,

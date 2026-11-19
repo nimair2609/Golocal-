@@ -129,6 +129,23 @@ object FareCalculator {
         )
     }
 
+    fun estimateDriverNetEarningsInr(
+        grossFareInr: Double,
+        gstPercent: Double,
+        commissionPercent: Double
+    ): Double = calculateSettlement(grossFareInr, gstPercent, commissionPercent).netDriverEarningsInr
+
+    fun isCategoryCompatible(driverCategory: String, bookingCategory: String): Boolean {
+        val drv = driverCategory.trim().lowercase()
+        val req = bookingCategory.trim().lowercase()
+        if (drv.isBlank() || req.isBlank()) return true
+        if (drv == req) return true
+        return when (req) {
+            "outstation", "scheduled" -> drv == "cab"
+            else -> false
+        }
+    }
+
     fun isValidTransition(fromStatus: String, toStatus: String): Boolean {
         return when (fromStatus) {
             "searching" -> toStatus in setOf("assigned", "cancelled")

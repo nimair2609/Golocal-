@@ -62,6 +62,7 @@ import com.example.data.model.UiState
 import com.example.data.repository.CommunicationRepository
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
+import com.example.data.tracking.RiderLocationForegroundService
 import com.example.notifications.NotificationDeepLinkTarget
 import com.example.notifications.NotificationHelper
 import com.example.shared.ExperienceMode
@@ -301,6 +302,8 @@ fun RiderAuthenticatedShell(
             }
         }
 
+        var previouslyAlertedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
         LaunchedEffect(
             currentUserId,
             inTestRiderMode,
@@ -311,6 +314,11 @@ fun RiderAuthenticatedShell(
             activeAssignedBooking?.id,
             activeAssignedBooking?.status
         ) {
+            val isOnlineForMode = if (inTestRiderMode) {
+                testRiderProfile?.isOnline == true && testRiderProfile?.status == "approved"
+            } else {
+                loadedProfile?.isOnline == true && loadedProfile.verificationStatus == "verified"
+            }
             val shouldTrackGps = if (inTestRiderMode) {
                 val tr = testRiderProfile
                 val hasActiveTest = activeAssignedBooking?.let { it.isTestRide || it.testMode } == true
@@ -321,6 +329,13 @@ fun RiderAuthenticatedShell(
                         activeAssignedBooking != null
                     )
             }
+            RiderLocationForegroundService.syncTracking(
+                context = context,
+                driverId = currentUserId,
+                isOnline = isOnlineForMode,
+                activeBooking = activeAssignedBooking,
+                isTestMode = inTestRiderMode
+            )
             if (shouldTrackGps && LocationCoordinator.resolveAccessState(context) == LocationAccessState.GRANTED_READY) {
                 val intervalMs = if (activeAssignedBooking != null) 2_500L else 4_000L
                 LocationCoordinator.observeLocationUpdates(context, intervalMs = intervalMs)
@@ -341,6 +356,51 @@ fun RiderAuthenticatedShell(
                     lastLng = gps.lng ?: 0.0
                 )
             }
+        }
+
+        LaunchedEffect(
+            openRequests,
+            inTestRiderMode,
+            loadedProfile?.isOnline,
+            loadedProfile?.verificationStatus,
+            activeAssignedBooking?.id,
+            prefs.notificationsEnabled,
+            prefs.rideRequestSoundEnabled,
+            prefs.rideRequestVibrationEnabled
+        ) {
+            val currentIds = openRequests.map { it.id }.toSet()
+            val clearedIds = previouslyAlertedIds - currentIds
+            clearedIds.forEach { NotificationHelper.cancelRideRequestNotification(context, it) }
+
+            val canAlert = !inTestRiderMode &&
+                loadedProfile?.isOnline == true &&
+                loadedProfile.verificationStatus == "verified" &&
+                activeAssignedBooking == null
+
+            if (!canAlert || !prefs.notificationsEnabled) {
+                currentIds.forEach { NotificationHelper.cancelRideRequestNotification(context, it) }
+                previouslyAlertedIds = currentIds
+                return@LaunchedEffect
+            }
+
+            openRequests.filter { it.id !in previouslyAlertedIds }.forEach { req ->
+                val netEst = com.example.domain.FareCalculator.estimateDriverNetEarningsInr(
+                    grossFareInr = req.estimatedFareInr,
+                    gstPercent = req.gstPercent,
+                    commissionPercent = req.commissionPercent
+                ).toInt()
+                NotificationHelper.displayRideRequestAlert(
+                    context = context,
+                    bookingId = req.id,
+                    title = "New ${req.vehicleCategory.uppercase()} Ride • Est. Net ₹$netEst",
+                    body = "${req.pickupLabel} -> ${req.destinationLabel} (${req.distanceKm} km)",
+                    isTestRide = false,
+                    soundEnabled = prefs.rideRequestSoundEnabled,
+                    vibrationEnabled = prefs.rideRequestVibrationEnabled,
+                    notificationsEnabled = prefs.notificationsEnabled
+                )
+            }
+            previouslyAlertedIds = currentIds
         }
 
         if (inTestRiderMode) {
@@ -521,7 +581,12 @@ fun RiderAuthenticatedShell(
                                                     onOpenRequests = { selectedTab = "requests" },
                                                     onOpenNotifications = { selectedTab = "notifications" }
                                                 )
-                                                "requests" -> RiderRequestsTab(profile = profile, driverViewModel = driverViewModel)
+                                                "requests" -> RiderRequestsTab(
+                                                    profile = profile,
+                                                    driverViewModel = driverViewModel,
+                                                    currentLat = gps.lat ?: 22.9041,
+                                                    currentLng = gps.lng ?: 88.3976
+                                                )
                                                 "earnings" -> RiderEarningsHistoryTab(profile = profile, driverViewModel = driverViewModel)
                                                 "notifications" -> RiderNotificationsTab(
                                                     sessionViewModel = sessionViewModel,
@@ -533,6 +598,7 @@ fun RiderAuthenticatedShell(
                                                 "profile" -> RiderProfileTab(
                                                     profile = profile,
                                                     sessionViewModel = sessionViewModel,
+                                                    driverViewModel = driverViewModel,
                                                     onOpenEarnings = { selectedTab = "earnings" },
                                                     onOpenNotifications = { selectedTab = "notifications" }
                                                 )

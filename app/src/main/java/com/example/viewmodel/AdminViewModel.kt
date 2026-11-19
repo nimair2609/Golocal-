@@ -725,6 +725,18 @@ class AdminViewModel(
         }
     }
 
+    fun overrideCommercialOtpAndStartRide(
+        booking: Booking,
+        reason: String,
+        actorRole: String = "admin"
+    ) {
+        viewModelScope.launch {
+            repository.adminOverrideCommercialOtpAndStartRide(booking, reason, actorRole)
+                .onSuccess { _message.value = "Audited override started Ride #${booking.id.take(6)} -> in_progress." }
+                .onFailure { _message.value = it.localizedMessage ?: "Commercial OTP override failed." }
+        }
+    }
+
     fun resetTestRide(booking: Booking, actorRole: String = "admin") {
         if (_simulatingBookingId.value == booking.id) stopMovementSimulation()
         autoAssignedIds.remove(booking.id)
