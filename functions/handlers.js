@@ -9,10 +9,25 @@
  * - Strict PII/OTP/PIN redaction in push & notification payloads
  */
 
+const crypto = require("node:crypto");
+
 const INVALID_TOKEN_CODES = new Set([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
 ]);
+
+function verifyHmacSha256Signature(rawBody, signatureHeader, secret) {
+  if (!secret || typeof secret !== "string" || !secret.trim()) return false;
+  if (!signatureHeader || typeof signatureHeader !== "string") return false;
+  const cleanSig = signatureHeader.trim().replace(/^sha256=/i, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(cleanSig)) return false;
+  const expected = crypto
+    .createHmac("sha256", secret.trim())
+    .update(Buffer.isBuffer(rawBody) ? rawBody : String(rawBody || ""))
+    .digest("hex")
+    .toLowerCase();
+  return crypto.timingSafeEqual(Buffer.from(cleanSig, "hex"), Buffer.from(expected, "hex"));
+}
 
 function normalizeAppVariant(roleOrApp) {
   const clean = String(roleOrApp || "customer").trim().toLowerCase();
@@ -857,6 +872,117 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     }
   }
 
+  async function handlePaymentWebhook({ rawBody, headers = {}, secret = "" }) {
+    if (!secret || !String(secret).trim()) {
+      return { statusCode: 503, body: { error: "PAYMENT_WEBHOOK_SECRET not configured" } };
+    }
+    const lowerHeaders = Object.fromEntries(
+      Object.entries(headers || {}).map(([k, v]) => [String(k).toLowerCase(), String(v || "")])
+    );
+    const sig = lowerHeaders["x-golocal-signature"] || lowerHeaders["x-razorpay-signature"] || "";
+    if (!verifyHmacSha256Signature(rawBody, sig, secret)) {
+      return { statusCode: 401, body: { error: "Invalid webhook signature" } };
+    }
+
+    let payload;
+    try {
+      const text = Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : String(rawBody || "{}");
+      payload = JSON.parse(text);
+    } catch (_) {
+      return { statusCode: 400, body: { error: "Invalid JSON payload" } };
+    }
+
+    const bookingId = String(payload.bookingId || payload.notes?.bookingId || "").trim();
+    const eventType = String(payload.event || payload.status || "").trim().toLowerCase();
+    const gatewayReference = String(payload.gatewayReference || payload.paymentId || payload.id || "").trim();
+
+    if (!bookingId || !/^[a-zA-Z0-9_-]{1,128}$/.test(bookingId)) {
+      return { statusCode: 400, body: { error: "Valid bookingId required" } };
+    }
+
+    const bookingRef = db.collection("bookings").doc(bookingId);
+    const bookingSnap = await bookingRef.get();
+    if (!bookingSnap.exists) {
+      return { statusCode: 404, body: { error: "Booking not found" } };
+    }
+    const booking = bookingSnap.data() || {};
+    if (booking.is_test_ride === true || booking.test_mode === true) {
+      return { statusCode: 403, body: { error: "Test/sample rides cannot be settled via commercial webhook" } };
+    }
+
+    const isPaidEvent = eventType === "payment.captured" || eventType === "paid" || eventType === "captured";
+    const isRefundEvent = eventType === "refund.processed" || eventType === "refunded";
+    if (!isPaidEvent && !isRefundEvent) {
+      return { statusCode: 200, body: { ok: true, ignored: true, event: eventType } };
+    }
+
+    const nextPaymentStatus = isRefundEvent ? "refunded" : "paid";
+    const paymentRef = db.collection("payments").doc(bookingId);
+    const paymentSnap = await paymentRef.get();
+    const existingPayment = paymentSnap.exists ? paymentSnap.data() || {} : {};
+
+    if (
+      existingPayment.status === nextPaymentStatus &&
+      booking.paymentStatus === nextPaymentStatus &&
+      (!gatewayReference || existingPayment.gatewayReference === gatewayReference)
+    ) {
+      return { statusCode: 200, body: { ok: true, idempotent: true, bookingId, status: nextPaymentStatus } };
+    }
+
+    const nowTs = fieldValue.serverTimestamp();
+    await paymentRef.set(
+      {
+        bookingId,
+        customerId: booking.customerId || "",
+        driverId: booking.assignedDriverId || "",
+        paymentMethod: booking.paymentMethod || "upi",
+        status: nextPaymentStatus,
+        gatewayReference: gatewayReference || existingPayment.gatewayReference || "",
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    );
+    await bookingRef.set(
+      {
+        paymentStatus: nextPaymentStatus,
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    );
+    await db.collection("audit_logs").doc(makeSafeDocId(`pay_wh_${bookingId}_${nextPaymentStatus}_${gatewayReference || "evt"}`)).set(
+      {
+        actorId: "system_payment_webhook",
+        actorEmail: "webhook@golocal.internal",
+        action: isRefundEvent ? "WEBHOOK_PAYMENT_REFUNDED" : "WEBHOOK_PAYMENT_CAPTURED",
+        targetCollection: "payments",
+        targetId: bookingId,
+        summary: `Verified webhook ${eventType} (${nextPaymentStatus}) ref=${gatewayReference || "n/a"}`,
+        createdAt: nowTs,
+      },
+      { merge: true }
+    );
+
+    if (booking.customerId) {
+      await sendToUserIds([booking.customerId], {
+        eventId: `pay_${nextPaymentStatus}_${bookingId}`,
+        dedupeKey: `pay_${nextPaymentStatus}_${bookingId}`,
+        type: "payment_update",
+        targetApp: "customer",
+        targetRole: "customer",
+        targetScreen: "bookings",
+        bookingId,
+        entityId: bookingId,
+        channelId: "golocal_rides",
+        title: isRefundEvent ? "Refund Processed" : "UPI Payment Verified",
+        body: isRefundEvent
+          ? `Refund verified for booking #${bookingId.slice(0, 8).toUpperCase()}.`
+          : `Online payment verified for booking #${bookingId.slice(0, 8).toUpperCase()}.`,
+      });
+    }
+
+    return { statusCode: 200, body: { ok: true, bookingId, status: nextPaymentStatus } };
+  }
+
   return {
     sendToUserIds,
     handleBookingWrite,
@@ -871,6 +997,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     handleCancellationAppealWrite,
     handleBusBookingWrite,
     runDailyDocumentExpiryReminder,
+    handlePaymentWebhook,
   };
 }
 
@@ -881,5 +1008,6 @@ module.exports = {
   channelForPayload,
   sanitizeNotificationText,
   makeSafeDocId,
+  verifyHmacSha256Signature,
   createNotificationHandlers,
 };

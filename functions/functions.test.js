@@ -35,8 +35,13 @@ function createFakeFirestore(seed = {}) {
           data: () => (val ? { ...val } : undefined),
         };
       },
-      async set(data) {
-        getColMap(colName).set(id, { ...data });
+      async set(data, opts) {
+        const col = getColMap(colName);
+        if (opts && opts.merge && col.has(id)) {
+          col.set(id, { ...col.get(id), ...data });
+        } else {
+          col.set(id, { ...data });
+        }
       },
       async create(data) {
         const col = getColMap(colName);
@@ -304,4 +309,47 @@ test("Sample Ride dispatch notifies ONLY online sample_riders on golocal_sample_
   assert.equal(messaging.sent.length, 2);
   assert.deepEqual(messaging.sent[1].tokens, ["tok_cust"]);
   assert.equal(messaging.sent[1].android.notification.channelId, "golocal_sample_rides");
+});
+
+test("Payment webhook verifies HMAC-SHA256 signature, updates payment & booking idempotently, and blocks test rides", async () => {
+  const crypto = require("node:crypto");
+  const secret = "test_wh_secret_123456";
+  const db = createFakeFirestore({
+    bookings: {
+      bk_real_1: { customerId: "cust1", assignedDriverId: "drv1", paymentMethod: "upi", paymentStatus: "pending_verification", is_test_ride: false },
+      bk_test_1: { customerId: "cust1", assignedDriverId: "test_driver_1", paymentMethod: "upi", paymentStatus: "pending", is_test_ride: true },
+    },
+    payments: {
+      bk_real_1: { bookingId: "bk_real_1", customerId: "cust1", driverId: "drv1", status: "pending_verification", paymentMethod: "upi" },
+    },
+    user_tokens: {
+      cust1_c_1: { userId: "cust1", appVariant: "customer", active: true, token: "tok_c1" },
+    },
+  });
+  const messaging = createMockMessaging();
+  const handlers = createNotificationHandlers({ db, messaging, fieldValue: fakeFieldValue });
+
+  const bodyStr = JSON.stringify({ event: "payment.captured", bookingId: "bk_real_1", gatewayReference: "pay_9911" });
+  const validSig = crypto.createHmac("sha256", secret).update(bodyStr).digest("hex");
+
+  const noSecretRes = await handlers.handlePaymentWebhook({ rawBody: bodyStr, headers: { "x-golocal-signature": validSig }, secret: "" });
+  assert.equal(noSecretRes.statusCode, 503);
+
+  const badSigRes = await handlers.handlePaymentWebhook({ rawBody: bodyStr, headers: { "x-golocal-signature": "0".repeat(64) }, secret });
+  assert.equal(badSigRes.statusCode, 401);
+
+  const okRes = await handlers.handlePaymentWebhook({ rawBody: bodyStr, headers: { "x-golocal-signature": `sha256=${validSig}` }, secret });
+  assert.equal(okRes.statusCode, 200);
+  assert.equal(okRes.body.status, "paid");
+  assert.equal(db.store.get("bookings").get("bk_real_1").paymentStatus, "paid");
+  assert.equal(db.store.get("payments").get("bk_real_1").gatewayReference, "pay_9911");
+
+  const dupRes = await handlers.handlePaymentWebhook({ rawBody: bodyStr, headers: { "x-golocal-signature": validSig }, secret });
+  assert.equal(dupRes.statusCode, 200);
+  assert.equal(dupRes.body.idempotent, true);
+
+  const testBody = JSON.stringify({ event: "payment.captured", bookingId: "bk_test_1", gatewayReference: "pay_test" });
+  const testSig = crypto.createHmac("sha256", secret).update(testBody).digest("hex");
+  const testRes = await handlers.handlePaymentWebhook({ rawBody: testBody, headers: { "x-golocal-signature": testSig }, secret });
+  assert.equal(testRes.statusCode, 403);
 });

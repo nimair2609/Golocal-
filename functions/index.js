@@ -12,6 +12,7 @@ const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onRequest } = require("firebase-functions/v2/https");
 const { createNotificationHandlers } = require("./handlers");
 
 initializeApp();
@@ -24,6 +25,20 @@ const handlers = createNotificationHandlers({
   db,
   messaging,
   fieldValue: FieldValue,
+});
+
+exports.paymentWebhook = onRequest({ cors: false }, async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const rawBody = req.rawBody || JSON.stringify(req.body || {});
+  const result = await handlers.handlePaymentWebhook({
+    rawBody,
+    headers: req.headers,
+    secret: process.env.PAYMENT_WEBHOOK_SECRET || "",
+  });
+  res.status(result.statusCode).json(result.body);
 });
 
 exports.onBookingWriteNotify = onDocumentWritten(

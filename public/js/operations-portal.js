@@ -2,12 +2,12 @@ import {
   collection,
   doc,
   addDoc,
-  setDoc,
   updateDoc,
   onSnapshot,
   query,
   orderBy,
   limit,
+  writeBatch,
   serverTimestamp,
   Timestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
@@ -22,9 +22,12 @@ import {
   resolvePortalRole,
   logoutPortal,
   watchAuth,
+  generateOtpAndHash,
   escapeHtml,
-  formatEpochTime
+  formatEpochTime,
+  downloadCsvFile
 } from "./firebase-config.js";
+import { buildCsvContent } from "./golocal-domain.js";
 import {
   BORAI_LAUNCH,
   createOsmMap,
@@ -82,11 +85,30 @@ document.getElementById("opsCenterBoraiBtn").addEventListener("click", () => {
   document.getElementById(id).addEventListener("change", renderAll);
 });
 
+document.getElementById("exportOpsCsvBtn").addEventListener("click", () => {
+  const csv = buildCsvContent(
+    ["Booking ID", "Status", "Category", "Pickup", "Drop", "Customer", "Driver", "Fare (INR)", "Escalated", "Ops Note"],
+    state.bookings.map((b) => [
+      b.id,
+      b.status,
+      b.vehicleCategory,
+      b.pickupLabel,
+      b.destinationLabel,
+      b.customerName,
+      b.assignedDriverName || "",
+      b.agreedFareInr || b.estimatedFareInr || 0,
+      b.opsEscalationFlag ? "YES" : "NO",
+      b.opsDispatchNote || ""
+    ])
+  );
+  downloadCsvFile(`golocal_ops_shift_summary_${Date.now()}.csv`, csv);
+});
+
 function isBookingDelayed(b) {
   if (b.status !== "searching" && b.status !== "assigned") return false;
   const createdSec = b.createdAt?.seconds;
   if (!createdSec) return false;
-  return (Date.now() / 1000 - createdSec) >= 600; // >= 10 minutes
+  return (Date.now() / 1000 - createdSec) >= 600;
 }
 
 function updateDistrictOptions() {
@@ -102,18 +124,6 @@ function updateDistrictOptions() {
   }
 }
 
-async function generateSixDigitOtpAndHash(bookingId) {
-  const arr = new Uint32Array(1);
-  crypto.getRandomValues(arr);
-  const otpPlaintext = String(100000 + (arr[0] % 900000));
-  const payload = new TextEncoder().encode(`${String(bookingId).trim()}:${otpPlaintext}`);
-  const digest = await crypto.subtle.digest("SHA-256", payload);
-  const otpHash = Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return { otpPlaintext, otpHash };
-}
-
 async function assignPartnerToBooking(booking, driver) {
   if (!currentUser || !booking || !driver) return;
   const bookingRef = doc(db, "bookings", booking.id);
@@ -121,14 +131,16 @@ async function assignPartnerToBooking(booking, driver) {
     Number(booking.minPermittedFareInr || 0),
     Number(booking.agreedFareInr || booking.estimatedFareInr || 0)
   );
-  const { otpPlaintext, otpHash } = await generateSixDigitOtpAndHash(booking.id);
+  const { otpPlaintext, otpHash } = await generateOtpAndHash(booking.id);
   const expiresAtMs = Date.now() + 600 * 1000;
   const expiresAtTs = Timestamp.fromMillis(expiresAtMs);
   const vehicleLabel = [driver.vehicleCategory?.toUpperCase(), driver.vehicleModel, driver.maskedPlate]
     .filter(Boolean)
     .join(" • ");
 
-  await updateDoc(bookingRef, {
+  // Atomic batch write satisfies Firestore `existsAfter(ride_assignments)` & `existsAfter(ride_otps)` rules
+  const batch = writeBatch(db);
+  batch.update(bookingRef, {
     status: "assigned",
     assignedDriverId: driver.driverId,
     assignedDriverName: driver.displayName,
@@ -141,7 +153,7 @@ async function assignPartnerToBooking(booking, driver) {
     updatedAt: serverTimestamp()
   });
 
-  await setDoc(doc(db, "ride_assignments", booking.id), {
+  batch.set(doc(db, "ride_assignments", booking.id), {
     bookingId: booking.id,
     customerId: booking.customerId,
     driverId: driver.driverId,
@@ -153,9 +165,9 @@ async function assignPartnerToBooking(booking, driver) {
     assignedByRole: activeRole === PORTAL_ROLES.OWNER_ADMIN ? "admin" : "ops_staff",
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
-  }, { merge: true });
+  });
 
-  await setDoc(doc(db, "ride_otps", booking.id), {
+  batch.set(doc(db, "ride_otps", booking.id), {
     bookingId: booking.id,
     customerId: booking.customerId,
     otpHash,
@@ -173,7 +185,7 @@ async function assignPartnerToBooking(booking, driver) {
     updatedAt: serverTimestamp()
   });
 
-  await setDoc(doc(db, "ride_otp_secrets", booking.id), {
+  batch.set(doc(db, "ride_otp_secrets", booking.id), {
     bookingId: booking.id,
     customerId: booking.customerId,
     otpPlaintext,
@@ -183,6 +195,8 @@ async function assignPartnerToBooking(booking, driver) {
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   });
+
+  await batch.commit();
 
   await addDoc(collection(db, "audit_logs"), {
     actorId: currentUser.uid,
@@ -304,13 +318,13 @@ function renderAll() {
     const routes = [];
 
     filtered.slice(0, 60).forEach((b) => {
-      const delayed = isBookingDelayed(b);
+      const delayed = isBookingDelayed(b) || b.opsEscalationFlag;
       if (b.pickupLat && b.pickupLng) {
         markers.push({
           id: `ops_p_${b.id}`,
           lat: b.pickupLat,
           lng: b.pickupLng,
-          title: `${delayed ? "[DELAYED] " : ""}${b.status.toUpperCase()}: ${b.pickupLabel}`,
+          title: `${delayed ? "[ALERT] " : ""}${b.status.toUpperCase()}: ${b.pickupLabel}`,
           subtitle: `To ${b.destinationLabel} • ${b.vehicleCategory.toUpperCase()} • Driver: ${b.assignedDriverName || "Unassigned"}`,
           color: delayed ? "#DC2626" : b.status === "searching" ? "#F59E0B" : "#1565C0",
           radius: delayed ? 9 : 7
@@ -417,11 +431,13 @@ function renderAll() {
           <div class="row" style="gap:6px;">
             <span class="badge ${b.status === "searching" ? "badge-warning" : "badge-info"}">${escapeHtml(b.status.toUpperCase())}</span>
             ${delayed ? `<span class="badge badge-danger">PICKUP DELAY &ge;10M</span>` : ""}
+            ${b.opsEscalationFlag ? `<span class="badge badge-danger">ESCALATED</span>` : ""}
           </div>
           <span class="mono">₹${Math.round(b.agreedFareInr || b.estimatedFareInr || 0)}</span>
         </div>
         <div><strong>${escapeHtml(b.pickupLabel)}</strong> → ${escapeHtml(b.destinationLabel)}</div>
         <div class="list-item-muted">Customer: ${escapeHtml(b.customerName)} • Partner: ${escapeHtml(b.assignedDriverName || "Unassigned")}</div>
+        ${b.opsDispatchNote ? `<div class="list-item-muted"><strong>Ops Note:</strong> ${escapeHtml(b.opsDispatchNote)}</div>` : ""}
       `;
 
       const row = document.createElement("div");
@@ -454,6 +470,55 @@ function renderAll() {
         });
         row.appendChild(assignBtn);
       }
+
+      const noteBtn = document.createElement("button");
+      noteBtn.type = "button";
+      noteBtn.className = "btn btn-secondary";
+      noteBtn.textContent = "Dispatch Note";
+      noteBtn.addEventListener("click", async () => {
+        const note = window.prompt("Operations dispatch note:", b.opsDispatchNote || "");
+        if (note === null) return;
+        await updateDoc(doc(db, "bookings", b.id), {
+          opsDispatchNote: note.trim(),
+          opsEscalationFlag: Boolean(b.opsEscalationFlag),
+          opsUpdatedBy: currentUser.uid,
+          updatedAt: serverTimestamp()
+        });
+        await addDoc(collection(db, "audit_logs"), {
+          actorId: currentUser.uid,
+          actorEmail: currentUser.phoneNumber || "",
+          action: "ops_update_booking_note",
+          targetCollection: "bookings",
+          targetId: b.id,
+          summary: `Updated dispatch note on ${b.id}: ${note.trim()}`,
+          createdAt: serverTimestamp()
+        });
+      });
+      row.appendChild(noteBtn);
+
+      const escBtn = document.createElement("button");
+      escBtn.type = "button";
+      escBtn.className = b.opsEscalationFlag ? "btn btn-secondary" : "btn btn-danger";
+      escBtn.textContent = b.opsEscalationFlag ? "Clear Flag" : "Escalate";
+      escBtn.addEventListener("click", async () => {
+        const nextFlag = !b.opsEscalationFlag;
+        await updateDoc(doc(db, "bookings", b.id), {
+          opsDispatchNote: b.opsDispatchNote || (nextFlag ? "Escalated by Operations" : ""),
+          opsEscalationFlag: nextFlag,
+          opsUpdatedBy: currentUser.uid,
+          updatedAt: serverTimestamp()
+        });
+        await addDoc(collection(db, "audit_logs"), {
+          actorId: currentUser.uid,
+          actorEmail: currentUser.phoneNumber || "",
+          action: "ops_escalate_booking",
+          targetCollection: "bookings",
+          targetId: b.id,
+          summary: `${nextFlag ? "Flagged" : "Cleared escalation"} on booking ${b.id}`,
+          createdAt: serverTimestamp()
+        });
+      });
+      row.appendChild(escBtn);
 
       item.appendChild(row);
       queueEl.appendChild(item);
@@ -512,8 +577,40 @@ function renderAll() {
             resolutionNote: `Operations team reviewing (${currentUser.uid})`,
             updatedAt: serverTimestamp()
           });
+          await addDoc(collection(db, "audit_logs"), {
+            actorId: currentUser.uid,
+            action: "ops_triage_complaint",
+            targetCollection: "complaints",
+            targetId: item.id,
+            summary: `Marked complaint ${item.id} investigating`,
+            createdAt: serverTimestamp()
+          });
         });
         row.appendChild(invBtn);
+      }
+      if (item.col === "complaints" && item.status === "investigating") {
+        const resBtn = document.createElement("button");
+        resBtn.type = "button";
+        resBtn.className = "btn btn-success";
+        resBtn.textContent = "Mark Resolved";
+        resBtn.addEventListener("click", async () => {
+          const note = window.prompt("Complaint resolution summary:", "Resolved by Operations Desk");
+          if (!note) return;
+          await updateDoc(doc(db, "complaints", item.id), {
+            status: "resolved",
+            resolutionNote: note.trim(),
+            updatedAt: serverTimestamp()
+          });
+          await addDoc(collection(db, "audit_logs"), {
+            actorId: currentUser.uid,
+            action: "ops_triage_complaint",
+            targetCollection: "complaints",
+            targetId: item.id,
+            summary: `Resolved complaint ${item.id}: ${note.trim()}`,
+            createdAt: serverTimestamp()
+          });
+        });
+        row.appendChild(resBtn);
       }
       if (item.col === "disputes" && item.status === "open") {
         const revBtn = document.createElement("button");
@@ -526,8 +623,38 @@ function renderAll() {
             adminResolutionNote: `Escalated by Operations (${currentUser.uid})`,
             updatedAt: serverTimestamp()
           });
+          await addDoc(collection(db, "audit_logs"), {
+            actorId: currentUser.uid,
+            action: "ops_triage_dispute",
+            targetCollection: "disputes",
+            targetId: item.id,
+            summary: `Marked dispute ${item.id} under review`,
+            createdAt: serverTimestamp()
+          });
         });
         row.appendChild(revBtn);
+      }
+      if (item.col === "emergency_events") {
+        const sosBtn = document.createElement("button");
+        sosBtn.type = "button";
+        sosBtn.className = item.status === "active" ? "btn btn-primary" : "btn btn-success";
+        sosBtn.textContent = item.status === "active" ? "Acknowledge SOS" : "Resolve SOS";
+        sosBtn.addEventListener("click", async () => {
+          const next = item.status === "active" ? "acknowledged" : "resolved";
+          await updateDoc(doc(db, "emergency_events", item.id), {
+            status: next,
+            updatedAt: serverTimestamp()
+          });
+          await addDoc(collection(db, "audit_logs"), {
+            actorId: currentUser.uid,
+            action: "ops_resolve_sos",
+            targetCollection: "emergency_events",
+            targetId: item.id,
+            summary: `Updated SOS ${item.id} -> ${next}`,
+            createdAt: serverTimestamp()
+          });
+        });
+        row.appendChild(sosBtn);
       }
       div.appendChild(row);
       escEl.appendChild(div);

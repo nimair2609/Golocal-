@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GoLocal Governance &amp; Operations Portals</title>
+  <title>GoLocal by NR Next — Multi-Platform Mobility Ecosystem</title>
   <link rel="stylesheet" href="./css/portal.css" />
 </head>
 <body>
@@ -11,8 +11,8 @@
     <div class="topbar-brand">
       <div class="brand-mark">GL</div>
       <div>
-        <h1>GoLocal Mobility Portals</h1>
-        <div class="subtitle">Phone OTP Authentication • OpenStreetMap + MapLibre GL JS</div>
+        <h1>GoLocal by NR Next</h1>
+        <div class="subtitle">West Bengal Mobility Platform • Phone OTP • OpenStreetMap + OSRM • Shared Firebase Backend</div>
       </div>
     </div>
     <div class="topbar-actions">
@@ -21,30 +21,73 @@
     </div>
   </header>
 
-  <main class="auth-wrapper">
-    <section class="auth-card stack">
+  <main class="container stack" style="padding-top:28px;">
+    <section class="hub-grid">
+      <article class="hub-card">
+        <div class="stack" style="gap:8px;">
+          <span class="badge badge-info">Customer Web App</span>
+          <h2 style="margin:0;">Book Rides &amp; Live Track</h2>
+          <p class="list-item-muted" style="margin:0;">
+            Interactive OSM map, live category fares, rider offers, 6-digit pickup OTP, chat, SOS, and GST receipts.
+          </p>
+        </div>
+        <a class="btn btn-primary" href="./customer/">Open Customer App</a>
+      </article>
+
+      <article class="hub-card">
+        <div class="stack" style="gap:8px;">
+          <span class="badge badge-success">Rider Partner Web App</span>
+          <h2 style="margin:0;">Drive, Verify KYC &amp; Earn</h2>
+          <p class="list-item-muted" style="margin:0;">
+            Partner onboarding with Storage KYC upload, live dispatch queue, OTP trip start, GPS telemetry, and payouts.
+          </p>
+        </div>
+        <a class="btn btn-primary" href="./rider/">Open Rider App</a>
+      </article>
+
+      <article class="hub-card">
+        <div class="stack" style="gap:8px;">
+          <span class="badge badge-warning">Operations Portal</span>
+          <h2 style="margin:0;">Live Dispatch &amp; Safety</h2>
+          <p class="list-item-muted" style="margin:0;">
+            Role-gated monitor for active trips, delayed pickup alerts, manual partner assignment, complaints &amp; SOS.
+          </p>
+        </div>
+        <a class="btn btn-secondary" href="./operations.html">Open Operations Portal</a>
+      </article>
+
+      <article class="hub-card">
+        <div class="stack" style="gap:8px;">
+          <span class="badge badge-danger">Owner Admin Portal</span>
+          <h2 style="margin:0;">Governance, KYC &amp; Pricing</h2>
+          <p class="list-item-muted" style="margin:0;">
+            Full control over service zones, KYC approval, customers, fare configs, settlements, promos, staff RBAC &amp; audits.
+          </p>
+        </div>
+        <a class="btn btn-secondary" href="./owner.html">Open Owner Admin Portal</a>
+      </article>
+    </section>
+
+    <section class="auth-card stack" style="margin: 12px auto 0;">
       <div>
-        <span class="badge badge-info">Strict Role Access</span>
-        <h2 style="margin: 8px 0 4px;">Portal Sign-In (Mobile OTP)</h2>
+        <span class="badge badge-info">Unified Mobile OTP Session</span>
+        <h2 style="margin: 8px 0 4px;">Quick Sign-In (India +91 / E.164)</h2>
         <p class="list-item-muted" style="margin: 0;">
-          Access is restricted to verified <strong>Owner Admins</strong> (<code>/admins/{uid}</code>) and
-          <strong>Operations Staff</strong> (<code>/operations_staff/{uid}</code>). Public self-signup and Google Sign-In are disabled.
+          One Firebase Phone Auth session works seamlessly across your authorized GoLocal web surfaces.
         </p>
       </div>
 
       <div id="authAlert" class="alert alert-error hidden"></div>
 
-      <!-- Step 1: Phone input -->
       <div id="phoneStep" class="stack">
         <div>
-          <label class="field-label" for="phoneInput">Authorized Mobile Number (India +91 or E.164)</label>
+          <label class="field-label" for="phoneInput">Mobile Number (+91 or E.164)</label>
           <input id="phoneInput" type="tel" placeholder="+91 9876543210" autocomplete="tel" />
         </div>
         <div id="recaptchaContainer"></div>
         <button id="sendOtpBtn" class="btn btn-primary" type="button">Send 6-Digit OTP</button>
       </div>
 
-      <!-- Step 2: OTP verify -->
       <div id="otpStep" class="stack hidden">
         <div class="alert alert-info" id="otpTargetLabel">Enter the 6-digit SMS code.</div>
         <div>
@@ -52,15 +95,14 @@
           <input id="otpInput" type="tel" maxlength="6" placeholder="123456" />
         </div>
         <div class="row">
-          <button id="verifyOtpBtn" class="btn btn-primary" type="button">Verify &amp; Enter Portal</button>
+          <button id="verifyOtpBtn" class="btn btn-primary" type="button">Verify &amp; Continue</button>
           <button id="changePhoneBtn" class="btn btn-secondary" type="button">Change Number</button>
         </div>
       </div>
 
-      <!-- Step 3: Authenticated Role Router -->
       <div id="roleRouter" class="stack hidden">
         <div class="alert alert-success" id="roleWelcome"></div>
-        <div id="portalLinks" class="stack"></div>
+        <div id="portalLinks" class="row"></div>
       </div>
     </section>
   </main>
@@ -68,7 +110,7 @@
   <script type="module">
     import {
       PORTAL_ROLES,
-      resolvePortalRole,
+      resolveAppIdentity,
       normalizeIndianPhone,
       createPhoneRecaptcha,
       sendPhoneOtp,
@@ -162,7 +204,7 @@
         showError(err?.message || "Invalid or expired OTP code.");
       } finally {
         verifyOtpBtn.disabled = false;
-        verifyOtpBtn.textContent = "Verify & Enter Portal";
+        verifyOtpBtn.textContent = "Verify & Continue";
       }
     });
 
@@ -189,23 +231,30 @@
       otpStep.classList.add("hidden");
       roleRouter.classList.remove("hidden");
 
-      const role = await resolvePortalRole(user);
-      if (role === PORTAL_ROLES.OWNER_ADMIN) {
-        roleWelcome.innerHTML = `Verified <strong>Owner Admin</strong> (${escapeHtml(user.phoneNumber || user.uid)})`;
-        portalLinks.innerHTML = `
-          <a class="btn btn-primary" href="./owner.html">Open Owner Admin Portal</a>
-          <a class="btn btn-secondary" href="./operations.html">Open Live Operations Portal</a>
-        `;
-      } else if (role === PORTAL_ROLES.OPERATIONS_STAFF) {
-        roleWelcome.innerHTML = `Verified <strong>Operations Staff</strong> (${escapeHtml(user.phoneNumber || user.uid)})`;
-        portalLinks.innerHTML = `
-          <a class="btn btn-primary" href="./operations.html">Open Live Operations Portal</a>
-          <p class="list-item-muted" style="margin:0;">Owner Admin settings, financials &amp; staff permissions remain restricted.</p>
-        `;
-      } else {
-        roleRouter.classList.add("hidden");
-        showError(`Access denied for UID ${user.uid}. Your account is not allowlisted in /admins or /operations_staff.`);
+      const identity = await resolveAppIdentity(user);
+      const roleLabels = ["Customer"];
+      const links = [
+        `<a class="btn btn-primary" href="./customer/">Customer Web App</a>`,
+        `<a class="btn btn-secondary" href="./rider/">Rider Partner App</a>`
+      ];
+
+      if (identity.driverProfile) {
+        roleLabels.push(`Partner (${identity.driverProfile.verificationStatus})`);
       }
+      if (identity.sampleRiderProfile || identity.isSampleAllowlisted) {
+        roleLabels.push("Sample Rider");
+      }
+      if (identity.portalRole === PORTAL_ROLES.OWNER_ADMIN) {
+        roleLabels.push("Owner Admin");
+        links.push(`<a class="btn btn-primary" href="./owner.html">Owner Admin Portal</a>`);
+        links.push(`<a class="btn btn-secondary" href="./operations.html">Operations Portal</a>`);
+      } else if (identity.portalRole === PORTAL_ROLES.OPERATIONS_STAFF) {
+        roleLabels.push("Operations Staff");
+        links.push(`<a class="btn btn-primary" href="./operations.html">Operations Portal</a>`);
+      }
+
+      roleWelcome.innerHTML = `Signed in as <strong>${escapeHtml(user.phoneNumber || user.uid)}</strong> • Access: ${escapeHtml(roleLabels.join(" | "))}`;
+      portalLinks.innerHTML = links.join("");
     });
   </script>
 </body>

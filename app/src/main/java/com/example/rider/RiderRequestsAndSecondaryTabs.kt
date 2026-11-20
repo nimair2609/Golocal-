@@ -1,5 +1,6 @@
 package com.example.rider
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -375,9 +376,18 @@ fun RiderEarningsHistoryTab(
     var passengerRateTarget by remember { mutableStateOf<Booking?>(null) }
     var appealTarget by remember { mutableStateOf<Booking?>(null) }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val nowSec = System.currentTimeMillis() / 1000L
+    val dayAgoSec = nowSec - 86_400L
+    val weekAgoSec = nowSec - 7L * 86_400L
+    val monthAgoSec = nowSec - 30L * 86_400L
+
     val totalGross = commissions.sumOf { it.grossFareInr }
     val totalComm = commissions.sumOf { it.commissionAmountInr }
     val totalNet = commissions.sumOf { it.netDriverEarningsInr }
+    val todayNet = commissions.filter { (it.createdAt?.seconds ?: 0L) >= dayAgoSec }.sumOf { it.netDriverEarningsInr }
+    val weekNet = commissions.filter { (it.createdAt?.seconds ?: 0L) >= weekAgoSec }.sumOf { it.netDriverEarningsInr }
+    val monthNet = commissions.filter { (it.createdAt?.seconds ?: 0L) >= monthAgoSec }.sumOf { it.netDriverEarningsInr }
     val withdrawnOrRequested = settlements.filter { it.status != "rejected" }.sumOf { it.amountInr }
     val availableBalance = (totalNet - withdrawnOrRequested).coerceAtLeast(0.0)
 
@@ -406,6 +416,38 @@ fun RiderEarningsHistoryTab(
                         GolocalMetricCard("Gross Fares", "₹${totalGross.toInt()}", "Total collected", Icons.Filled.AccountBalanceWallet, Modifier.weight(1f))
                         GolocalMetricCard("Net Earnings", "₹${totalNet.toInt()}", "Fee: ₹${totalComm.toInt()}", Icons.Filled.CurrencyRupee, Modifier.weight(1f))
                     }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.weight(1f).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("24h Net", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("₹${todayNet.toInt()}", style = MaterialTheme.typography.titleMedium, fontFamily = JetBrainsMono, color = GolocalSuccess)
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.weight(1f).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("7 Days", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("₹${weekNet.toInt()}", style = MaterialTheme.typography.titleMedium, fontFamily = JetBrainsMono, color = GolocalPrimaryBlue)
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.weight(1f).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("30 Days", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("₹${monthNet.toInt()}", style = MaterialTheme.typography.titleMedium, fontFamily = JetBrainsMono)
+                            }
+                        }
+                    }
                     Surface(
                         shape = RoundedCornerShape(18.dp),
                         color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
@@ -430,6 +472,25 @@ fun RiderEarningsHistoryTab(
                                 enabled = availableBalance >= 50.0
                             ) { Text("Withdraw") }
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            val header = "GoLocal Partner Earnings Statement\nPartner: ${profile.legalName} (${profile.vehicleRegNumber})\nToday: ₹${todayNet.toInt()} | 7 Days: ₹${weekNet.toInt()} | 30 Days: ₹${monthNet.toInt()} | All-Time Net: ₹${totalNet.toInt()}\n\nbooking_id,gross_inr,commission_inr,net_inr"
+                            val rows = commissions.take(100).joinToString("\n") { c ->
+                                "${c.bookingId},${c.grossFareInr},${c.commissionAmountInr},${c.netDriverEarningsInr}"
+                            }
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "GoLocal Earnings Statement - ${profile.legalName}")
+                                putExtra(Intent.EXTRA_TEXT, "$header\n$rows")
+                            }
+                            context.startActivity(Intent.createChooser(shareIntent, "Export Earnings Statement"))
+                        },
+                        enabled = commissions.isNotEmpty() || settlements.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth().testTag("export_rider_earnings_button")
+                    ) {
+                        Text("Export Earnings Statement (CSV / Share)")
                     }
 
                     Text("Withdrawal & Settlement Requests (${settlements.size})", style = MaterialTheme.typography.titleMedium)

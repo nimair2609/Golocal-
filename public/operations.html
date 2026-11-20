@@ -18,6 +18,7 @@
     </div>
     <div class="topbar-actions">
       <span id="opsRoleBadge" class="badge badge-info hidden">OPERATIONS</span>
+      <a class="btn btn-light" href="./">All Apps</a>
       <a id="ownerLinkBtn" class="btn btn-light hidden" href="./owner.html">Owner Portal</a>
       <button id="opsSignOutBtn" class="btn btn-light" type="button">Sign Out</button>
     </div>
@@ -100,7 +101,10 @@
 
         <div class="stack">
           <div class="card stack">
-            <h3>Unassigned &amp; Delayed Bookings Dispatch</h3>
+            <div class="space-between">
+              <h3 style="margin:0;">Unassigned &amp; Delayed Bookings Dispatch</h3>
+              <button id="exportOpsCsvBtn" class="btn btn-secondary" type="button">Export Shift CSV</button>
+            </div>
             <div id="opsAssignPanel" class="alert alert-info hidden"></div>
             <div id="opsBookingsQueue" class="list-scroll" style="max-height:360px;"></div>
           </div>

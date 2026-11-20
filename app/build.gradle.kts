@@ -104,7 +104,17 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
-  ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.addAll(
+    listOf(
+      "FIREBASE_APPCHECK_DEBUG_TOKEN",
+      "PAYMENT_WEBHOOK_SECRET",
+      "OSM_TILE_URL_TEMPLATE",
+      "OSRM_BASE_URL",
+      "GEOCODING_BASE_URL",
+      "FIREBASE_RTDB_URL",
+      "UPDATE_MANIFEST_URL"
+    )
+  )
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
@@ -219,6 +229,7 @@ dependencies {
   implementation(libs.firebase.database)
   implementation(libs.firebase.auth)
   implementation(libs.firebase.messaging)
+  implementation(libs.firebase.storage)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)

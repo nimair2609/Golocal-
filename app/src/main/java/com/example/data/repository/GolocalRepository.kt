@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.net.Uri
 import com.example.R
 import com.example.data.model.*
 import com.example.domain.FareCalculator
@@ -21,6 +22,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.snapshots
+import com.google.firebase.storage.storage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -1393,6 +1395,20 @@ class GolocalRepository(
                 }
                 throw error
             }
+
+    suspend fun uploadKycDocumentPhoto(docType: String, localUriString: String): Result<String> = runCatching {
+        val uid = requireUserId()
+        val trimmed = localUriString.trim()
+        require(trimmed.isNotBlank()) { "Document URI is empty." }
+        if (trimmed.startsWith("https://", ignoreCase = true)) {
+            return@runCatching trimmed
+        }
+        val safeDocType = docType.lowercase().replace(Regex("[^a-z0-9_-]"), "_").ifBlank { "doc" }
+        val storageRef = Firebase.storage.reference
+            .child("kyc_docs/$uid/${safeDocType}_${System.currentTimeMillis()}.jpg")
+        storageRef.putFile(Uri.parse(trimmed)).await()
+        storageRef.downloadUrl.await().toString()
+    }
 
     suspend fun registerDriverApplication(profile: DriverProfile): Result<Unit> = runCatching {
         val uid = requireUserId()

@@ -13,11 +13,12 @@
       <div class="brand-mark">GL</div>
       <div>
         <h1>GoLocal Owner Admin Portal</h1>
-        <div class="subtitle">Service Boundaries, Fleet Telemetry, Demand &amp; Governance • Borai (721457) Ready</div>
+        <div class="subtitle">KYC Review, Pricing, Financial Settlements, Service Boundaries &amp; Governance</div>
       </div>
     </div>
     <div class="topbar-actions">
       <span id="ownerBadge" class="badge badge-success hidden">OWNER ADMIN</span>
+      <a class="btn btn-light" href="./">All Apps</a>
       <a class="btn btn-light" href="./operations.html">Operations View</a>
       <button id="ownerSignOutBtn" class="btn btn-light" type="button">Sign Out</button>
     </div>
@@ -25,6 +26,7 @@
 
   <main class="container">
     <div id="accessGateAlert" class="alert alert-error hidden"></div>
+    <div id="ownerActionToast" class="alert hidden" style="margin-bottom:14px;"></div>
 
     <section id="ownerContent" class="hidden">
       <div class="metrics-grid">
@@ -37,26 +39,34 @@
           <div class="metric-value" id="mSearchingBookings">0</div>
         </div>
         <div class="metric-card">
+          <div class="metric-label">Pending KYC</div>
+          <div class="metric-value" id="mPendingKyc">0</div>
+        </div>
+        <div class="metric-card">
           <div class="metric-label">Live RTDB Partners</div>
           <div class="metric-value" id="mLiveDrivers">0</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Active Service Zones</div>
+          <div class="metric-label">Active Zones</div>
           <div class="metric-value" id="mActiveZones">0</div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Completed Bookings</div>
+          <div class="metric-label">Completed Trips</div>
           <div class="metric-value" id="mCompletedBookings">0</div>
         </div>
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" data-tab="mapTab" type="button">Live Map &amp; Demand</button>
-        <button class="tab-btn" data-tab="zonesTab" type="button">Service Zones Configurator</button>
-        <button class="tab-btn" data-tab="opsAccessTab" type="button">Operations Staff &amp; Audit</button>
+        <button class="tab-btn active" data-tab="mapTab" type="button">Live Map &amp; Bookings</button>
+        <button class="tab-btn" data-tab="partnersTab" type="button">Partners &amp; KYC</button>
+        <button class="tab-btn" data-tab="customersTab" type="button">Customers &amp; Disputes</button>
+        <button class="tab-btn" data-tab="pricingTab" type="button">Pricing &amp; Commission</button>
+        <button class="tab-btn" data-tab="financialsTab" type="button">Payments &amp; Settlements</button>
+        <button class="tab-btn" data-tab="zonesTab" type="button">Service Zones</button>
+        <button class="tab-btn" data-tab="opsAccessTab" type="button">Settings, Ops &amp; Audit</button>
       </div>
 
-      <!-- TAB 1: Interactive Map, Filters, Live Fleet & Demand Visualization -->
+      <!-- TAB 1: Interactive Map, Filters, Live Fleet, Demand & Booking Overrides -->
       <section id="mapTab" class="portal-grid">
         <div class="stack">
           <div class="card stack">
@@ -73,6 +83,7 @@
                 <option value="active">Active &amp; Unassigned</option>
                 <option value="searching">Unassigned Only</option>
                 <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
                 <option value="all">All Bookings</option>
               </select>
               <select id="filterCategory" style="max-width:170px;">
@@ -113,16 +124,153 @@
         <div class="stack">
           <div class="card">
             <h3>Demand by Locality / Zone</h3>
-            <div id="demandList" class="list-scroll" style="max-height:190px;"></div>
+            <div id="demandList" class="list-scroll" style="max-height:170px;"></div>
           </div>
-          <div class="card">
-            <h3>Filtered Bookings</h3>
-            <div id="ownerBookingsList" class="list-scroll" style="max-height:330px;"></div>
+          <div class="card stack">
+            <div class="space-between">
+              <h3 style="margin:0;">Filtered Bookings &amp; Overrides</h3>
+              <button id="exportBookingsCsvBtn" class="btn btn-secondary" type="button">Export CSV</button>
+            </div>
+            <div id="ownerAssignBox" class="alert alert-info hidden"></div>
+            <div id="ownerBookingsList" class="list-scroll" style="max-height:380px;"></div>
           </div>
         </div>
       </section>
 
-      <!-- TAB 2: Owner Service-Area Configurator -->
+      <!-- TAB 2: Partners & KYC Review -->
+      <section id="partnersTab" class="card stack hidden">
+        <div class="space-between">
+          <div>
+            <h2 style="margin:0;">Rider Partners &amp; Commercial KYC Review</h2>
+            <div class="list-item-muted">Inspect Storage document photos, Driving Licence, RC, Insurance &amp; approve/reject commercial access.</div>
+          </div>
+          <div class="row">
+            <select id="kycStatusFilter" style="max-width:170px;">
+              <option value="pending">Pending Review</option>
+              <option value="verified">Verified</option>
+              <option value="rejected">Rejected</option>
+              <option value="suspended">Suspended</option>
+              <option value="all">All Partners</option>
+            </select>
+            <button id="exportPartnersCsvBtn" class="btn btn-secondary" type="button">Export CSV</button>
+          </div>
+        </div>
+        <div id="partnersKycList" class="stack"></div>
+      </section>
+
+      <!-- TAB 3: Customers Directory & Complaints/Disputes -->
+      <section id="customersTab" class="split-2 hidden">
+        <div class="card stack">
+          <div class="space-between">
+            <h2 style="margin:0;">Registered Users &amp; Customers</h2>
+            <input id="custSearchInput" type="text" placeholder="Search name/phone..." style="max-width:210px;" />
+          </div>
+          <div id="customersList" class="list-scroll" style="max-height:580px;"></div>
+        </div>
+
+        <div class="card stack">
+          <h2 style="margin:0;">Complaints, Disputes &amp; Emergency Events</h2>
+          <div id="ownerDisputesList" class="list-scroll" style="max-height:580px;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 4: Pricing & Commission Rules -->
+      <section id="pricingTab" class="split-2 hidden">
+        <div class="card stack">
+          <div class="space-between">
+            <h2 style="margin:0;">Regulated Fare &amp; Commission Configs</h2>
+            <button id="exportFaresCsvBtn" class="btn btn-secondary" type="button">Export CSV</button>
+          </div>
+          <div id="fareConfigsList" class="stack"></div>
+        </div>
+
+        <div class="card stack">
+          <h2 style="margin:0;">Edit Fare Category Rule</h2>
+          <form id="fareForm" class="stack">
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="fCat">Vehicle Category *</label>
+                <select id="fCat" required>
+                  <option value="toto">Toto (toto)</option>
+                  <option value="auto">Auto (auto)</option>
+                  <option value="bike">Bike (bike)</option>
+                  <option value="cab">Cab (cab)</option>
+                  <option value="outstation">Outstation (outstation)</option>
+                  <option value="scheduled">Scheduled (scheduled)</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="fBase">Base Fare (INR) *</label>
+                <input id="fBase" type="number" step="1" min="0" required value="25" />
+              </div>
+              <div>
+                <label class="field-label" for="fPerKm">Per Km Rate (INR) *</label>
+                <input id="fPerKm" type="number" step="0.5" min="0" required value="12" />
+              </div>
+              <div>
+                <label class="field-label" for="fMin">Minimum Fare (INR) *</label>
+                <input id="fMin" type="number" step="1" min="0" required value="25" />
+              </div>
+              <div>
+                <label class="field-label" for="fWait">Waiting Fee / Min (INR)</label>
+                <input id="fWait" type="number" step="0.5" min="0" value="1" />
+              </div>
+              <div>
+                <label class="field-label" for="fCancel">Cancellation Fee (INR)</label>
+                <input id="fCancel" type="number" step="1" min="0" value="15" />
+              </div>
+              <div>
+                <label class="field-label" for="fGst">GST % (0–28)</label>
+                <input id="fGst" type="number" step="0.5" min="0" max="28" required value="5" />
+              </div>
+              <div>
+                <label class="field-label" for="fComm">Commission % (0–40)</label>
+                <input id="fComm" type="number" step="0.5" min="0" max="40" required value="12" />
+              </div>
+              <div>
+                <label class="field-label" for="fMinBid">Min Bid Factor (0.7–1.0)</label>
+                <input id="fMinBid" type="number" step="0.05" min="0.7" max="1.0" required value="0.90" />
+              </div>
+              <div>
+                <label class="field-label" for="fMaxBid">Max Bid Factor (1.0–1.5)</label>
+                <input id="fMaxBid" type="number" step="0.05" min="1.0" max="1.5" required value="1.20" />
+              </div>
+            </div>
+            <div class="checkbox-row">
+              <label class="checkbox-pill"><input id="fBidAllow" type="checkbox" checked /> Allow Driver Fare Bids</label>
+              <label class="checkbox-pill"><input id="fEnabled" type="checkbox" checked /> Category Enabled</label>
+            </div>
+            <button class="btn btn-primary" type="submit">Publish Fare Config Version</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- TAB 5: Payments, Driver Settlements & Refunds -->
+      <section id="financialsTab" class="stack hidden">
+        <div class="split-2">
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Driver Settlement / Withdrawal Queue</h2>
+            </div>
+            <div id="ownerSettlementsList" class="list-scroll" style="max-height:360px;"></div>
+          </div>
+
+          <div class="card stack">
+            <h2 style="margin:0;">Customer Refund Requests</h2>
+            <div id="ownerRefundsList" class="list-scroll" style="max-height:360px;"></div>
+          </div>
+        </div>
+
+        <div class="card stack">
+          <div class="space-between">
+            <h2 style="margin:0;">Completed Ride Payments &amp; GST Ledger</h2>
+            <button id="exportPaymentsCsvBtn" class="btn btn-secondary" type="button">Export Payments CSV</button>
+          </div>
+          <div id="ownerPaymentsList" class="list-scroll" style="max-height:360px;"></div>
+        </div>
+      </section>
+
+      <!-- TAB 6: Owner Service-Area Configurator -->
       <section id="zonesTab" class="portal-grid hidden">
         <div class="card stack">
           <div class="space-between">
@@ -239,46 +387,121 @@
         </div>
       </section>
 
-      <!-- TAB 3: Operations Staff Access Management & Owner Audit Logs -->
-      <section id="opsAccessTab" class="portal-grid hidden">
+      <!-- TAB 7: Platform Settings, Operations Staff Access & Audit Trail -->
+      <section id="opsAccessTab" class="stack hidden">
         <div class="card stack">
-          <h2>Operations Staff Access (Owner-Managed)</h2>
-          <p class="list-item-muted" style="margin:0;">
-            Operations users receive access to live bookings, partner tracking, and complaint investigation,
-            but cannot alter pricing, settlements, admin roles, or service-area configuration.
-          </p>
-          <form id="opsForm" class="stack">
-            <div class="form-grid-2">
+          <h2 style="margin:0;">Global Platform Settings, Promotions &amp; Compliance (`platform_settings/global`)</h2>
+          <form id="platformSettingsForm" class="stack">
+            <div class="form-grid-3">
               <div>
-                <label class="field-label" for="opsUid">Firebase Auth UID *</label>
-                <input id="opsUid" type="text" required placeholder="Exact Firebase UID" />
+                <label class="field-label" for="pHelpline">24x7 Helpline Number</label>
+                <input id="pHelpline" type="text" placeholder="+91 1800-..." />
               </div>
               <div>
-                <label class="field-label" for="opsName">Display Name *</label>
-                <input id="opsName" type="text" required placeholder="Desk Operator Name" />
+                <label class="field-label" for="pCommPct">Default Commission % (0–40)</label>
+                <input id="pCommPct" type="number" step="0.5" min="0" max="40" value="12" />
               </div>
               <div>
-                <label class="field-label" for="opsPhone">Phone / Email</label>
-                <input id="opsPhone" type="text" placeholder="+9198..." />
-              </div>
-              <div>
-                <label class="field-label" for="opsDistrict">Assigned District</label>
-                <input id="opsDistrict" type="text" value="Paschim Medinipur" />
+                <label class="field-label" for="pMaint">Maintenance Notice Banner</label>
+                <input id="pMaint" type="text" placeholder="Leave blank when normal" />
               </div>
             </div>
-            <label class="checkbox-pill"><input id="opsActive" type="checkbox" checked /> Active Operations Access</label>
-            <button class="btn btn-primary" type="submit">Save Operations Staff</button>
+            <div class="form-grid-3">
+              <div>
+                <label class="field-label" for="pPromoTitle">Promo Banner Title</label>
+                <input id="pPromoTitle" type="text" placeholder="e.g. Borai Launch Offer" />
+              </div>
+              <div>
+                <label class="field-label" for="pPromoText">Promo Description</label>
+                <input id="pPromoText" type="text" placeholder="e.g. Zero booking fee on Toto rides" />
+              </div>
+              <div class="form-grid-2">
+                <div>
+                  <label class="field-label" for="pPromoCode">Promo Code</label>
+                  <input id="pPromoCode" type="text" placeholder="BORAI10" />
+                </div>
+                <div>
+                  <label class="field-label" for="pPromoDisc">Discount %</label>
+                  <input id="pPromoDisc" type="number" min="0" max="50" step="1" value="0" />
+                </div>
+              </div>
+            </div>
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="pGrievName">Grievance Officer Name</label>
+                <input id="pGrievName" type="text" placeholder="NR Next Grievance Desk" />
+              </div>
+              <div>
+                <label class="field-label" for="pGrievEmail">Grievance Officer Email</label>
+                <input id="pGrievEmail" type="email" placeholder="support@example.com" />
+              </div>
+            </div>
+            <div>
+              <label class="field-label" for="pCancelSummary">Cancellation Policy Disclosure</label>
+              <input id="pCancelSummary" type="text" placeholder="Shown transparently before customer books" />
+            </div>
+            <div class="checkbox-row">
+              <label class="checkbox-pill"><input id="pTestMode" type="checkbox" /> Enable Isolated Test Ride Sandbox</label>
+              <label class="checkbox-pill"><input id="pBikeCommercial" type="checkbox" /> Bike Taxi Commercial Approved</label>
+            </div>
+            <button class="btn btn-primary" type="submit" style="align-self:flex-start;">Save Platform Settings</button>
           </form>
-          <div id="opsStaffList" class="list-scroll"></div>
         </div>
 
-        <div class="card stack">
-          <h2>Immutable Owner &amp; Ops Audit Trail</h2>
-          <div id="auditLogsList" class="list-scroll" style="max-height:540px;"></div>
+        <div class="portal-grid">
+          <div class="card stack">
+            <h2>Operations Staff Access (Owner-Managed)</h2>
+            <p class="list-item-muted" style="margin:0;">
+              Operations users receive access to live bookings, partner tracking, and complaint investigation,
+              but cannot alter pricing, settlements, admin roles, or service-area configuration.
+            </p>
+            <form id="opsForm" class="stack">
+              <div class="form-grid-2">
+                <div>
+                  <label class="field-label" for="opsUid">Firebase Auth UID *</label>
+                  <input id="opsUid" type="text" required placeholder="Exact Firebase UID" />
+                </div>
+                <div>
+                  <label class="field-label" for="opsName">Display Name *</label>
+                  <input id="opsName" type="text" required placeholder="Desk Operator Name" />
+                </div>
+                <div>
+                  <label class="field-label" for="opsPhone">Phone / Email</label>
+                  <input id="opsPhone" type="text" placeholder="+9198..." />
+                </div>
+                <div>
+                  <label class="field-label" for="opsDistrict">Assigned District</label>
+                  <input id="opsDistrict" type="text" value="Paschim Medinipur" />
+                </div>
+              </div>
+              <label class="checkbox-pill"><input id="opsActive" type="checkbox" checked /> Active Operations Access</label>
+              <button class="btn btn-primary" type="submit">Save Operations Staff</button>
+            </form>
+            <div id="opsStaffList" class="list-scroll"></div>
+          </div>
+
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Immutable Owner &amp; Ops Audit Trail</h2>
+              <button id="exportAuditCsvBtn" class="btn btn-secondary" type="button">Export Audit CSV</button>
+            </div>
+            <div id="auditLogsList" class="list-scroll" style="max-height:540px;"></div>
+          </div>
         </div>
       </section>
     </section>
   </main>
+
+  <!-- Document / Detail Modal -->
+  <div id="ownerDocModal" class="modal-backdrop hidden">
+    <div class="modal-card stack">
+      <div class="space-between">
+        <h3 id="ownerDocModalTitle" style="margin:0;">KYC Document Preview</h3>
+        <button id="closeOwnerDocModalBtn" class="btn btn-secondary" type="button">Close</button>
+      </div>
+      <div id="ownerDocModalBody" class="stack"></div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script type="module" src="./js/owner-portal.js"></script>

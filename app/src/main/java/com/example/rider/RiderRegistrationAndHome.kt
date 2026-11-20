@@ -163,19 +163,22 @@ fun RiderRegistrationAndVerificationGate(
     var kycStep by remember { mutableIntStateOf(0) }
 
     var pendingPhotoTarget by remember { mutableStateOf("general") }
+    val uploadingTarget by driverViewModel.kycUploadingTarget.collectAsStateWithLifecycle()
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            val s = uri.toString()
-            when (pendingPhotoTarget) {
-                "dl" -> dlPhotoUri = s
-                "rc" -> rcPhotoUri = s
-                "insurance" -> insurancePhotoUri = s
-                "permit" -> permitPhotoUri = s
-                "fitness" -> fitnessPhotoUri = s
-                "puc" -> pucPhotoUri = s
-                else -> docUri = s
+            val target = pendingPhotoTarget
+            driverViewModel.uploadKycDocument(target, uri.toString()) { resolved ->
+                when (target) {
+                    "dl" -> dlPhotoUri = resolved
+                    "rc" -> rcPhotoUri = resolved
+                    "insurance" -> insurancePhotoUri = resolved
+                    "permit" -> permitPhotoUri = resolved
+                    "fitness" -> fitnessPhotoUri = resolved
+                    "puc" -> pucPhotoUri = resolved
+                    else -> docUri = resolved
+                }
             }
         }
     }
@@ -386,6 +389,7 @@ fun RiderRegistrationAndVerificationGate(
                             expiryIso = dlExpiryInput,
                             onExpiryChange = { dlExpiryInput = it },
                             hasPhoto = dlPhotoUri.isNotBlank() || docUri.isNotBlank(),
+                            isUploading = uploadingTarget == "dl",
                             onPickPhoto = {
                                 pendingPhotoTarget = "dl"
                                 photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -425,6 +429,7 @@ fun RiderRegistrationAndVerificationGate(
                             expiryIso = rcExpiryInput,
                             onExpiryChange = { rcExpiryInput = it },
                             hasPhoto = rcPhotoUri.isNotBlank(),
+                            isUploading = uploadingTarget == "rc",
                             onPickPhoto = {
                                 pendingPhotoTarget = "rc"
                                 photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -437,6 +442,7 @@ fun RiderRegistrationAndVerificationGate(
                             expiryIso = insuranceExpiryInput,
                             onExpiryChange = { insuranceExpiryInput = it },
                             hasPhoto = insurancePhotoUri.isNotBlank(),
+                            isUploading = uploadingTarget == "insurance",
                             onPickPhoto = {
                                 pendingPhotoTarget = "insurance"
                                 photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -450,6 +456,7 @@ fun RiderRegistrationAndVerificationGate(
                                 expiryIso = fitnessExpiryInput,
                                 onExpiryChange = { fitnessExpiryInput = it },
                                 hasPhoto = fitnessPhotoUri.isNotBlank(),
+                                isUploading = uploadingTarget == "fitness",
                                 onPickPhoto = {
                                     pendingPhotoTarget = "fitness"
                                     photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -464,6 +471,7 @@ fun RiderRegistrationAndVerificationGate(
                                 expiryIso = permitExpiryInput,
                                 onExpiryChange = { permitExpiryInput = it },
                                 hasPhoto = permitPhotoUri.isNotBlank(),
+                                isUploading = uploadingTarget == "permit",
                                 onPickPhoto = {
                                     pendingPhotoTarget = "permit"
                                     photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -478,6 +486,7 @@ fun RiderRegistrationAndVerificationGate(
                                 expiryIso = pucExpiryInput,
                                 onExpiryChange = { pucExpiryInput = it },
                                 hasPhoto = pucPhotoUri.isNotBlank(),
+                                isUploading = uploadingTarget == "puc",
                                 onPickPhoto = {
                                     pendingPhotoTarget = "puc"
                                     photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -602,6 +611,7 @@ private fun KycDocumentInputRow(
     expiryIso: String,
     onExpiryChange: (String) -> Unit,
     hasPhoto: Boolean,
+    isUploading: Boolean = false,
     onPickPhoto: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -621,10 +631,16 @@ private fun KycDocumentInputRow(
                 singleLine = true
             )
         }
-        OutlinedButton(onClick = onPickPhoto, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = onPickPhoto, enabled = !isUploading, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(if (hasPhoto) "Document Photo Attached ✓" else "Attach Photo ($label)")
+            Text(
+                when {
+                    isUploading -> "Uploading $label to Secure Storage..."
+                    hasPhoto -> "Document Photo Uploaded ✓"
+                    else -> "Attach & Upload Photo ($label)"
+                }
+            )
         }
     }
 }

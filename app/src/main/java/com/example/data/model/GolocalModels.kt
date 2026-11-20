@@ -326,6 +326,10 @@ data class Booking(
     val cancelledBy: String = "",
     val cancelledByRole: String = "",
     val cancellationCategory: String = "",
+    val cancellationFeeInr: Double = 0.0,
+    val waitingFeeInr: Double = 0.0,
+    val scheduledAtMs: Long = 0L,
+    val opsDispatchNote: String = "",
     val invoiceEmail: String = "",
     val customerRating: Long? = null,
     val customerFeedbackRating: Long? = null,
@@ -633,6 +637,10 @@ data class PlatformSettings(
     val grievanceOfficerName: String = "",
     val grievanceOfficerEmail: String = "",
     val bikeTaxiCommercialApproved: Boolean = false,
+    val promoBannerTitle: String = "",
+    val promoBannerText: String = "",
+    val promoCode: String = "",
+    val promoDiscountPct: Double = 0.0,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 

@@ -520,6 +520,30 @@ class DriverViewModel(
         }
     }
 
+    private val _kycUploadingTarget = MutableStateFlow<String?>(null)
+    val kycUploadingTarget: StateFlow<String?> = _kycUploadingTarget.asStateFlow()
+
+    fun uploadKycDocument(
+        docType: String,
+        localUriString: String,
+        onUploaded: (String) -> Unit
+    ) {
+        if (localUriString.isBlank()) return
+        viewModelScope.launch {
+            _kycUploadingTarget.value = docType
+            repository.uploadKycDocumentPhoto(docType, localUriString)
+                .onSuccess { downloadUrl ->
+                    onUploaded(downloadUrl)
+                    _message.value = "${docType.uppercase()} document uploaded to secure storage."
+                }
+                .onFailure { exc ->
+                    onUploaded(localUriString)
+                    _message.value = "Document attached locally (cloud upload pending: ${exc.localizedMessage ?: "retry when online"})."
+                }
+            _kycUploadingTarget.value = null
+        }
+    }
+
     fun registerDriver(
         legalName: String,
         phone: String,

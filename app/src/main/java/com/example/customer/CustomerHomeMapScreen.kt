@@ -327,6 +327,59 @@ fun CustomerHomeMapScreen(
                 }
             }
 
+            val hasPromoBanner = !platformSettings?.promoBannerTitle.isNullOrBlank() || !platformSettings?.promoBannerText.isNullOrBlank()
+            if (hasPromoBanner) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = GolocalPrimaryBlue.copy(alpha = 0.94f),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.fillMaxWidth().testTag("home_promo_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            if (!platformSettings?.promoBannerTitle.isNullOrBlank()) {
+                                Text(
+                                    text = platformSettings?.promoBannerTitle.orEmpty(),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (!platformSettings?.promoBannerText.isNullOrBlank()) {
+                                Text(
+                                    text = platformSettings?.promoBannerText.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        if (!platformSettings?.promoCode.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color.White.copy(alpha = 0.2f)
+                            ) {
+                                Text(
+                                    text = platformSettings?.promoCode.orEmpty(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontFamily = JetBrainsMono,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // Location Permission / GPS Disabled Pill (non-intrusive; never repeats nag when ready)
             if (accessState != LocationAccessState.GRANTED_READY || gpsError != null) {
                 Surface(

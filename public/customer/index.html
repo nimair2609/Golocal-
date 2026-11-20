@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Ride — Customer Web App</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="../css/portal.css" />
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="topbar-brand">
+      <div class="brand-mark">GL</div>
+      <div>
+        <h1>GoLocal Ride</h1>
+        <div class="subtitle">Customer Web Booking • Live OSM Map • Pickup OTP • Receipts</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="custSessionBadge" class="badge badge-info hidden">Customer</span>
+      <a class="btn btn-light" href="../">All Apps</a>
+      <button id="custSignOutBtn" class="btn btn-light hidden" type="button">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="custStatusAlert" class="alert hidden" style="margin-bottom:14px;"></div>
+
+    <!-- Phone OTP Auth Card -->
+    <section id="custAuthCard" class="auth-card stack" style="margin:24px auto;">
+      <div>
+        <span class="badge badge-info">Customer Sign-In</span>
+        <h2 style="margin:8px 0 4px;">Sign in with Mobile OTP</h2>
+        <p class="list-item-muted" style="margin:0;">
+          Book Toto, Auto, Bike &amp; Cab rides across West Bengal with transparent regulated fares.
+        </p>
+      </div>
+      <div id="custPhoneStep" class="stack">
+        <div>
+          <label class="field-label" for="custPhoneInput">Mobile Number (+91 or E.164)</label>
+          <input id="custPhoneInput" type="tel" placeholder="+91 9876543210" autocomplete="tel" />
+        </div>
+        <div id="custRecaptcha"></div>
+        <button id="custSendOtpBtn" class="btn btn-primary" type="button">Send 6-Digit OTP</button>
+      </div>
+      <div id="custOtpStep" class="stack hidden">
+        <div class="alert alert-info" id="custOtpLabel">Enter 6-digit SMS verification code.</div>
+        <div>
+          <label class="field-label" for="custOtpInput">6-Digit OTP</label>
+          <input id="custOtpInput" type="tel" maxlength="6" placeholder="123456" />
+        </div>
+        <div class="row">
+          <button id="custVerifyOtpBtn" class="btn btn-primary" type="button">Verify &amp; Continue</button>
+          <button id="custChangePhoneBtn" class="btn btn-secondary" type="button">Change Number</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- First-Time Onboarding Card -->
+    <section id="custOnboardingCard" class="auth-card stack hidden" style="margin:24px auto;">
+      <div>
+        <span class="badge badge-warning">Complete Profile</span>
+        <h2 style="margin:8px 0 4px;">Customer Safety &amp; GST Setup</h2>
+        <p class="list-item-muted" style="margin:0;">
+          Emergency contact and invoice email are required once before booking rides.
+        </p>
+      </div>
+      <form id="custOnboardingForm" class="stack">
+        <div>
+          <label class="field-label" for="obName">Full Name *</label>
+          <input id="obName" type="text" required minlength="2" placeholder="Your full name" />
+        </div>
+        <div>
+          <label class="field-label" for="obEmail">Email Address (for GST Invoices) *</label>
+          <input id="obEmail" type="email" required placeholder="name@example.com" />
+        </div>
+        <div>
+          <label class="field-label" for="obEmergency">Emergency Contact Number *</label>
+          <input id="obEmergency" type="tel" required minlength="8" placeholder="+91 98..." />
+        </div>
+        <label class="checkbox-pill">
+          <input id="obConsent" type="checkbox" required />
+          I accept GoLocal Terms &amp; DPDP Act 2023 Privacy Notice.
+        </label>
+        <button class="btn btn-primary" type="submit">Save &amp; Start Booking</button>
+      </form>
+    </section>
+
+    <!-- Main Authenticated Customer Workspace -->
+    <section id="custMainSection" class="hidden stack">
+      <div id="custPromoBanner" class="alert alert-info hidden space-between"></div>
+      <div id="custMaintBanner" class="alert alert-warning hidden"></div>
+
+      <div class="tabs no-print">
+        <button class="tab-btn active" data-tab="bookTab" type="button">Book &amp; Track Ride</button>
+        <button class="tab-btn" data-tab="ridesTab" type="button">My Rides &amp; Receipts</button>
+        <button class="tab-btn" data-tab="paymentsTab" type="button">Payments</button>
+        <button class="tab-btn" data-tab="alertsTab" type="button">Notifications</button>
+        <button class="tab-btn" data-tab="profileTab" type="button">Profile &amp; Safety</button>
+      </div>
+
+      <!-- TAB 1: BOOK & TRACK RIDE -->
+      <div id="bookTab" class="portal-grid">
+        <div class="stack">
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Live Map &amp; Route Preview</h2>
+              <div class="row">
+                <button id="useGpsPickupBtn" class="btn btn-secondary" type="button">Use My GPS</button>
+                <button id="centerBoraiBtn" class="btn btn-secondary" type="button">Borai Hub</button>
+                <button id="quickSosBtn" class="btn btn-danger" type="button">SOS</button>
+              </div>
+            </div>
+            <div class="map-shell">
+              <div id="custMap" class="map-canvas"></div>
+              <div class="map-attribution-bar">
+                <div class="legend">
+                  <span><span class="legend-dot" style="background:#1565c0;"></span>Pickup</span>
+                  <span><span class="legend-dot" style="background:#dc2626;"></span>Drop-off</span>
+                  <span><span class="legend-dot" style="background:#15803d;"></span>Verified Online Riders (<span id="onlineRidersCount">0</span>)</span>
+                </div>
+                <div>© OpenStreetMap contributors • OSRM Routing</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <!-- Active Trip Tracker OR New Booking Form -->
+          <div id="activeTripPanel" class="card stack hidden"></div>
+
+          <div id="newBookingPanel" class="card stack">
+            <h2 style="margin:0;">Book Your Local Ride</h2>
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="pickupSearchInput">Pickup Location *</label>
+                <div class="row" style="gap:6px;">
+                  <input id="pickupSearchInput" type="text" placeholder="Search pickup or click map" style="flex:1;" />
+                  <button id="searchPickupBtn" class="btn btn-secondary" type="button">Find</button>
+                </div>
+                <div id="pickupResults" class="stack" style="gap:4px;margin-top:6px;"></div>
+              </div>
+              <div>
+                <label class="field-label" for="dropSearchInput">Drop-off Destination *</label>
+                <div class="row" style="gap:6px;">
+                  <input id="dropSearchInput" type="text" placeholder="Search destination or click map" style="flex:1;" />
+                  <button id="searchDropBtn" class="btn btn-secondary" type="button">Find</button>
+                </div>
+                <div id="dropResults" class="stack" style="gap:4px;margin-top:6px;"></div>
+              </div>
+            </div>
+
+            <div class="row">
+              <label class="checkbox-pill"><input type="radio" name="mapPickTarget" value="pickup" checked /> Click map = Set Pickup</label>
+              <label class="checkbox-pill"><input type="radio" name="mapPickTarget" value="drop" /> Click map = Set Drop-off</label>
+              <span id="routeSummaryBadge" class="badge badge-info">Distance: —</span>
+            </div>
+
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="bookingTypeSelect">Trip Type</label>
+                <select id="bookingTypeSelect">
+                  <option value="now">Ride Now</option>
+                  <option value="scheduled">Schedule Later</option>
+                  <option value="station_pickup">Railway Station Pickup</option>
+                  <option value="bus_stand_pickup">Bus Stand Pickup</option>
+                  <option value="airport_transfer">Airport Transfer</option>
+                  <option value="village_to_town">Village to Town</option>
+                  <option value="return_trip">Return Round Trip</option>
+                </select>
+              </div>
+              <div>
+                <label class="field-label" for="paymentMethodSelect">Payment Method</label>
+                <select id="paymentMethodSelect">
+                  <option value="cash">Cash at Drop</option>
+                  <option value="upi">UPI (Gateway / Verification)</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="scheduleDateWrapper" class="hidden">
+              <label class="field-label" for="scheduleDateInput">Scheduled Pickup Date &amp; Time</label>
+              <input id="scheduleDateInput" type="datetime-local" />
+            </div>
+
+            <div>
+              <label class="field-label">Select Vehicle Category (Live Admin Rates)</label>
+              <div id="vehicleOptionsList" class="stack" style="gap:8px;"></div>
+            </div>
+
+            <div id="fareQuoteDisclosure" class="list-item list-item-muted"></div>
+
+            <button id="confirmBookBtn" class="btn btn-primary" type="button" style="min-height:46px;">
+              Find Nearby Verified Rider
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: MY RIDES & RECEIPTS -->
+      <div id="ridesTab" class="card stack hidden">
+        <div class="space-between">
+          <h2 style="margin:0;">Ride History</h2>
+          <span class="list-item-muted">Showing your recent bookings</span>
+        </div>
+        <div id="custRidesList" class="stack"></div>
+      </div>
+
+      <!-- TAB 3: PAYMENTS -->
+      <div id="paymentsTab" class="card stack hidden">
+        <h2 style="margin:0;">Payment Ledger &amp; GST Receipts</h2>
+        <div id="custPaymentsList" class="stack"></div>
+      </div>
+
+      <!-- TAB 4: NOTIFICATIONS -->
+      <div id="alertsTab" class="card stack hidden">
+        <div class="space-between">
+          <h2 style="margin:0;">Notifications</h2>
+          <button id="custMarkAllReadBtn" class="btn btn-secondary" type="button">Mark All Read</button>
+        </div>
+        <div id="custAlertsList" class="stack"></div>
+      </div>
+
+      <!-- TAB 5: PROFILE & SAFETY -->
+      <div id="profileTab" class="split-2 hidden">
+        <div class="card stack">
+          <h2 style="margin:0;">Saved Addresses &amp; Emergency Contact</h2>
+          <form id="custProfileForm" class="stack">
+            <div>
+              <label class="field-label" for="profHome">Home Address</label>
+              <input id="profHome" type="text" placeholder="House / Village / Landmark" />
+            </div>
+            <div>
+              <label class="field-label" for="profWork">Work / Market Address</label>
+              <input id="profWork" type="text" placeholder="Office / Market / School" />
+            </div>
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="profVillage">Native Village / Town</label>
+                <input id="profVillage" type="text" placeholder="e.g. Borai" />
+              </div>
+              <div>
+                <label class="field-label" for="profDistrict">District</label>
+                <input id="profDistrict" type="text" placeholder="e.g. Paschim Medinipur" />
+              </div>
+            </div>
+            <div class="form-grid-2">
+              <div>
+                <label class="field-label" for="profEmergName">Emergency Contact Name</label>
+                <input id="profEmergName" type="text" placeholder="Family / Guardian Name" />
+              </div>
+              <div>
+                <label class="field-label" for="profEmergPhone">Emergency Contact Phone *</label>
+                <input id="profEmergPhone" type="tel" required minlength="8" placeholder="+91 98..." />
+              </div>
+            </div>
+            <button class="btn btn-primary" type="submit">Update Profile &amp; Emergency Contact</button>
+          </form>
+        </div>
+
+        <div class="card stack">
+          <h2 style="margin:0;">Helpline, Support &amp; DPDP Rights</h2>
+          <p id="helplineDisplay" class="list-item-muted" style="margin:0;">24x7 Safety Helpline: Loading...</p>
+          <form id="custSupportForm" class="stack">
+            <div>
+              <label class="field-label" for="supType">Request Type</label>
+              <select id="supType">
+                <option value="general_support">General Support</option>
+                <option value="safety_assistance">Safety Assistance</option>
+                <option value="billing_invoice">Billing / GST Invoice Help</option>
+                <option value="data_export">DPDP Data Export Request</option>
+                <option value="account_deletion">Account Deletion Request</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="supDetails">Details *</label>
+              <textarea id="supDetails" rows="3" required minlength="5" placeholder="Describe how GoLocal Support can help"></textarea>
+            </div>
+            <button class="btn btn-secondary" type="submit">Submit Support Request</button>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Itemized GST Receipt Modal -->
+  <div id="receiptModal" class="modal-backdrop hidden">
+    <div class="modal-card stack">
+      <div class="space-between no-print">
+        <h3 style="margin:0;">GoLocal Itemized Ride Receipt</h3>
+        <button id="closeReceiptModalBtn" class="btn btn-secondary" type="button">Close</button>
+      </div>
+      <div id="receiptModalBody" class="stack"></div>
+      <div class="row no-print">
+        <button id="printReceiptBtn" class="btn btn-primary" type="button">Print / Save PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="./customer.js"></script>
+</body>
+</html>

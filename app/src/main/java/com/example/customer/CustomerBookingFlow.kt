@@ -661,6 +661,14 @@ fun CustomerBookRideScreen(
                                     )
                                 }
                             }
+                            Text(
+                                text = platformSettings?.cancellationPolicySummary?.takeIf { it.isNotBlank() }
+                                    ?: "Free cancellation pre-arrival. Nominal fee applies after arrival or waiting.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
 
                             if (canSelectTestRide) {
                                 Surface(

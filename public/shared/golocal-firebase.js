@@ -42,7 +42,7 @@ const firebaseConfig = {
   databaseURL: "https://gen-lang-client-0818250755-default-rtdb.firebaseio.com",
   storageBucket: "gen-lang-client-0818250755.firebasestorage.app",
   messagingSenderId: "629202329249",
-  appId: "1:629202329249:android:f2cfdd8b9872a90a461ae0",
+  appId: "1:629202329249:web:f2cfdd8b9872a90a461ae0",
 };
 
 const app = initializeApp(firebaseConfig);
@@ -239,7 +239,7 @@ export async function resolvePortalRole(user) {
   ]);
   const isOwnerAdmin = Boolean(adminSnap && adminSnap.exists());
   const isOperationsStaff = Boolean(
-    opsSnap && opsSnap.exists() && opsSnap.data()?.active !== false
+    opsSnap && opsSnap.exists() && opsSnap.data()?.isActive === true
   );
   return { isOwnerAdmin, isOperationsStaff };
 }

@@ -71,6 +71,9 @@ fun CustomerBookingsHistoryTab(
     var appealTarget by remember { mutableStateOf<Booking?>(null) }
     var chatArchiveTarget by remember { mutableStateOf<Booking?>(null) }
     var qrTicketDialog by remember { mutableStateOf<BusBooking?>(null) }
+    var receiptBookingTarget by remember { mutableStateOf<Booking?>(null) }
+    var receiptPaymentTarget by remember { mutableStateOf<com.example.data.model.PaymentRecord?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Column(
         modifier = Modifier
@@ -337,6 +340,10 @@ fun CustomerBookingsHistoryTab(
                                                 GolocalStatusBadge(label = "Rated ★ ${booking.customerRating}", tone = "success")
                                             }
                                             if (!isTestRide) {
+                                                OutlinedButton(onClick = {
+                                                    receiptBookingTarget = booking
+                                                    receiptPaymentTarget = payments.firstOrNull { it.bookingId == booking.id }
+                                                }) { Text("Receipt") }
                                                 TextButton(onClick = { refundTarget = booking }) { Text("Refund") }
                                                 TextButton(onClick = { complaintTarget = booking }) { Text("Dispute", color = GolocalError) }
                                             }
@@ -450,6 +457,16 @@ fun CustomerBookingsHistoryTab(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.primary
                                         )
+                                    }
+                                    val allBookingsList = (bookingsState as? UiState.Success)?.data.orEmpty()
+                                    OutlinedButton(
+                                        onClick = {
+                                            receiptPaymentTarget = pay
+                                            receiptBookingTarget = allBookingsList.firstOrNull { it.id == pay.bookingId }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("View Itemized GST Receipt")
                                     }
                                 }
                             }
@@ -623,6 +640,84 @@ fun CustomerBookingsHistoryTab(
             },
             dismissButton = { TextButton(onClick = { complaintTarget = null }) { Text("Cancel") } }
         )
+    }
+
+    if (receiptBookingTarget != null || receiptPaymentTarget != null) {
+        val bk = receiptBookingTarget
+        val py = receiptPaymentTarget
+        val bookingIdLabel = (bk?.id ?: py?.bookingId ?: "").take(10).uppercase()
+        val gross = py?.grossFareInr ?: bk?.let { if (it.agreedFareInr > 0) it.agreedFareInr else it.estimatedFareInr } ?: 0.0
+        val gst = py?.gstInr ?: kotlin.math.round((gross * (bk?.gstPercent ?: 5.0) / 100.0) * 100.0) / 100.0
+        val baseExclTax = (gross - gst - (bk?.waitingFeeInr ?: 0.0)).coerceAtLeast(0.0)
+        AlertDialog(
+            onDismissRequest = {
+                receiptBookingTarget = null
+                receiptPaymentTarget = null
+            },
+            title = { Text("GoLocal Ride Receipt • #$bookingIdLabel") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (bk != null) {
+                        Text("${bk.pickupLabel} -> ${bk.destinationLabel}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text("${bk.vehicleCategory.uppercase()} • ${bk.distanceKm} km • Driver: ${bk.assignedDriverName.ifBlank { "Partner" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    HorizontalDivider()
+                    ReceiptLine("Base & Distance Fare (excl. GST)", "₹${String.format(Locale.US, "%.2f", baseExclTax)}")
+                    if ((bk?.waitingFeeInr ?: 0.0) > 0.0) {
+                        ReceiptLine("Waiting Fee", "₹${String.format(Locale.US, "%.2f", bk?.waitingFeeInr ?: 0.0)}")
+                    }
+                    if ((bk?.cancellationFeeInr ?: 0.0) > 0.0) {
+                        ReceiptLine("Cancellation Adjustment", "₹${String.format(Locale.US, "%.2f", bk?.cancellationFeeInr ?: 0.0)}")
+                    }
+                    ReceiptLine("GST (${bk?.gstPercent ?: 5.0}%)", "₹${String.format(Locale.US, "%.2f", gst)}")
+                    HorizontalDivider()
+                    ReceiptLine("Total Paid", "₹${String.format(Locale.US, "%.2f", gross)}", bold = true)
+                    Text(
+                        text = "Method: ${(py?.paymentMethod ?: bk?.paymentMethod ?: "cash").uppercase()} • Status: ${(py?.status ?: bk?.paymentStatus ?: "settled").uppercase()}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (!py?.gatewayReference.isNullOrBlank()) {
+                        Text("Ref: ${py?.gatewayReference}", style = MaterialTheme.typography.labelSmall, fontFamily = JetBrainsMono)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val summary = buildString {
+                        appendLine("GoLocal by NR Next - Ride Receipt #$bookingIdLabel")
+                        if (bk != null) {
+                            appendLine("Route: ${bk.pickupLabel} -> ${bk.destinationLabel}")
+                            appendLine("Vehicle: ${bk.vehicleCategory.uppercase()} (${bk.distanceKm} km)")
+                        }
+                        appendLine("Base Fare: INR ${String.format(Locale.US, "%.2f", baseExclTax)}")
+                        appendLine("GST: INR ${String.format(Locale.US, "%.2f", gst)}")
+                        appendLine("Total Paid: INR ${String.format(Locale.US, "%.2f", gross)}")
+                        appendLine("Payment Ref: ${py?.gatewayReference ?: "Cash Settlement"}")
+                    }
+                    val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, "GoLocal Receipt #$bookingIdLabel")
+                        putExtra(android.content.Intent.EXTRA_TEXT, summary)
+                    }
+                    context.startActivity(android.content.Intent.createChooser(shareIntent, "Share GoLocal Receipt"))
+                }) { Text("Share Receipt") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    receiptBookingTarget = null
+                    receiptPaymentTarget = null
+                }) { Text("Close") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ReceiptLine(label: String, value: String, bold: Boolean = false) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, style = MaterialTheme.typography.bodySmall, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
+        Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = JetBrainsMono, fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium)
     }
 }
 

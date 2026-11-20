@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoLocal Partner — Rider Web App</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="../css/portal.css" />
+</head>
+<body>
+  <header class="topbar no-print">
+    <div class="topbar-brand">
+      <div class="brand-mark">GL</div>
+      <div>
+        <h1>GoLocal Partner App</h1>
+        <div class="subtitle">Rider Web Console • KYC Onboarding • Live Dispatch • OTP • Earnings</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="riderSessionBadge" class="badge badge-info hidden">Partner</span>
+      <span id="riderKycBadge" class="badge badge-warning hidden">PENDING KYC</span>
+      <a class="btn btn-light" href="../">All Apps</a>
+      <button id="riderSignOutBtn" class="btn btn-light hidden" type="button">Sign Out</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="riderStatusAlert" class="alert hidden" style="margin-bottom:14px;"></div>
+
+    <!-- Phone OTP Auth Card -->
+    <section id="riderAuthCard" class="auth-card stack" style="margin:24px auto;">
+      <div>
+        <span class="badge badge-info">Partner Sign-In</span>
+        <h2 style="margin:8px 0 4px;">Sign in with Partner Mobile OTP</h2>
+        <p class="list-item-muted" style="margin:0;">
+          Access your GoLocal Rider dashboard, submit commercial KYC documents, manage live dispatch, and withdraw earnings.
+        </p>
+      </div>
+      <div id="riderPhoneStep" class="stack">
+        <div>
+          <label class="field-label" for="riderPhoneInput">Mobile Number (+91 or E.164)</label>
+          <input id="riderPhoneInput" type="tel" placeholder="+91 9876543210" autocomplete="tel" />
+        </div>
+        <div id="riderRecaptcha"></div>
+        <button id="riderSendOtpBtn" class="btn btn-primary" type="button">Send 6-Digit OTP</button>
+      </div>
+      <div id="riderOtpStep" class="stack hidden">
+        <div class="alert alert-info" id="riderOtpLabel">Enter 6-digit SMS verification code.</div>
+        <div>
+          <label class="field-label" for="riderOtpInput">6-Digit OTP</label>
+          <input id="riderOtpInput" type="tel" maxlength="6" placeholder="123456" />
+        </div>
+        <div class="row">
+          <button id="riderVerifyOtpBtn" class="btn btn-primary" type="button">Verify &amp; Continue</button>
+          <button id="riderChangePhoneBtn" class="btn btn-secondary" type="button">Change Number</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Authenticated Rider Workspace -->
+    <section id="riderMainSection" class="hidden stack">
+      <!-- Top Shift & Sample Mode Control Strip -->
+      <div class="card space-between" id="riderTopStrip">
+        <div class="stack" style="gap:4px;">
+          <div class="row">
+            <strong id="riderHeaderName">GoLocal Partner</strong>
+            <span id="riderVehicleChip" class="badge badge-info">TOTO</span>
+            <span id="riderSampleBadge" class="badge badge-warning hidden">SAMPLE RIDER ISOLATED MODE</span>
+          </div>
+          <div id="riderHeaderSub" class="list-item-muted">Shift status loading...</div>
+        </div>
+        <div class="row">
+          <button id="toggleSampleModeBtn" class="btn btn-secondary hidden" type="button">Switch to Sample Rider Mode</button>
+          <button id="toggleShiftBtn" class="btn btn-primary" type="button" disabled>Go Online</button>
+          <button id="riderSosBtn" class="btn btn-danger" type="button">SOS Alert</button>
+        </div>
+      </div>
+
+      <div id="kycGateBanner" class="alert alert-warning hidden"></div>
+
+      <div class="tabs no-print">
+        <button class="tab-btn active" data-tab="dispatchTab" type="button">Dispatch &amp; Active Trip</button>
+        <button class="tab-btn" data-tab="earningsTab" type="button">Earnings &amp; Payouts</button>
+        <button class="tab-btn" data-tab="historyTab" type="button">Trip History</button>
+        <button class="tab-btn" data-tab="kycTab" type="button">KYC &amp; Vehicle Profile</button>
+        <button class="tab-btn" data-tab="alertsTab" type="button">Notifications</button>
+      </div>
+
+      <!-- TAB 1: DISPATCH & ACTIVE TRIP -->
+      <div id="dispatchTab" class="portal-grid">
+        <div class="stack">
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Partner GPS &amp; Pickup Map</h2>
+              <div class="row">
+                <button id="refreshGpsBtn" class="btn btn-secondary" type="button">Update My GPS</button>
+                <button id="centerRiderBoraiBtn" class="btn btn-secondary" type="button">Borai Hub</button>
+              </div>
+            </div>
+            <div class="map-shell">
+              <div id="riderMap" class="map-canvas"></div>
+              <div class="map-attribution-bar">
+                <div class="legend">
+                  <span><span class="legend-dot" style="background:#15803d;"></span>My Partner GPS</span>
+                  <span><span class="legend-dot" style="background:#f59e0b;"></span>Incoming Request</span>
+                  <span><span class="legend-dot" style="background:#1565c0;"></span>Active Trip Pickup/Drop</span>
+                </div>
+                <div id="gpsCoordsText" class="mono">GPS: waiting...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <!-- Isolated Sample Rider Section (shown only when Sample Mode active) -->
+          <div id="sampleRiderPanel" class="card stack hidden"></div>
+
+          <!-- Commercial Active Trip Card -->
+          <div id="riderActiveTripPanel" class="card stack hidden"></div>
+
+          <!-- Commercial Incoming Ride Queue -->
+          <div id="incomingRequestsPanel" class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Incoming Ride Requests</h2>
+              <span id="incomingCountBadge" class="badge badge-info">0 live</span>
+            </div>
+            <div id="incomingRequestsList" class="list-scroll" style="max-height:520px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: EARNINGS & PAYOUTS -->
+      <div id="earningsTab" class="stack hidden">
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">Today / 24h Net</div>
+            <div class="metric-value" id="earn24h">₹0</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Last 7 Days Net</div>
+            <div class="metric-value" id="earn7d">₹0</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Last 30 Days Net</div>
+            <div class="metric-value" id="earn30d">₹0</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">All-Time Net</div>
+            <div class="metric-value" id="earnTotal">₹0</div>
+          </div>
+        </div>
+
+        <div class="split-2">
+          <div class="card stack">
+            <div class="space-between">
+              <h2 style="margin:0;">Request Bank / UPI Settlement</h2>
+              <button id="exportEarningsCsvBtn" class="btn btn-secondary" type="button">Download CSV</button>
+            </div>
+            <form id="settlementForm" class="stack">
+              <div class="form-grid-2">
+                <div>
+                  <label class="field-label" for="settleAmountInput">Amount (INR, min ₹50) *</label>
+                  <input id="settleAmountInput" type="number" min="50" max="100000" step="1" required placeholder="500" />
+                </div>
+                <div>
+                  <label class="field-label" for="settleUpiInput">UPI ID or Bank Ref *</label>
+                  <input id="settleUpiInput" type="text" required minlength="3" placeholder="name@upi or A/C + IFSC" />
+                </div>
+              </div>
+              <button class="btn btn-primary" type="submit">Submit Withdrawal Request</button>
+            </form>
+            <h3>Settlement Requests</h3>
+            <div id="riderSettlementsList" class="list-scroll" style="max-height:260px;"></div>
+          </div>
+
+          <div class="card stack">
+            <h2 style="margin:0;">Commission &amp; Ride Earnings Ledger</h2>
+            <div id="riderCommissionsList" class="list-scroll" style="max-height:380px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: TRIP HISTORY -->
+      <div id="historyTab" class="card stack hidden">
+        <div class="space-between">
+          <h2 style="margin:0;">Completed &amp; Cancelled Trips</h2>
+          <span class="list-item-muted">Real Firestore booking records</span>
+        </div>
+        <div id="riderHistoryList" class="stack"></div>
+      </div>
+
+      <!-- TAB 4: KYC & VEHICLE PROFILE -->
+      <div id="kycTab" class="card stack hidden">
+        <div class="space-between">
+          <h2 style="margin:0;">Commercial Partner Onboarding &amp; KYC Documents</h2>
+          <span id="kycFormStatusBadge" class="badge badge-muted">NOT SUBMITTED</span>
+        </div>
+        <p class="list-item-muted" style="margin:0;">
+          Driving Licence, Vehicle Registration (RC), and Insurance documents are reviewed by GoLocal Owner Admin before you can accept commercial rides.
+        </p>
+
+        <form id="kycForm" class="stack">
+          <div class="form-grid-3">
+            <div>
+              <label class="field-label" for="kLegalName">Legal Full Name *</label>
+              <input id="kLegalName" type="text" required minlength="2" placeholder="As on Driving Licence" />
+            </div>
+            <div>
+              <label class="field-label" for="kDistrict">Operating District *</label>
+              <input id="kDistrict" type="text" required value="Paschim Medinipur" />
+            </div>
+            <div>
+              <label class="field-label" for="kBlock">Block / Town / Locality</label>
+              <input id="kBlock" type="text" value="Mohanpur" />
+            </div>
+          </div>
+
+          <div class="form-grid-3">
+            <div>
+              <label class="field-label" for="kVehCat">Vehicle Category *</label>
+              <select id="kVehCat" required>
+                <option value="toto">Toto (E-Rickshaw)</option>
+                <option value="auto">Auto-Rickshaw</option>
+                <option value="bike">Bike</option>
+                <option value="cab">Cab / Car</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="kVehModel">Vehicle Make &amp; Model</label>
+              <input id="kVehModel" type="text" placeholder="e.g. Bajaj RE / Hero Splendor" />
+            </div>
+            <div>
+              <label class="field-label" for="kVehReg">Registration Number *</label>
+              <input id="kVehReg" type="text" required minlength="4" placeholder="WB34AB1234" />
+            </div>
+          </div>
+
+          <div class="form-grid-3">
+            <div>
+              <label class="field-label" for="kDlNum">Driving Licence Number *</label>
+              <input id="kDlNum" type="text" required minlength="4" placeholder="WB3420210001234" />
+            </div>
+            <div>
+              <label class="field-label" for="kRcNum">RC Certificate Number *</label>
+              <input id="kRcNum" type="text" required minlength="4" placeholder="RC number" />
+            </div>
+            <div>
+              <label class="field-label" for="kInsNum">Insurance Policy Number *</label>
+              <input id="kInsNum" type="text" required minlength="4" placeholder="Policy number" />
+            </div>
+          </div>
+
+          <div class="form-grid-3">
+            <div>
+              <label class="field-label" for="kPermit">Commercial Permit / Badge Info</label>
+              <input id="kPermit" type="text" placeholder="Optional permit reference" />
+            </div>
+            <div>
+              <label class="field-label" for="kUpi">Payout UPI ID / Bank Account</label>
+              <input id="kUpi" type="text" placeholder="partner@upi" />
+            </div>
+            <div>
+              <label class="field-label" for="kAddress">Residential Address</label>
+              <input id="kAddress" type="text" placeholder="Village, PO, PS, PIN" />
+            </div>
+          </div>
+
+          <div class="form-grid-2">
+            <div>
+              <label class="field-label" for="kEmergName">Emergency Contact Name *</label>
+              <input id="kEmergName" type="text" required placeholder="Family member name" />
+            </div>
+            <div>
+              <label class="field-label" for="kEmergPhone">Emergency Contact Phone *</label>
+              <input id="kEmergPhone" type="tel" required minlength="8" placeholder="+91 98..." />
+            </div>
+          </div>
+
+          <hr style="border:none;border-top:1px solid var(--border);margin:4px 0;" />
+          <h3 style="margin:0;">Upload KYC Document Photos (Firebase Storage)</h3>
+          <div class="form-grid-2">
+            <div class="list-item stack" style="gap:6px;">
+              <label class="field-label" for="fileDl">Driving Licence Photo</label>
+              <input id="fileDl" type="file" accept="image/*,application/pdf" />
+              <div id="dlUploadStatus" class="list-item-muted">No file uploaded</div>
+            </div>
+            <div class="list-item stack" style="gap:6px;">
+              <label class="field-label" for="fileRc">RC Certificate Photo</label>
+              <input id="fileRc" type="file" accept="image/*,application/pdf" />
+              <div id="rcUploadStatus" class="list-item-muted">No file uploaded</div>
+            </div>
+            <div class="list-item stack" style="gap:6px;">
+              <label class="field-label" for="fileInsurance">Insurance Certificate Photo</label>
+              <input id="fileInsurance" type="file" accept="image/*,application/pdf" />
+              <div id="insuranceUploadStatus" class="list-item-muted">No file uploaded</div>
+            </div>
+            <div class="list-item stack" style="gap:6px;">
+              <label class="field-label" for="filePermit">Vehicle / Permit Photo</label>
+              <input id="filePermit" type="file" accept="image/*,application/pdf" />
+              <div id="permitUploadStatus" class="list-item-muted">No file uploaded</div>
+            </div>
+          </div>
+
+          <label class="checkbox-pill">
+            <input id="kTermsCheck" type="checkbox" required />
+            I confirm all vehicle &amp; licence documents are authentic and comply with Motor Vehicles Aggregator rules.
+          </label>
+
+          <button id="saveKycBtn" class="btn btn-primary" type="submit">Submit KYC for Owner Verification</button>
+        </form>
+      </div>
+
+      <!-- TAB 5: NOTIFICATIONS -->
+      <div id="alertsTab" class="card stack hidden">
+        <div class="space-between">
+          <h2 style="margin:0;">Partner Notifications</h2>
+          <button id="riderMarkAllReadBtn" class="btn btn-secondary" type="button">Mark All Read</button>
+        </div>
+        <div id="riderAlertsList" class="stack"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="./rider.js"></script>
+</body>
+</html>

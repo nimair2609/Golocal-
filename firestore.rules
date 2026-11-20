@@ -181,7 +181,7 @@ service cloud.firestore {
              isOptionalString(data, 'insuranceNumber', 60) &&
              isOptionalString(data, 'permitInfo', 120) &&
              isOptionalString(data, 'settlementUpiOrBank', 100) &&
-             isOptionalString(data, 'documentPhotoUri', 500) &&
+             isOptionalString(data, 'documentPhotoUri', 1000) &&
              isOptionalString(data, 'pucNumber', 60) &&
              isOptionalString(data, 'fitnessCertificateNumber', 60) &&
              (!('dlExpiryEpochDay' in data) || data.dlExpiryEpochDay is int) &&
@@ -190,12 +190,12 @@ service cloud.firestore {
              (!('permitExpiryEpochDay' in data) || data.permitExpiryEpochDay is int) &&
              (!('fitnessExpiryEpochDay' in data) || data.fitnessExpiryEpochDay is int) &&
              (!('pucExpiryEpochDay' in data) || data.pucExpiryEpochDay is int) &&
-             isOptionalString(data, 'dlPhotoUri', 500) &&
-             isOptionalString(data, 'rcPhotoUri', 500) &&
-             isOptionalString(data, 'insurancePhotoUri', 500) &&
-             isOptionalString(data, 'permitPhotoUri', 500) &&
-             isOptionalString(data, 'fitnessPhotoUri', 500) &&
-             isOptionalString(data, 'pucPhotoUri', 500) &&
+             isOptionalString(data, 'dlPhotoUri', 1000) &&
+             isOptionalString(data, 'rcPhotoUri', 1000) &&
+             isOptionalString(data, 'insurancePhotoUri', 1000) &&
+             isOptionalString(data, 'permitPhotoUri', 1000) &&
+             isOptionalString(data, 'fitnessPhotoUri', 1000) &&
+             isOptionalString(data, 'pucPhotoUri', 1000) &&
              isOptionalString(data, 'reviewedBy', 128) &&
              isOptionalString(data, 'reviewNote', 300) &&
              (!('verificationVersion' in data) || data.verificationVersion is int) &&
@@ -324,6 +324,14 @@ service cloud.firestore {
              isOptionalString(data, 'otp_status', 40) &&
              (!('otp_expires_at_ms' in data) || (data.otp_expires_at_ms is int && data.otp_expires_at_ms >= 0)) &&
              (!('requestExpiresAtMs' in data) || (data.requestExpiresAtMs is int && data.requestExpiresAtMs >= 0)) &&
+             (!('scheduledAtMs' in data) || (data.scheduledAtMs is int && data.scheduledAtMs >= 0)) &&
+             (!('cancellationFeeInr' in data) || (data.cancellationFeeInr is number && data.cancellationFeeInr >= 0)) &&
+             (!('waitingFeeInr' in data) || (data.waitingFeeInr is number && data.waitingFeeInr >= 0)) &&
+             isOptionalString(data, 'opsDispatchNote', 300) &&
+             isOptionalString(data, 'opsUpdatedBy', 128) &&
+             (!('opsEscalationFlag' in data) || data.opsEscalationFlag is bool) &&
+             isOptionalString(data, 'assignedByOpsUid', 128) &&
+             isOptionalString(data, 'opsAssignmentNote', 200) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -349,6 +357,14 @@ service cloud.firestore {
              (!('otp_status' in data) || (data.otp_status is string && data.otp_status.size() <= 40)) &&
              (!('otp_expires_at_ms' in data) || (data.otp_expires_at_ms is int && data.otp_expires_at_ms >= 0)) &&
              (!('requestExpiresAtMs' in data) || (data.requestExpiresAtMs is int && data.requestExpiresAtMs >= 0)) &&
+             (!('scheduledAtMs' in data) || (data.scheduledAtMs is int && data.scheduledAtMs >= 0)) &&
+             (!('cancellationFeeInr' in data) || (data.cancellationFeeInr is number && data.cancellationFeeInr >= 0)) &&
+             (!('waitingFeeInr' in data) || (data.waitingFeeInr is number && data.waitingFeeInr >= 0)) &&
+             isOptionalString(data, 'opsDispatchNote', 300) &&
+             isOptionalString(data, 'opsUpdatedBy', 128) &&
+             (!('opsEscalationFlag' in data) || data.opsEscalationFlag is bool) &&
+             isOptionalString(data, 'assignedByOpsUid', 128) &&
+             isOptionalString(data, 'opsAssignmentNote', 200) &&
              isValidTimestamp(data.updatedAt);
     }
 
@@ -472,6 +488,23 @@ service cloud.firestore {
              data.description is string && data.description.size() >= 5 && data.description.size() <= 500 &&
              data.status in ['open', 'investigating', 'resolved'] &&
              isOptionalString(data, 'resolutionNote', 300) &&
+             (!('lat' in data) || data.lat is number) &&
+             (!('lng' in data) || data.lng is number) &&
+             isOptionalString(data, 'locationLabel', 160) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidDisputeRecord(data) {
+      return data.reporterId is string && data.reporterId.size() <= 128 &&
+             isOptionalString(data, 'bookingId', 128) &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 80 &&
+             data.description is string && data.description.size() >= 5 && data.description.size() <= 500 &&
+             data.status in ['open', 'under_review', 'resolved_closed'] &&
+             isOptionalString(data, 'adminResolutionNote', 300) &&
+             (!('lat' in data) || data.lat is number) &&
+             (!('lng' in data) || data.lng is number) &&
+             isOptionalString(data, 'locationLabel', 160) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -549,6 +582,10 @@ service cloud.firestore {
              isOptionalString(data, 'grievanceOfficerName', 100) &&
              isOptionalString(data, 'grievanceOfficerEmail', 150) &&
              (!('bikeTaxiCommercialApproved' in data) || data.bikeTaxiCommercialApproved is bool) &&
+             isOptionalString(data, 'promoBannerTitle', 120) &&
+             isOptionalString(data, 'promoBannerText', 300) &&
+             isOptionalString(data, 'promoCode', 40) &&
+             (!('promoDiscountPct' in data) || (data.promoDiscountPct is number && data.promoDiscountPct >= 0 && data.promoDiscountPct <= 50)) &&
              isValidTimestamp(data.updatedAt);
     }
 
@@ -1083,7 +1120,7 @@ service cloud.firestore {
                             'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
                             'agreedFareInr', 'test_otp_status', 'test_otp_expires_at_ms', 'updatedAt'
                           ])) ||
-                         // Action: Operations Staff manages Admin-controlled Test Rides ONLY (cannot bypass OTP or assign unauthorized partners)
+                         // Action: Operations Staff manages Test Rides OR triages/dispatches commercial bookings (strictly scoped)
                          ('is_test_ride' in existing() &&
                           existing().is_test_ride == true &&
                           incoming().is_test_ride == true &&
@@ -1102,6 +1139,32 @@ service cloud.firestore {
                             'agreedFareInr', 'test_otp_status', 'test_otp_expires_at_ms',
                             'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory',
                             'updatedAt'
+                          ])) ||
+                         // Action: Operations Staff annotates / escalates commercial bookings (note/escalation flag only)
+                         ((!('is_test_ride' in existing()) || existing().is_test_ride != true) &&
+                          isOperationsStaff() &&
+                          incoming().opsUpdatedBy == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'opsDispatchNote', 'opsEscalationFlag', 'opsUpdatedBy', 'updatedAt'
+                          ])) ||
+                         // Action: Operations Staff manually dispatches a verified commercial driver to an unassigned searching ride (atomically creates assignment + OTP challenge)
+                         ((!('is_test_ride' in existing()) || existing().is_test_ride != true) &&
+                          isOperationsStaff() &&
+                          existing().status == 'searching' &&
+                          incoming().status == 'assigned' &&
+                          incoming().assignedByOpsUid == request.auth.uid &&
+                          incoming().assignedDriverId is string && incoming().assignedDriverId.size() >= 1 &&
+                          exists(/databases/$(database)/documents/driver_profiles/$(incoming().assignedDriverId)) &&
+                          get(/databases/$(database)/documents/driver_profiles/$(incoming().assignedDriverId)).data.verificationStatus == 'verified' &&
+                          !exists(/databases/$(database)/documents/ride_assignments/$(bookingId)) &&
+                          existsAfter(/databases/$(database)/documents/ride_assignments/$(bookingId)) &&
+                          existsAfter(/databases/$(database)/documents/ride_otps/$(bookingId)) &&
+                          incoming().agreedFareInr >= existing().minPermittedFareInr &&
+                          incoming().agreedFareInr <= existing().maxPermittedFareInr &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'status', 'assignedDriverId', 'assignedDriverName', 'assignedVehicleLabel',
+                            'agreedFareInr', 'otp_status', 'otp_expires_at_ms',
+                            'assignedByOpsUid', 'opsAssignmentNote', 'updatedAt'
                           ])) ||
                          // Action: Owner Admin manages bookings & test rides (assigning test drivers still requires authorized test partner, and arrived -> in_progress requires verified/overridden OTP)
                          (isAdmin() &&
@@ -1175,12 +1238,12 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(assignmentId) &&
                     (existing().customerId == request.auth.uid ||
                      existing().driverId == request.auth.uid ||
-                     (isOperationsStaff() && 'is_test_ride' in existing() && existing().is_test_ride == true) ||
+                     isOperationsStaff() ||
                      isAdmin());
       allow list: if isSignedIn() &&
                      (resource.data.customerId == request.auth.uid ||
                       resource.data.driverId == request.auth.uid ||
-                      (isOperationsStaff() && resource.data.is_test_ride == true) ||
+                      isOperationsStaff() ||
                       isAdmin());
       allow create: if isSignedIn() &&
                        isValidId(assignmentId) &&
@@ -1192,6 +1255,13 @@ service cloud.firestore {
                             incoming().driverId == request.auth.uid &&
                             existsAfter(/databases/$(database)/documents/bookings/$(assignmentId)) &&
                             getAfter(/databases/$(database)/documents/bookings/$(assignmentId)).data.assignedDriverId == request.auth.uid) ||
+                           (isOperationsStaff() &&
+                            incoming().assignedByRole == 'ops_staff' &&
+                            incoming().assignedByUid == request.auth.uid &&
+                            exists(/databases/$(database)/documents/driver_profiles/$(incoming().driverId)) &&
+                            get(/databases/$(database)/documents/driver_profiles/$(incoming().driverId)).data.verificationStatus == 'verified' &&
+                            existsAfter(/databases/$(database)/documents/bookings/$(assignmentId)) &&
+                            getAfter(/databases/$(database)/documents/bookings/$(assignmentId)).data.assignedDriverId == incoming().driverId) ||
                            isAdmin()) &&
                           (!('is_test_ride' in incoming()) || incoming().is_test_ride == false)) ||
                          ((isStaffOrAdmin() || (isApprovedTestRider() && incoming().driverId == request.auth.uid)) &&
@@ -1376,20 +1446,51 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // 16. Complaints
+    // 16. Complaints (reporter + Ops Staff triage + Admin resolve)
     match /complaints/{complaintId} {
       allow get: if isSignedIn() && isValidId(complaintId) &&
-                    (existing().reporterId == request.auth.uid || isAdmin());
+                    (existing().reporterId == request.auth.uid || isStaffOrAdmin());
       allow list: if isSignedIn() &&
-                     (resource.data.reporterId == request.auth.uid || isAdmin());
+                     (resource.data.reporterId == request.auth.uid || isStaffOrAdmin());
       allow create: if isSignedIn() &&
                        isValidId(complaintId) &&
                        incoming().reporterId == request.auth.uid &&
                        incoming().status == 'open' &&
                        isValidComplaintRecord(incoming());
-      allow update: if isAdmin() &&
-                       isValidId(complaintId) &&
-                       isValidComplaintRecord(incoming());
+      allow update: if isValidId(complaintId) &&
+                       isValidComplaintRecord(incoming()) &&
+                       incoming().reporterId == existing().reporterId &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (isOperationsStaff() &&
+                          existing().status in ['open', 'investigating'] &&
+                          incoming().status in ['investigating', 'resolved'] &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'updatedAt']))
+                       );
+      allow delete: if false;
+    }
+
+    // 16b. Formal Disputes (reporter + Ops Staff review + Admin resolution)
+    match /disputes/{disputeId} {
+      allow get: if isSignedIn() && isValidId(disputeId) &&
+                    (existing().reporterId == request.auth.uid || isStaffOrAdmin());
+      allow list: if isSignedIn() &&
+                     (resource.data.reporterId == request.auth.uid || isStaffOrAdmin());
+      allow create: if isSignedIn() &&
+                       isValidId(disputeId) &&
+                       incoming().reporterId == request.auth.uid &&
+                       incoming().status == 'open' &&
+                       isValidDisputeRecord(incoming());
+      allow update: if isValidId(disputeId) &&
+                       isValidDisputeRecord(incoming()) &&
+                       incoming().reporterId == existing().reporterId &&
+                       incoming().createdAt == existing().createdAt && (
+                         isAdmin() ||
+                         (isOperationsStaff() &&
+                          existing().status == 'open' &&
+                          incoming().status == 'under_review' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminResolutionNote', 'updatedAt']))
+                       );
       allow delete: if false;
     }
 
@@ -1447,15 +1548,26 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 20. Immutable admin & operations audit logs (Ops Staff limited to test-ride audit records)
+    // 20. Immutable admin & operations audit logs (Ops Staff limited to own dispatch actions or test-ride records)
     match /audit_logs/{logId} {
       allow get: if isValidId(logId) &&
-                    (isAdmin() || (isOperationsStaff() && 'isTestRide' in existing() && existing().isTestRide == true));
-      allow list: if isAdmin() || (isOperationsStaff() && resource.data.isTestRide == true);
+                    (isAdmin() ||
+                     (isOperationsStaff() &&
+                      (existing().actorId == request.auth.uid ||
+                       ('isTestRide' in existing() && existing().isTestRide == true))));
+      allow list: if isAdmin() ||
+                     (isOperationsStaff() &&
+                      (resource.data.actorId == request.auth.uid || resource.data.isTestRide == true));
       allow create: if isStaffOrAdmin() &&
                        isValidId(logId) &&
                        incoming().actorId == request.auth.uid &&
-                       (isAdmin() || incoming().isTestRide == true) &&
+                       (isAdmin() ||
+                        incoming().isTestRide == true ||
+                        incoming().action in [
+                          'ops_assign_partner', 'ops_update_booking_note',
+                          'ops_escalate_booking', 'ops_triage_complaint',
+                          'ops_triage_dispute', 'ops_resolve_sos'
+                        ]) &&
                        isValidAuditLog(incoming());
       allow update, delete: if false;
     }
@@ -1574,7 +1686,7 @@ service cloud.firestore {
                        existsAfter(/databases/$(database)/documents/bookings/$(bookingId)) &&
                        (!('is_test_ride' in getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data) ||
                         getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.is_test_ride != true) &&
-                       (isAdmin() ||
+                       (isStaffOrAdmin() ||
                         incoming().customerId == request.auth.uid ||
                         (isVerifiedDriver() &&
                          getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.assignedDriverId == request.auth.uid)) &&
@@ -1847,15 +1959,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 27. FCM device tokens (strictly owner or admin; supports multi-device registration)
+    // 27. FCM device tokens (strictly owner or admin; supports multi-device registration across Android & Web)
     match /user_tokens/{tokenId} {
       allow get: if isSignedIn() && isValidId(tokenId) && (existing().userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create, update: if isSignedIn() &&
                                isValidId(tokenId) &&
                                incoming().userId == request.auth.uid &&
-                               incoming().platform == 'android' &&
-                               incoming().appVariant in ['customer', 'rider', 'admin'] &&
+                               incoming().platform in ['android', 'web'] &&
+                               incoming().appVariant in ['customer', 'rider', 'admin', 'ops'] &&
                                incoming().active is bool &&
                                isOptionalString(incoming(), 'deviceId', 128) &&
                                (!('appVersionCode' in incoming()) || incoming().appVersionCode is int) &&
