@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
@@ -27,7 +28,6 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Payments
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SupportAgent
@@ -409,15 +409,17 @@ fun CustomerProfileScreen(
                 statOneLabel = "Completed Rides",
                 statOneValue = completedTripsCount.toString(),
                 statTwoLabel = "Ratings Given",
-                statTwoValue = avgRatingText
+                statTwoValue = avgRatingText,
+                royalBlueHeader = true
             )
 
-            SettingsSectionGroup {
+            SettingsSectionGroup(title = "Account", modifier = Modifier.padding(top = 0.dp)) {
                 SettingsNavigationRow(
                     icon = Icons.Filled.Person,
                     title = "Personal information",
                     subtitle = account?.fullName?.ifBlank { "Name & invoice email" },
                     testTag = "settings_row_personal_info",
+                    iconBadgeBackground = true,
                     onClick = { subScreen = CustomerProfileSubScreen.PERSONAL_INFO }
                 )
                 SettingsNavigationRow(
@@ -425,19 +427,22 @@ fun CustomerProfileScreen(
                     title = "Saved addresses",
                     subtitle = customerProfile?.homeAddress?.ifBlank { "Home, Work & Native Village" } ?: "Home, Work & Native Village",
                     testTag = "settings_row_saved_addresses",
+                    iconBadgeBackground = true,
                     onClick = { subScreen = CustomerProfileSubScreen.SAVED_ADDRESSES }
                 )
                 SettingsNavigationRow(
-                    icon = Icons.Filled.ReceiptLong,
+                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
                     title = "My rides & bus passes",
                     subtitle = "History, scheduled trips & digital passes",
                     testTag = "settings_row_my_rides",
+                    iconBadgeBackground = true,
                     onClick = onOpenBookings
                 )
                 SettingsNavigationRow(
                     icon = Icons.Filled.Payments,
                     title = "Payments & invoices",
                     subtitle = "Cash, UPI records & GST receipts",
+                    iconBadgeBackground = true,
                     onClick = onOpenBookings
                 )
                 SettingsNavigationRow(
@@ -445,29 +450,33 @@ fun CustomerProfileScreen(
                     title = "Notifications",
                     subtitle = "Trip alerts, confirmations & announcements",
                     showDivider = false,
+                    iconBadgeBackground = true,
                     onClick = onOpenNotifications
                 )
             }
 
-            SettingsSectionGroup {
+            SettingsSectionGroup(title = "Safety & Preferences") {
                 SettingsNavigationRow(
                     icon = Icons.Filled.Shield,
                     title = "Safety, emergency & privacy",
                     subtitle = if (hasEmergency) "Private SOS contact active" else "Configure private SOS contact",
                     iconTint = if (hasEmergency) GolocalSuccess else GolocalPrimaryBlue,
                     testTag = "private_emergency_contact_card",
+                    iconBadgeBackground = true,
                     onClick = { subScreen = CustomerProfileSubScreen.SAFETY_PRIVACY }
                 )
                 SettingsNavigationRow(
                     icon = Icons.Filled.Language,
                     title = "Language, theme & low-network",
                     subtitle = "${prefs.language.displayLabel} • ${prefs.darkThemeMode.replaceFirstChar { it.uppercase() }}",
+                    iconBadgeBackground = true,
                     onClick = { subScreen = CustomerProfileSubScreen.PREFERENCES }
                 )
                 SettingsNavigationRow(
                     icon = Icons.Filled.SystemUpdate,
                     title = "App updates & policies",
                     subtitle = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    iconBadgeBackground = true,
                     onClick = { subScreen = CustomerProfileSubScreen.UPDATES_ABOUT }
                 )
                 SettingsNavigationRow(
@@ -475,6 +484,7 @@ fun CustomerProfileScreen(
                     title = "Help & support",
                     subtitle = platformSettings?.helplineNumber ?: "24x7 Safety & Booking Desk",
                     showDivider = false,
+                    iconBadgeBackground = true,
                     onClick = { showSupportDialog = true }
                 )
             }

@@ -400,8 +400,17 @@ fun CustomerBookRideScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .windowInsetsPadding(WindowInsets.safeDrawing)
-                        .padding(top = 14.dp)
+                        .padding(top = 10.dp)
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .width(42.dp)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -599,11 +608,15 @@ fun CustomerBookRideScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 18.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -717,33 +730,34 @@ fun CustomerBookRideScreen(
                             }
 
                             if (canSelectTestRide) {
-                                OutlinedButton(
-                                    onClick = {
-                                        customerViewModel.submitSampleRideBooking(
-                                            context = context,
-                                            quote = quote,
-                                            pickupLabel = pickupLabel,
-                                            pickupLat = pickupLat,
-                                            pickupLng = pickupLng,
-                                            destinationLabel = destLabel,
-                                            destinationLat = draft.destinationPlace.lat,
-                                            destinationLng = draft.destinationPlace.lng,
-                                            vehicleCategory = draft.selectedCategory,
-                                            onCreated = onBackHome
+                                    OutlinedButton(
+                                        onClick = {
+                                            customerViewModel.submitSampleRideBooking(
+                                                context = context,
+                                                quote = quote,
+                                                pickupLabel = pickupLabel,
+                                                pickupLat = pickupLat,
+                                                pickupLng = pickupLng,
+                                                destinationLabel = destLabel,
+                                                destinationLat = draft.destinationPlace.lat,
+                                                destinationLng = draft.destinationPlace.lng,
+                                                vehicleCategory = draft.selectedCategory,
+                                                onCreated = onBackHome
+                                            )
+                                        },
+                                        enabled = !isSubmitting,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .testTag("submit_sample_ride_button"),
+                                        shape = RoundedCornerShape(14.dp)
+                                    ) {
+                                        Text(
+                                            text = "Dispatch Sample Ride (Isolated)",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold
                                         )
-                                    },
-                                    enabled = !isSubmitting,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(min = 48.dp)
-                                        .testTag("submit_sample_ride_button"),
-                                    shape = RoundedCornerShape(14.dp)
-                                ) {
-                                    Text(
-                                        text = "Dispatch Sample Ride (Isolated)",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                    }
                                 }
                             }
                         }

@@ -16,7 +16,9 @@ import androidx.compose.ui.test.performTextInput
 import com.example.customer.CustomerActiveRideView
 import com.example.customer.CustomerHomeMapScreen
 import com.example.customer.CustomerLocationSearchSheet
+import com.example.customer.CustomerTravelSafeDialog
 import com.example.customer.LocationFieldTarget
+import com.example.customer.RideCompletedReceiptDialog
 import com.example.data.model.Booking
 import com.example.data.model.DriverProfile
 import com.example.data.model.EmergencyContactEntry
@@ -533,5 +535,71 @@ class RedesignFlowsRobolectricTest {
         assertTrue(throttle.acceptIfQualified(LocationSample(22.9010, 88.3910, 12f, 6_000L)))
         throttle.reset()
         assertTrue(throttle.acceptIfQualified(LocationSample(22.9000, 88.3900, 12f, 6_500L)))
+    }
+
+    @Test
+    fun `ride completed receipt dialog displays fare, stars, expandable breakdown, and submits rating`() {
+        var submittedStars = 0
+        val completedBooking = Booking(
+            id = "bk_done_42",
+            customerId = "cust_1",
+            customerName = "Nimai Roul",
+            assignedDriverId = "drv_7",
+            assignedDriverName = "Rohit Kumar",
+            pickupLabel = "Esplanade, Kolkata",
+            destinationLabel = "New Town, Kolkata",
+            agreedFareInr = 82.0,
+            gstPercent = 5.0,
+            paymentMethod = "upi",
+            status = "completed"
+        )
+        composeTestRule.setContent {
+            GolocalTheme {
+                RideCompletedReceiptDialog(
+                    booking = completedBooking,
+                    onSubmitRating = { stars, _, _, _, _, _ -> submittedStars = stars },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("ride_completed_receipt_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Ride Completed!").assertIsDisplayed()
+        composeTestRule.onNodeWithText("₹82").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("rating_star_4").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("toggle_detailed_rating_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Behavior").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("submit_completed_rating_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(4, submittedStars)
+    }
+
+    @Test
+    fun `customer travel safe dialog renders safety controls and expands support form`() {
+        var sosTriggered = false
+        var submittedIssue = ""
+        composeTestRule.setContent {
+            GolocalTheme {
+                CustomerTravelSafeDialog(
+                    helplineNumber = "112",
+                    onTriggerSos = { sosTriggered = true },
+                    onSubmitSupportTicket = { submittedIssue = it },
+                    onDismiss = {}
+                )
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("customer_travel_safe_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Travel Safe with GoLocal").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("travel_safe_call_sos_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("travel_safe_need_help_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("travel_safe_support_input").performScrollTo().performTextInput("Lost umbrella in auto")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("travel_safe_submit_help_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("Lost umbrella in auto", submittedIssue)
+        assertFalse(sosTriggered)
     }
 }

@@ -95,7 +95,7 @@ fun GolocalRoleSplashScreen(
         label = "splash_alpha"
     )
     val scale by animateFloatAsState(
-        targetValue = if (visible) 1f else 0.9f,
+        targetValue = if (visible) 1f else 0.92f,
         animationSpec = tween(durationMillis = 480),
         label = "splash_scale"
     )
@@ -104,6 +104,145 @@ fun GolocalRoleSplashScreen(
         visible = true
         delay(850)
         onFinished()
+    }
+
+    if (mode == ExperienceMode.CUSTOMER) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(GolocalPureWhite, GolocalSkyTop, GolocalLightBlue)
+                    )
+                )
+                .clickable { onFinished() }
+                .testTag("splash_screen_customer"),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier.alpha(alpha),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(30.dp),
+                        color = GolocalPureWhite,
+                        shadowElevation = 10.dp,
+                        modifier = Modifier
+                            .size((112 * scale).dp)
+                            .border(1.dp, GolocalBorderLight, RoundedCornerShape(30.dp))
+                    ) {
+                        GoLocalFullLogo(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(10.dp)
+                        )
+                    }
+                    Text(
+                        text = mode.appTitle,
+                        style = MaterialTheme.typography.displaySmall,
+                        color = GolocalDeepNavy,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "Your Local. Our Priority.",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = GolocalPrimaryBlue,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(22.dp),
+                        shadowElevation = 6.dp,
+                        color = GolocalPureWhite,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .widthIn(max = 380.dp)
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.img_golocal_hero),
+                            contentDescription = "GoLocal mobility across West Bengal",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(148.dp),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+            }
+
+            Surface(
+                color = GolocalAuthNavy,
+                shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+                shadowElevation = 12.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(horizontal = 28.dp, vertical = 26.dp)
+                        .alpha(alpha),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "by NR Next",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = GolocalPureWhite,
+                        fontWeight = FontWeight.Bold
+                    )
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .width(148.dp)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(999.dp)),
+                        color = GolocalRoyalBlueBright,
+                        trackColor = Color.White.copy(alpha = 0.18f)
+                    )
+                    Surface(
+                        color = Color.White.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(999.dp)
+                    ) {
+                        Text(
+                            text = mode.roleLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = GolocalLightBlue,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .width(18.dp)
+                                .height(10.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                        ) {
+                            Box(modifier = Modifier.weight(1f).fillMaxHeight().background(Color(0xFFFF9933)))
+                            Box(modifier = Modifier.weight(1f).fillMaxHeight().background(Color.White))
+                            Box(modifier = Modifier.weight(1f).fillMaxHeight().background(Color(0xFF138808)))
+                        }
+                        Text(
+                            text = "Proudly Made in India",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = GolocalLightBlue.copy(alpha = 0.85f)
+                        )
+                    }
+                }
+            }
+        }
+        return
     }
 
     val isAdmin = mode == ExperienceMode.ADMIN
@@ -224,14 +363,20 @@ fun RoleAuthScreen(
         controller.changeMobileNumber()
     }
 
+    val isCustomer = mode == ExperienceMode.CUSTOMER
     val isAdmin = mode == ExperienceMode.ADMIN
     val topGradient = if (isAdmin) {
         listOf(Color(0xFF07152E), GolocalDeepNavy, Color(0xFF102A54))
     } else {
-        listOf(GolocalPureWhite, GolocalSoftBlue, GolocalLightBlue.copy(alpha = 0.65f))
+        listOf(GolocalPureWhite, GolocalSkyTop, GolocalLightBlue.copy(alpha = 0.65f))
     }
     val headerTitleColor = if (isAdmin) GolocalPureWhite else GolocalDeepNavy
     val headerSubColor = if (isAdmin) GolocalLightBlue else GolocalPrimaryBlue
+
+    val cardBg = if (isCustomer) GolocalAuthNavy else MaterialTheme.colorScheme.surface
+    val cardBorder = if (isCustomer) GolocalAuthNavyBorder else MaterialTheme.colorScheme.outline
+    val cardTitleColor = if (isCustomer) GolocalPureWhite else MaterialTheme.colorScheme.onSurface
+    val cardSubColor = if (isCustomer) GolocalLightBlue.copy(alpha = 0.86f) else MaterialTheme.colorScheme.onSurfaceVariant
 
     Box(
         modifier = Modifier
@@ -247,30 +392,31 @@ fun RoleAuthScreen(
                 .align(Alignment.Center)
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
+                .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = GolocalPureWhite,
-                        shadowElevation = 3.dp
+                        shadowElevation = 4.dp
                     ) {
                         GoLocalLogoMark(
                             modifier = Modifier.size(48.dp),
                             onDarkBackground = false
                         )
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = mode.appTitle,
                             style = MaterialTheme.typography.headlineMedium,
                             color = headerTitleColor,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.ExtraBold
                         )
                         Text(
                             text = "Your Local. Our Priority.",
@@ -282,8 +428,8 @@ fun RoleAuthScreen(
 
                 if (mode != ExperienceMode.ADMIN) {
                     Card(
-                        shape = RoundedCornerShape(20.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
                         colors = CardDefaults.cardColors(containerColor = GolocalPureWhite)
                     ) {
                         Image(
@@ -291,7 +437,7 @@ fun RoleAuthScreen(
                             contentDescription = "${mode.appTitle} illustration",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(132.dp),
+                                .height(136.dp),
                             contentScale = ContentScale.Crop
                         )
                     }
@@ -331,19 +477,19 @@ fun RoleAuthScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp,
-                shadowElevation = 6.dp,
+                shape = RoundedCornerShape(26.dp),
+                color = cardBg,
+                tonalElevation = if (isCustomer) 0.dp else 4.dp,
+                shadowElevation = 8.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
+                    .border(1.dp, cardBorder, RoundedCornerShape(26.dp))
             ) {
                 Column(
-                    modifier = Modifier.padding(24.dp),
+                    modifier = Modifier.padding(22.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text(
@@ -353,7 +499,8 @@ fun RoleAuthScreen(
                             "Verify 6-Digit OTP"
                         },
                         style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
+                        fontWeight = FontWeight.Bold,
+                        color = cardTitleColor
                     )
                     Text(
                         text = if (phoneState.step == PhoneAuthStep.INPUT_PHONE) {
@@ -362,7 +509,7 @@ fun RoleAuthScreen(
                             "Enter the 6-digit SMS verification code sent to ${phoneState.formattedE164}."
                         },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = cardSubColor
                     )
 
                     Row(
@@ -371,8 +518,8 @@ fun RoleAuthScreen(
                     ) {
                         when (mode) {
                             ExperienceMode.CUSTOMER -> {
-                                AuthBadge(Icons.Filled.VerifiedUser, "Verified Drivers", Modifier.weight(1f))
-                                AuthBadge(Icons.Filled.Shield, "SOS & Trip PIN", Modifier.weight(1f))
+                                AuthBadge(Icons.Filled.VerifiedUser, "Verified Drivers", Modifier.weight(1f), darkSurface = true)
+                                AuthBadge(Icons.Filled.Shield, "SOS & Trip PIN", Modifier.weight(1f), darkSurface = true)
                             }
                             ExperienceMode.RIDER -> {
                                 AuthBadge(Icons.Filled.CurrencyRupee, "Propose Fares", Modifier.weight(1f))
@@ -444,9 +591,8 @@ fun RoleAuthScreen(
                             }
                         }
 
-                        OutlinedButton(
-                            onClick = {
-                                if (isGoogleSigningIn || phoneState.isBusy) return@OutlinedButton
+                        val googleClick: () -> Unit = {
+                            if (!isGoogleSigningIn && !phoneState.isBusy) {
                                 googleError = null
                                 isGoogleSigningIn = true
                                 scope.launch {
@@ -470,32 +616,76 @@ fun RoleAuthScreen(
                                         }
                                     }
                                 }
-                            },
-                            enabled = !isGoogleSigningIn && !phoneState.isBusy,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .testTag("google_sign_in_button"),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            if (isGoogleSigningIn) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text("Signing in with Google...")
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.AccountCircle,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Continue with Google",
-                                    style = MaterialTheme.typography.labelLarge
-                                )
+                            }
+                        }
+
+                        if (isCustomer) {
+                            Button(
+                                onClick = googleClick,
+                                enabled = !isGoogleSigningIn && !phoneState.isBusy,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = GolocalAuthNavySurface,
+                                    contentColor = GolocalPureWhite
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, GolocalAuthNavyBorder),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("google_sign_in_button"),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                if (isGoogleSigningIn) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = GolocalPureWhite,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text("Signing in with Google...")
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.AccountCircle,
+                                        contentDescription = null,
+                                        tint = GolocalPureWhite,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "Continue with Google",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = googleClick,
+                                enabled = !isGoogleSigningIn && !phoneState.isBusy,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("google_sign_in_button"),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                if (isGoogleSigningIn) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text("Signing in with Google...")
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.AccountCircle,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "Continue with Google",
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
                             }
                         }
 
@@ -504,13 +694,19 @@ fun RoleAuthScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            HorizontalDivider(modifier = Modifier.weight(1f))
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = if (isCustomer) GolocalAuthNavyBorder else MaterialTheme.colorScheme.outlineVariant
+                            )
                             Text(
                                 text = "OR MOBILE OTP",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = cardSubColor
                             )
-                            HorizontalDivider(modifier = Modifier.weight(1f))
+                            HorizontalDivider(
+                                modifier = Modifier.weight(1f),
+                                color = if (isCustomer) GolocalAuthNavyBorder else MaterialTheme.colorScheme.outlineVariant
+                            )
                         }
                     }
 
@@ -518,13 +714,18 @@ fun RoleAuthScreen(
                         controller = controller,
                         state = phoneState,
                         actionButtonLabel = mode.buttonLabel,
-                        buttonContainerColor = if (mode == ExperienceMode.ADMIN) GolocalDeepNavy else GolocalPrimaryBlue
+                        buttonContainerColor = when (mode) {
+                            ExperienceMode.ADMIN -> GolocalDeepNavy
+                            ExperienceMode.CUSTOMER -> GolocalRoyalBlueBright
+                            ExperienceMode.RIDER -> GolocalPrimaryBlue
+                        },
+                        darkSurface = isCustomer
                     )
 
                     Text(
                         text = mode.footerNotice,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = cardSubColor
                     )
                 }
             }
@@ -579,36 +780,39 @@ private fun RiderModeOptionCard(
 private fun AuthBadge(
     icon: ImageVector,
     label: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    darkSurface: Boolean = false
 ) {
     Surface(
-        modifier = modifier,
+        modifier = modifier.let {
+            if (darkSurface) it.border(1.dp, GolocalAuthNavyBorder, RoundedCornerShape(12.dp)) else it
+        },
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        color = if (darkSurface) GolocalAuthNavySurface else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(26.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
+                    .background(if (darkSurface) GolocalRoyalBlueBright.copy(alpha = 0.25f) else MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = Color.White,
+                    tint = if (darkSurface) GolocalLightBlue else Color.White,
                     modifier = Modifier.size(14.dp)
                 )
             }
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = if (darkSurface) GolocalPureWhite else MaterialTheme.colorScheme.onPrimaryContainer
             )
         }
     }

@@ -4,8 +4,12 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -308,11 +312,11 @@ fun CustomerAuthenticatedShell(
         val unreadCount = notifications.count { !it.read }
 
         val navItems = listOf(
-            Triple("home", "Home", Icons.Filled.Home),
-            Triple("bookings", "Bookings", Icons.Filled.ReceiptLong),
-            Triple("explore", "Explore", Icons.Filled.Explore),
-            Triple("notifications", "Alerts", Icons.Filled.Notifications),
-            Triple("profile", "Profile", Icons.Filled.Person)
+            CustomerNavDestination("home", "Home", Icons.Filled.Home, Icons.Outlined.Home),
+            CustomerNavDestination("bookings", "Bookings", Icons.AutoMirrored.Filled.ReceiptLong, Icons.AutoMirrored.Outlined.ReceiptLong),
+            CustomerNavDestination("explore", "Explore", Icons.Filled.Explore, Icons.Outlined.Explore),
+            CustomerNavDestination("notifications", "Alerts", Icons.Filled.Notifications, Icons.Outlined.Notifications),
+            CustomerNavDestination("profile", "Profile", Icons.Filled.Person, Icons.Outlined.Person)
         )
 
         val fullScreenMapActive = isBookingFlowOpen || (!isBusFlowOpen && selectedTab == "home")
@@ -323,26 +327,39 @@ fun CustomerAuthenticatedShell(
                 contentWindowInsets = if (fullScreenMapActive) WindowInsets(0, 0, 0, 0) else WindowInsets.safeDrawing,
                 bottomBar = {
                     if (!useRail && !isBookingFlowOpen && !isBusFlowOpen) {
-                        NavigationBar(
-                            windowInsets = WindowInsets.navigationBars,
-                            containerColor = MaterialTheme.colorScheme.surface
-                        ) {
-                            navItems.forEach { (route, label, icon) ->
-                                NavigationBarItem(
-                                    selected = selectedTab == route,
-                                    onClick = { selectedTab = route },
-                                    icon = {
-                                        if (route == "notifications" && unreadCount > 0) {
-                                            BadgedBox(badge = { Badge { Text(unreadCount.coerceAtMost(99).toString()) } }) {
-                                                Icon(icon, contentDescription = label)
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                            NavigationBar(
+                                windowInsets = WindowInsets.navigationBars,
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                tonalElevation = 0.dp
+                            ) {
+                                navItems.forEach { item ->
+                                    val selected = selectedTab == item.route
+                                    val iconVector = if (selected) item.selectedIcon else item.unselectedIcon
+                                    NavigationBarItem(
+                                        selected = selected,
+                                        onClick = { selectedTab = item.route },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                        ),
+                                        icon = {
+                                            if (item.route == "notifications" && unreadCount > 0) {
+                                                BadgedBox(badge = { Badge { Text(unreadCount.coerceAtMost(99).toString()) } }) {
+                                                    Icon(iconVector, contentDescription = item.label)
+                                                }
+                                            } else {
+                                                Icon(iconVector, contentDescription = item.label)
                                             }
-                                        } else {
-                                            Icon(icon, contentDescription = label)
-                                        }
-                                    },
-                                    label = { Text(label) },
-                                    modifier = Modifier.testTag("customer_nav_$route")
-                                )
+                                        },
+                                        label = { Text(item.label, maxLines = 1) },
+                                        modifier = Modifier.testTag("customer_nav_${item.route}")
+                                    )
+                                }
                             }
                         }
                     }
@@ -356,13 +373,22 @@ fun CustomerAuthenticatedShell(
                     if (useRail && !isBookingFlowOpen && !isBusFlowOpen) {
                         NavigationRail(containerColor = MaterialTheme.colorScheme.surface) {
                             Spacer(modifier = Modifier.height(12.dp))
-                            navItems.forEach { (route, label, icon) ->
+                            navItems.forEach { item ->
+                                val selected = selectedTab == item.route
+                                val iconVector = if (selected) item.selectedIcon else item.unselectedIcon
                                 NavigationRailItem(
-                                    selected = selectedTab == route,
-                                    onClick = { selectedTab = route },
-                                    icon = { Icon(icon, contentDescription = label) },
-                                    label = { Text(label) },
-                                    modifier = Modifier.testTag("customer_rail_$route")
+                                    selected = selected,
+                                    onClick = { selectedTab = item.route },
+                                    colors = NavigationRailItemDefaults.colors(
+                                        selectedIconColor = MaterialTheme.colorScheme.primary,
+                                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    ),
+                                    icon = { Icon(iconVector, contentDescription = item.label) },
+                                    label = { Text(item.label) },
+                                    modifier = Modifier.testTag("customer_rail_${item.route}")
                                 )
                             }
                         }
@@ -535,37 +561,33 @@ fun CustomerAuthenticatedShell(
         }
 
         if (showHelpDialog) {
-            var details by remember { mutableStateOf("") }
-            AlertDialog(
-                onDismissRequest = { showHelpDialog = false },
-                title = { Text("GoLocal Help & Support Desk") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "24x7 Helpline: ${platformSettings?.helplineNumber ?: "+91-1800-103-0000"}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        OutlinedTextField(
-                            value = details,
-                            onValueChange = { details = it },
-                            label = { Text("Describe your question or ride issue") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+            CustomerTravelSafeDialog(
+                helplineNumber = platformSettings?.helplineNumber ?: "+91-1800-103-0000",
+                onTriggerSos = {
+                    customerViewModel.triggerSos(
+                        bookingId = activeBooking?.id ?: "",
+                        lat = gps.lat ?: 22.90,
+                        lng = gps.lng ?: 88.39,
+                        notes = "Emergency SOS triggered from Travel Safe dialog"
+                    )
                 },
-                confirmButton = {
-                    Button(onClick = {
-                        sessionViewModel.submitSupportOrDeletion("customer_help", details)
-                        showHelpDialog = false
-                    }) { Text("Submit") }
+                onSubmitSupportTicket = { details ->
+                    sessionViewModel.submitSupportOrDeletion("customer_help", details)
                 },
-                dismissButton = { TextButton(onClick = { showHelpDialog = false }) { Text("Close") } }
+                onDismiss = { showHelpDialog = false }
             )
         }
 
         AppUpdateDialogHost(controller = updateController)
     }
 }
+
+private data class CustomerNavDestination(
+    val route: String,
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector
+)
 
 internal data class CustomerDeepLinkRoute(
     val selectedTab: String? = null,

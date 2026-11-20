@@ -85,11 +85,11 @@ fun CustomerOnboardingScreen(
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(GolocalPureWhite, GolocalSoftBlue, GolocalLightBlue.copy(alpha = 0.65f))
+                    colors = listOf(GolocalPureWhite, GolocalSoftBlue, GolocalLightBlue.copy(alpha = 0.72f))
                 )
             )
             .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(24.dp)
+            .padding(22.dp)
     ) {
         Row(
             modifier = Modifier
@@ -100,18 +100,31 @@ fun CustomerOnboardingScreen(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                GoLocalLogoMark(modifier = Modifier.size(36.dp))
-                Text(
-                    text = "GoLocal",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = GolocalDeepNavy,
-                    fontWeight = FontWeight.Bold
-                )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = GolocalPureWhite,
+                    shadowElevation = 3.dp
+                ) {
+                    GoLocalLogoMark(modifier = Modifier.size(38.dp))
+                }
+                Column {
+                    Text(
+                        text = "GoLocal",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = GolocalDeepNavy,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "Your Local. Our Priority.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = GolocalPrimaryBlue
+                    )
+                }
             }
             TextButton(onClick = onComplete) {
-                Text("Skip", color = GolocalPrimaryBlue)
+                Text("Skip", color = GolocalPrimaryBlue, fontWeight = FontWeight.SemiBold)
             }
         }
 
@@ -123,30 +136,39 @@ fun CustomerOnboardingScreen(
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(28.dp)),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
-            shadowElevation = 6.dp
+            shadowElevation = 8.dp
         ) {
             Column(
-                modifier = Modifier.padding(26.dp),
+                modifier = Modifier.padding(28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(72.dp)
+                        .size(84.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = title,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(36.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(62.dp)
+                            .clip(CircleShape)
+                            .background(GolocalPrimaryBlue),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = title,
+                            tint = GolocalPureWhite,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                 }
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
@@ -160,7 +182,7 @@ fun CustomerOnboardingScreen(
                         Box(
                             modifier = Modifier
                                 .height(8.dp)
-                                .width(if (idx == step) 26.dp else 8.dp)
+                                .width(if (idx == step) 28.dp else 8.dp)
                                 .clip(RoundedCornerShape(999.dp))
                                 .background(
                                     if (idx == step) MaterialTheme.colorScheme.primary
@@ -176,11 +198,15 @@ fun CustomerOnboardingScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(54.dp)
                         .testTag("customer_onboarding_done"),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text(if (step < slides.lastIndex) "Next" else "Get Started")
+                    Text(
+                        text = if (step < slides.lastIndex) "Continue" else "Get Started",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                     Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
                 }

@@ -31,6 +31,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.FirebaseAuthSnapshot
 import com.example.authSnapshotFlow
 import com.example.ui.components.GolocalStatusBadge
+import com.example.ui.theme.GolocalAuthNavyBorder
+import com.example.ui.theme.GolocalAuthNavySurface
 import com.example.ui.theme.GolocalDeepNavy
 import com.example.ui.theme.GolocalLightBlue
 import com.example.ui.theme.GolocalPrimaryBlue
@@ -47,22 +49,29 @@ fun PhoneAuthFormContent(
     controller: PhoneAuthController,
     state: PhoneAuthUiState,
     actionButtonLabel: String = "Send OTP",
-    buttonContainerColor: androidx.compose.ui.graphics.Color = GolocalPrimaryBlue
+    buttonContainerColor: androidx.compose.ui.graphics.Color = GolocalPrimaryBlue,
+    darkSurface: Boolean = false
 ) {
     val context = LocalContext.current
     var countryMenuExpanded by remember { mutableStateOf(false) }
+    val fieldBg = if (darkSurface) GolocalAuthNavySurface else MaterialTheme.colorScheme.surface
+    val fieldBorder = if (darkSurface) GolocalAuthNavyBorder else MaterialTheme.colorScheme.outline
+    val fieldFg = if (darkSurface) GolocalPureWhite else MaterialTheme.colorScheme.onSurface
+    val fieldMutedFg = if (darkSurface) GolocalLightBlue.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (!state.infoMessage.isNullOrBlank() && state.errorMessage.isNullOrBlank()) {
             Surface(
-                color = GolocalLightBlue.copy(alpha = 0.65f),
+                color = if (darkSurface) GolocalAuthNavySurface else GolocalLightBlue.copy(alpha = 0.65f),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .let { if (darkSurface) it.border(1.dp, GolocalAuthNavyBorder, RoundedCornerShape(12.dp)) else it }
             ) {
                 Text(
                     text = state.infoMessage,
                     style = MaterialTheme.typography.bodySmall,
-                    color = GolocalDeepNavy,
+                    color = if (darkSurface) GolocalLightBlue else GolocalDeepNavy,
                     modifier = Modifier.padding(12.dp)
                 )
             }
@@ -91,14 +100,14 @@ fun PhoneAuthFormContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.Top
             ) {
-                Box {
+                Box(modifier = Modifier.padding(top = if (darkSurface) 6.dp else 0.dp)) {
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(14.dp),
+                        color = fieldBg,
                         modifier = Modifier
                             .height(56.dp)
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, fieldBorder, RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .clickable(enabled = !state.isBusy) { countryMenuExpanded = true }
                             .testTag("country_code_selector")
                     ) {
@@ -110,12 +119,12 @@ fun PhoneAuthFormContent(
                             Text(
                                 text = "${state.selectedCountry.flagEmoji} ${state.selectedCountry.dialCode}",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = fieldFg
                             )
                             Icon(
                                 imageVector = Icons.Filled.ArrowDropDown,
                                 contentDescription = "Select country code",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = fieldMutedFg
                             )
                         }
                     }
@@ -145,6 +154,26 @@ fun PhoneAuthFormContent(
                     placeholder = { Text(state.selectedCountry.sampleHint) },
                     singleLine = true,
                     enabled = !state.isBusy,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = if (darkSurface) {
+                        OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = GolocalPureWhite,
+                            unfocusedTextColor = GolocalPureWhite,
+                            focusedContainerColor = GolocalAuthNavySurface,
+                            unfocusedContainerColor = GolocalAuthNavySurface,
+                            focusedBorderColor = GolocalLightBlue,
+                            unfocusedBorderColor = GolocalAuthNavyBorder,
+                            focusedLabelColor = GolocalLightBlue,
+                            unfocusedLabelColor = GolocalLightBlue.copy(alpha = 0.8f),
+                            focusedPlaceholderColor = GolocalLightBlue.copy(alpha = 0.5f),
+                            unfocusedPlaceholderColor = GolocalLightBlue.copy(alpha = 0.5f),
+                            focusedSupportingTextColor = GolocalLightBlue.copy(alpha = 0.85f),
+                            unfocusedSupportingTextColor = GolocalLightBlue.copy(alpha = 0.78f),
+                            cursorColor = GolocalLightBlue
+                        )
+                    } else {
+                        OutlinedTextFieldDefaults.colors()
+                    },
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Phone,
                         imeAction = ImeAction.Done
@@ -193,14 +222,16 @@ fun PhoneAuthFormContent(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(actionButtonLabel, style = MaterialTheme.typography.labelLarge)
+                    Text(actionButtonLabel, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                 }
             }
         } else {
             Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                modifier = Modifier.fillMaxWidth()
+                color = if (darkSurface) GolocalAuthNavySurface else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .let { if (darkSurface) it.border(1.dp, GolocalAuthNavyBorder, RoundedCornerShape(14.dp)) else it }
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -211,13 +242,13 @@ fun PhoneAuthFormContent(
                         Text(
                             text = "Verifying Mobile Number",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = fieldMutedFg
                         )
                         Text(
                             text = state.formattedE164,
                             style = MaterialTheme.typography.titleSmall,
                             fontFamily = JetBrainsMono,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = fieldFg
                         )
                     }
                     TextButton(
@@ -227,14 +258,14 @@ fun PhoneAuthFormContent(
                             .heightIn(min = 48.dp)
                             .testTag("change_phone_button")
                     ) {
-                        Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (darkSurface) GolocalLightBlue else MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Change")
+                        Text("Change", color = if (darkSurface) GolocalLightBlue else MaterialTheme.colorScheme.primary)
                     }
                 }
             }
 
-            OtpSixDigitIndicator(otp = state.otpInput)
+            OtpSixDigitIndicator(otp = state.otpInput, darkSurface = darkSurface)
 
             OutlinedTextField(
                 value = state.otpInput,
@@ -243,6 +274,24 @@ fun PhoneAuthFormContent(
                 placeholder = { Text("123456") },
                 singleLine = true,
                 enabled = !state.isBusy,
+                shape = RoundedCornerShape(14.dp),
+                colors = if (darkSurface) {
+                    OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = GolocalPureWhite,
+                        unfocusedTextColor = GolocalPureWhite,
+                        focusedContainerColor = GolocalAuthNavySurface,
+                        unfocusedContainerColor = GolocalAuthNavySurface,
+                        focusedBorderColor = GolocalLightBlue,
+                        unfocusedBorderColor = GolocalAuthNavyBorder,
+                        focusedLabelColor = GolocalLightBlue,
+                        unfocusedLabelColor = GolocalLightBlue.copy(alpha = 0.8f),
+                        focusedPlaceholderColor = GolocalLightBlue.copy(alpha = 0.5f),
+                        unfocusedPlaceholderColor = GolocalLightBlue.copy(alpha = 0.5f),
+                        cursorColor = GolocalLightBlue
+                    )
+                } else {
+                    OutlinedTextFieldDefaults.colors()
+                },
                 textStyle = LocalTextStyle.current.copy(
                     fontFamily = JetBrainsMono,
                     textAlign = TextAlign.Center,
@@ -264,7 +313,7 @@ fun PhoneAuthFormContent(
                 Text(
                     text = "SMS auto-detection timed out. Enter the 6-digit code manually or tap Resend OTP.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = fieldMutedFg
                 )
             }
 
@@ -294,13 +343,18 @@ fun PhoneAuthFormContent(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Verify OTP & Continue", style = MaterialTheme.typography.labelLarge)
+                    Text("Verify OTP & Continue", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                 }
             }
 
             OutlinedButton(
                 onClick = { controller.sendOtp(context, isResend = true) },
                 enabled = !state.isBusy && state.resendCooldownSeconds == 0,
+                colors = if (darkSurface) {
+                    ButtonDefaults.outlinedButtonColors(contentColor = GolocalLightBlue)
+                } else {
+                    ButtonDefaults.outlinedButtonColors()
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
@@ -326,7 +380,7 @@ fun PhoneAuthFormContent(
 }
 
 @Composable
-private fun OtpSixDigitIndicator(otp: String) {
+private fun OtpSixDigitIndicator(otp: String, darkSurface: Boolean = false) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
@@ -335,18 +389,33 @@ private fun OtpSixDigitIndicator(otp: String) {
             val char = otp.getOrNull(index)?.toString() ?: ""
             val filled = char.isNotEmpty()
             val isNext = index == otp.length && otp.length < 6
+            val boxBg = when {
+                darkSurface && filled -> GolocalPrimaryBlue.copy(alpha = 0.28f)
+                darkSurface -> GolocalAuthNavySurface
+                filled -> GolocalLightBlue.copy(alpha = 0.45f)
+                else -> MaterialTheme.colorScheme.surface
+            }
+            val boxBorder = when {
+                darkSurface && (isNext || filled) -> GolocalLightBlue
+                darkSurface -> GolocalAuthNavyBorder
+                isNext || filled -> GolocalPrimaryBlue
+                else -> MaterialTheme.colorScheme.outline
+            }
+            val boxTextColor = when {
+                darkSurface && filled -> GolocalPureWhite
+                darkSurface -> GolocalLightBlue.copy(alpha = 0.6f)
+                filled -> GolocalDeepNavy
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .height(48.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (filled) GolocalLightBlue.copy(alpha = 0.45f)
-                        else MaterialTheme.colorScheme.surface
-                    )
+                    .background(boxBg)
                     .border(
                         width = if (isNext || filled) 1.5.dp else 1.dp,
-                        color = if (isNext || filled) GolocalPrimaryBlue else MaterialTheme.colorScheme.outline,
+                        color = boxBorder,
                         shape = RoundedCornerShape(12.dp)
                     ),
                 contentAlignment = Alignment.Center
@@ -355,7 +424,7 @@ private fun OtpSixDigitIndicator(otp: String) {
                     text = if (filled) char else "•",
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = JetBrainsMono,
-                    color = if (filled) GolocalDeepNavy else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = boxTextColor
                 )
             }
         }

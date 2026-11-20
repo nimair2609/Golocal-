@@ -32,18 +32,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.DirectionsBus
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.ElectricRickshaw
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.LocalTaxi
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Train
+import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -173,7 +179,7 @@ fun CustomerHomeMapScreen(
             userLng = userLng
         )
 
-        // 2. Floating Top Bar (Greeting Pill + Alerts + SOS + Location Status Banner if needed)
+        // 2. Floating Top Brand Bar + Greeting/Location Pill & SOS
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -182,6 +188,70 @@ fun CustomerHomeMapScreen(
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onOpenHelp,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("home_safety_menu_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Shield,
+                            contentDescription = "Travel Safe & Support",
+                            tint = GolocalPrimaryBlue
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        GoLocalLogoMark(modifier = Modifier.size(28.dp))
+                        Text(
+                            text = "GoLocal",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    BadgedBox(
+                        badge = {
+                            if (unreadNotifications > 0) {
+                                Badge { Text(unreadNotifications.coerceAtMost(99).toString()) }
+                            }
+                        }
+                    ) {
+                        IconButton(
+                            onClick = onOpenNotifications,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("home_notifications_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Notifications,
+                                contentDescription = "Notifications",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -190,14 +260,28 @@ fun CustomerHomeMapScreen(
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                    shadowElevation = 6.dp
+                    shadowElevation = 5.dp,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        GoLocalLogoMark(modifier = Modifier.size(30.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        platformSettings?.testRideModeEnabled == true -> GolocalPrimaryBlue
+                                        onlineCount > 0 -> GolocalSuccess
+                                        else -> GolocalPrimaryBlue
+                                    }
+                                )
+                        )
                         Column {
                             Text(
                                 text = "Hello, $firstName",
@@ -221,53 +305,24 @@ fun CustomerHomeMapScreen(
                     }
                 }
 
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        onClick = onQuickSos,
-                        shape = CircleShape,
-                        color = GolocalError,
-                        shadowElevation = 6.dp,
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("home_sos_button")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = "SOS",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White
-                            )
-                        }
-                    }
+                Spacer(modifier = Modifier.width(8.dp))
 
-                    BadgedBox(
-                        badge = {
-                            if (unreadNotifications > 0) {
-                                Badge { Text(unreadNotifications.toString()) }
-                            }
-                        }
-                    ) {
-                        Surface(
-                            onClick = onOpenNotifications,
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface,
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .testTag("home_notifications_button")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Filled.Notifications,
-                                    contentDescription = "Notifications",
-                                    tint = GolocalPrimaryBlue
-                                )
-                            }
-                        }
+                Surface(
+                    onClick = onQuickSos,
+                    shape = CircleShape,
+                    color = GolocalError,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("home_sos_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "SOS",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White
+                        )
                     }
                 }
             }
@@ -385,11 +440,18 @@ fun CustomerHomeMapScreen(
                     )
                 }
 
-                // Prominent "Where to?" Search Entry Pill
+                // Prominent "Where would you like to go?" Pickup -> Destination Card
+                Text(
+                    text = "Where would you like to go?",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
                 Surface(
                     onClick = { onOpenBookRide("now") },
                     shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 56.dp)
@@ -397,13 +459,57 @@ fun CustomerHomeMapScreen(
                         .testTag("home_search_destination")
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(GolocalSuccess)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(2.dp)
+                                    .height(16.dp)
+                                    .background(MaterialTheme.colorScheme.outline)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(GolocalPrimaryBlue)
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = if (userLat != null && userLng != null) "Current GPS Location • Pickup" else "Pickup • ${defaultOrigin.nameEn}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                            Text(
+                                text = "Enter destination • Station, Bus Stand, Airport",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         Box(
                             modifier = Modifier
-                                .size(34.dp)
+                                .size(38.dp)
                                 .clip(CircleShape)
                                 .background(GolocalPrimaryBlue),
                             contentAlignment = Alignment.Center
@@ -415,26 +521,6 @@ fun CustomerHomeMapScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                         }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Where would you like to go?",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Pickup • Station • Bus Stand • Airport • Village",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = null,
-                            tint = GolocalPrimaryBlue
-                        )
                     }
                 }
 
@@ -550,8 +636,10 @@ fun CustomerHomeMapScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Recent Trips", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    TextButton(onClick = onOpenBookings) { Text("See All") }
+                    Text("Recent Trips", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    TextButton(onClick = onOpenBookings) {
+                        Text("See All", fontWeight = FontWeight.SemiBold)
+                    }
                 }
 
                 if (allBookings.isEmpty()) {
@@ -563,6 +651,12 @@ fun CustomerHomeMapScreen(
                     )
                 } else {
                     allBookings.take(3).forEach { booking ->
+                        val catIcon = when (booking.vehicleCategory) {
+                            "bike" -> Icons.Filled.TwoWheeler
+                            "toto" -> Icons.Filled.ElectricRickshaw
+                            "auto" -> Icons.Filled.LocalTaxi
+                            else -> Icons.Filled.DirectionsCar
+                        }
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = MaterialTheme.colorScheme.surface,
@@ -573,20 +667,37 @@ fun CustomerHomeMapScreen(
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.primaryContainer),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = catIcon,
+                                        contentDescription = booking.vehicleCategory,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(
                                         text = "${booking.pickupLabel} -> ${booking.destinationLabel}",
                                         style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km",
+                                        text = "${booking.vehicleCategory.uppercase()} • ${booking.distanceKm} km • ${booking.status.replace('_', ' ')}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                                 val fare = if (booking.agreedFareInr > 0) booking.agreedFareInr else booking.estimatedFareInr
@@ -594,6 +705,7 @@ fun CustomerHomeMapScreen(
                                     text = "₹${fare.toInt()}",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontFamily = JetBrainsMono,
+                                    fontWeight = FontWeight.Bold,
                                     color = GolocalPrimaryBlue
                                 )
                             }
@@ -601,28 +713,50 @@ fun CustomerHomeMapScreen(
                     }
                 }
 
-                // Compact Safety Desk Strip
+                // Travel Safe Desk Strip
                 Surface(
+                    onClick = onOpenHelp,
                     shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                    modifier = Modifier.fillMaxWidth()
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("24x7 Safety Desk", style = MaterialTheme.typography.labelLarge)
-                            Text(
-                                text = platformSettings?.helplineNumber ?: "+91-1800-103-0000",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(GolocalPrimaryBlue),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Shield,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
-                        OutlinedButton(onClick = onOpenHelp, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("Support")
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Travel Safe with GoLocal", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "24x7 Safety Desk • ${platformSettings?.helplineNumber ?: "+91-1800-103-0000"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Open Safety Desk",
+                            tint = GolocalPrimaryBlue,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }

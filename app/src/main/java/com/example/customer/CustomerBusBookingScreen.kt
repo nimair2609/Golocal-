@@ -10,12 +10,16 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -57,7 +61,7 @@ import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.components.QrCodeImage
 import com.example.ui.theme.GolocalError
-import com.example.ui.theme.GolocalSuccess
+import com.example.ui.theme.GolocalPrimaryBlue
 import com.example.ui.theme.JetBrainsMono
 import com.example.viewmodel.CustomerViewModel
 
@@ -94,6 +98,8 @@ fun CustomerBusBookingScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -107,7 +113,11 @@ fun CustomerBusBookingScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text("Intercity & Local Private Bus", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    text = "Intercity & Local Private Bus",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
                 Text(
                     "Approved private operators with official route tariff",
                     style = MaterialTheme.typography.bodySmall,
@@ -121,6 +131,7 @@ fun CustomerBusBookingScreen(
             onValueChange = { searchQuery = it },
             label = { Text("Search town, bus stand, or operator") },
             singleLine = true,
+            shape = RoundedCornerShape(16.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("bus_search_input")
@@ -221,7 +232,16 @@ fun CustomerBusBookingScreen(
                         }
                     }
 
-                    Text("Tap up to 6 available seats", style = MaterialTheme.typography.labelLarge)
+                    Text("Tap up to 6 available seats", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        BusSeatLegendChip("Available", MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.outline)
+                        BusSeatLegendChip("Selected", GolocalPrimaryBlue, GolocalPrimaryBlue)
+                        BusSeatLegendChip("Booked", MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                    }
                     val total = sch.totalSeats.toInt().coerceIn(10, 80)
                     val bookedSet = remember(sch.bookedSeats) { sch.bookedSeats.toSet() }
                     val seatLabels = remember(total) {
@@ -452,9 +472,37 @@ fun BusQrTicketDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) {
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
                 Text("Done")
             }
         }
     )
+}
+
+@Composable
+private fun BusSeatLegendChip(
+    label: String,
+    fillColor: Color,
+    borderColor: Color
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(fillColor)
+                .border(1.dp, borderColor, RoundedCornerShape(4.dp))
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
