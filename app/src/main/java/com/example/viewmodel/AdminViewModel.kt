@@ -89,6 +89,11 @@ class AdminViewModel(
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; Log.w(TAG, "Admin drivers", it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val onlineDriverDirectory: StateFlow<List<DriverDirectoryEntry>> = repository.observeVerifiedDrivers()
+        .map { list -> list.filter { it.isOnline } }
+        .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
     val verificationHistory: StateFlow<List<DriverVerificationHistoryEntry>> = repository.observeAllVerificationHistory()
         .map { list -> list.sortedByDescending { it.createdAt ?: Timestamp(0, 0) } }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(emptyList()) }

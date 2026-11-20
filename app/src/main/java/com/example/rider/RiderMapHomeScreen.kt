@@ -31,13 +31,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.ElectricRickshaw
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.LocalTaxi
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -478,6 +486,7 @@ fun IncomingRideRequestOverlayCard(
         onExpire?.invoke()
     }
 
+    var showFareAdjuster by remember(booking.id) { mutableStateOf(false) }
     val ringProgress by animateFloatAsState(
         targetValue = (remainingSeconds.toFloat() / effectiveSeconds.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f),
         animationSpec = tween(durationMillis = 350),
@@ -491,165 +500,47 @@ fun IncomingRideRequestOverlayCard(
             commissionPercent = booking.commissionPercent
         ).roundToInt()
     }
+    val vehicleLabel = when (booking.vehicleCategory.lowercase()) {
+        "bike" -> "Bike Taxi"
+        "auto" -> "Auto Rickshaw"
+        "toto" -> "E-Rickshaw (Toto)"
+        "cab" -> "Cab"
+        else -> booking.vehicleCategory.replaceFirstChar { it.uppercase() }
+    }
+    val vehicleIcon = when (booking.vehicleCategory.lowercase()) {
+        "bike" -> Icons.Filled.TwoWheeler
+        "toto", "auto" -> Icons.Filled.ElectricRickshaw
+        "cab" -> Icons.Filled.LocalTaxi
+        else -> Icons.Filled.DirectionsCar
+    }
 
-    Surface(
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .testTag("rider_incoming_request_card"),
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        color = GolocalDeepNavy,
-        contentColor = GolocalPureWhite,
-        shadowElevation = 18.dp
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .imePadding()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("rider_incoming_request_card")
     ) {
-        Column(
+        Surface(
             modifier = Modifier
-                .heightIn(max = 460.dp)
-                .verticalScroll(rememberScrollState())
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-                .imePadding()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxWidth()
+                .padding(top = 28.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 20.dp
         ) {
-            // Queue header + Passenger Name + Payment Chip
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = passengerFirstName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = GolocalPureWhite
-                    )
-                    Text(
-                        text = "#${booking.id.take(8)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = JetBrainsMono,
-                        color = GolocalPureWhite.copy(alpha = 0.75f),
-                        modifier = Modifier.testTag("rider_incoming_booking_id")
-                    )
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = GolocalPureWhite.copy(alpha = 0.14f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Star,
-                                contentDescription = null,
-                                tint = GolocalWarning,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = booking.paymentMethod.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = GolocalPureWhite
-                            )
-                        }
-                    }
-                }
-
-                if (queueTotal > 1) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onPreviousRequest, enabled = queueIndex > 0) {
-                            Text("Prev", color = GolocalPureWhite)
-                        }
-                        Text(
-                            text = "${queueIndex + 1}/$queueTotal",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = GolocalPureWhite.copy(alpha = 0.85f)
-                        )
-                        TextButton(onClick = onNextRequest, enabled = queueIndex < queueTotal - 1) {
-                            Text("Next", color = GolocalPureWhite)
-                        }
-                    }
-                } else {
-                    GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
-                }
-            }
-
-            // Circular Countdown Timer Ring modeled on Mockup 2
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(76.dp)
-                        .testTag("rider_request_timer"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val stroke = 6.dp.toPx()
-                        drawArc(
-                            color = GolocalPureWhite.copy(alpha = 0.18f),
-                            startAngle = -90f,
-                            sweepAngle = 360f,
-                            useCenter = false,
-                            style = Stroke(width = stroke, cap = StrokeCap.Round)
-                        )
-                        drawArc(
-                            color = if (remainingSeconds <= 5) GolocalError else GolocalPrimaryBlue,
-                            startAngle = -90f,
-                            sweepAngle = 360f * ringProgress,
-                            useCenter = false,
-                            style = Stroke(width = stroke, cap = StrokeCap.Round)
-                        )
-                    }
-                    Text(
-                        text = if (remainingSeconds > 0) "$remainingSeconds" else "0",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = GolocalPureWhite,
-                        fontFamily = JetBrainsMono
-                    )
-                }
-            }
-
-            // Pickup + Trip Duration + Distance & Route Summary
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(3.dp)
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
-                Text(
-                    text = String.format(
-                        Locale.US,
-                        "Pickup %.1f km away (~%d min)  •  Trip %.2f km (%d min)",
-                        pickupDistanceKm,
-                        etaMins,
-                        booking.distanceKm,
-                        booking.estimatedDurationMin
-                    ),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = GolocalPureWhite
-                )
-                Text(
-                    text = "${booking.pickupLabel} → ${booking.destinationLabel}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = GolocalPureWhite.copy(alpha = 0.82f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            // Fare & Regulated Proposal Adjuster
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = GolocalPureWhite.copy(alpha = 0.08f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                // Dark Navy Upper Section modeled on Screenshot 3
                 Column(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(GolocalDeepNavy)
+                        .padding(start = 16.dp, end = 16.dp, top = 36.dp, bottom = 10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -658,119 +549,353 @@ fun IncomingRideRequestOverlayCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = { proposedFare = (proposedFare - 10f).coerceIn(minFare, maxFare) },
-                            enabled = proposedFare > minFare,
-                            modifier = Modifier.size(48.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(Icons.Filled.Remove, contentDescription = "Decrease fare", tint = GolocalPureWhite)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                text = "₹${proposedFare.roundToInt()}  •  Net ~₹$estimatedNetInr",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontFamily = JetBrainsMono,
+                                text = passengerFirstName,
+                                style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = GolocalPureWhite
                             )
                             Text(
-                                text = "Estimated fare (Band ₹${minFare.toInt()}–₹${maxFare.toInt()})",
+                                text = "#${booking.id.take(8)}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = GolocalPureWhite.copy(alpha = 0.72f)
+                                fontFamily = JetBrainsMono,
+                                color = GolocalPureWhite.copy(alpha = 0.72f),
+                                modifier = Modifier.testTag("rider_incoming_booking_id")
                             )
                         }
-                        IconButton(
-                            onClick = { proposedFare = (proposedFare + 10f).coerceIn(minFare, maxFare) },
-                            enabled = proposedFare < maxFare,
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "Increase fare", tint = GolocalPureWhite)
+                        if (queueTotal > 1) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = onPreviousRequest,
+                                    enabled = queueIndex > 0,
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                ) {
+                                    Text("Prev", color = GolocalPureWhite, style = MaterialTheme.typography.labelSmall)
+                                }
+                                Text(
+                                    text = "${queueIndex + 1}/$queueTotal",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = GolocalPureWhite.copy(alpha = 0.85f)
+                                )
+                                TextButton(
+                                    onClick = onNextRequest,
+                                    enabled = queueIndex < queueTotal - 1,
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                ) {
+                                    Text("Next", color = GolocalPureWhite, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        } else {
+                            GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
                         }
                     }
 
-                    if (maxFare > minFare + 1f) {
-                        Slider(
-                            value = proposedFare,
-                            onValueChange = { proposedFare = it.coerceIn(minFare, maxFare) },
-                            valueRange = minFare..maxFare,
-                            colors = SliderDefaults.colors(
-                                thumbColor = GolocalPureWhite,
-                                activeTrackColor = GolocalPrimaryBlue,
-                                inactiveTrackColor = GolocalPureWhite.copy(alpha = 0.25f)
-                            ),
-                            modifier = Modifier.height(28.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = GolocalPureWhite.copy(alpha = 0.14f)
+                        ) {
+                            Icon(
+                                imageVector = vehicleIcon,
+                                contentDescription = vehicleLabel,
+                                tint = GolocalWarning,
+                                modifier = Modifier
+                                    .padding(4.dp)
+                                    .size(18.dp)
+                            )
+                        }
+                        Text(
+                            text = vehicleLabel,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = GolocalPureWhite
                         )
+                    }
+
+                    Text(
+                        text = "₹${proposedFare.roundToInt()}",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontFamily = JetBrainsMono,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = GolocalPureWhite
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "${booking.paymentMethod.replaceFirstChar { it.uppercase() }} • Net ~₹$estimatedNetInr",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = GolocalLightBlue
+                        )
+                        Surface(
+                            onClick = { showFareAdjuster = !showFareAdjuster },
+                            shape = RoundedCornerShape(999.dp),
+                            color = GolocalPureWhite.copy(alpha = 0.12f),
+                            modifier = Modifier.testTag("rider_toggle_fare_adjuster")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = "Band ₹${minFare.toInt()}–₹${maxFare.toInt()}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = GolocalPureWhite.copy(alpha = 0.90f)
+                                )
+                                Icon(
+                                    imageVector = if (showFareAdjuster) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                                    contentDescription = "Toggle fare adjuster",
+                                    tint = GolocalPureWhite,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (showFareAdjuster) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = GolocalPureWhite.copy(alpha = 0.08f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = { proposedFare = (proposedFare - 10f).coerceIn(minFare, maxFare) },
+                                        enabled = proposedFare > minFare,
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Remove, contentDescription = "Decrease fare", tint = GolocalPureWhite)
+                                    }
+                                    Text(
+                                        text = "Offer ₹${proposedFare.roundToInt()} (Net ~₹$estimatedNetInr)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontFamily = JetBrainsMono,
+                                        color = GolocalPureWhite
+                                    )
+                                    IconButton(
+                                        onClick = { proposedFare = (proposedFare + 10f).coerceIn(minFare, maxFare) },
+                                        enabled = proposedFare < maxFare,
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Add, contentDescription = "Increase fare", tint = GolocalPureWhite)
+                                    }
+                                }
+                                if (maxFare > minFare + 1f) {
+                                    Slider(
+                                        value = proposedFare,
+                                        onValueChange = { proposedFare = it.coerceIn(minFare, maxFare) },
+                                        valueRange = minFare..maxFare,
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = GolocalPureWhite,
+                                            activeTrackColor = GolocalPrimaryBlue,
+                                            inactiveTrackColor = GolocalPureWhite.copy(alpha = 0.25f)
+                                        ),
+                                        modifier = Modifier.height(26.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Crisp White Lower Route & Action Card modeled on Screenshot 3
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(GolocalSuccess)
+                        )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Pickup • %.2f km away (~%d min)",
+                                    pickupDistanceKm,
+                                    etaMins
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = booking.pickupLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(GolocalError)
+                        )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "Drop • Trip %.2f km (%d min)",
+                                    booking.distanceKm,
+                                    booking.estimatedDurationMin
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = booking.destinationLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = {
+                                val fareDouble = proposedFare.roundToInt().toDouble()
+                                if (onDirectAccept != null) {
+                                    onDirectAccept(fareDouble)
+                                } else {
+                                    onAccept(fareDouble, etaMins)
+                                }
+                            },
+                            enabled = remainingSeconds > 0,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = GolocalSuccess,
+                                contentColor = GolocalPureWhite
+                            ),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("rider_accept_request_button")
+                        ) {
+                            Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (remainingSeconds > 0) "ACCEPT RIDE" else "TIMED OUT",
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+
+                        Button(
+                            onClick = onDecline,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = GolocalError,
+                                contentColor = GolocalPureWhite
+                            ),
+                            shape = RoundedCornerShape(999.dp),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("rider_decline_request_button")
+                        ) {
+                            Text("Skip", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (onDirectAccept != null) {
+                        OutlinedButton(
+                            onClick = { onAccept(proposedFare.roundToInt().toDouble(), etaMins) },
+                            enabled = remainingSeconds > 0,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("rider_propose_fare_button")
+                        ) {
+                            Text(
+                                text = "Send Custom Offer ₹${proposedFare.roundToInt()}",
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
+        }
 
-            // Decline / Accept / Propose Actions
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onDecline,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GolocalPureWhite),
-                    border = androidx.compose.foundation.BorderStroke(1.2.dp, GolocalPureWhite.copy(alpha = 0.45f)),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 50.dp)
-                        .testTag("rider_decline_request_button")
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Decline", fontWeight = FontWeight.SemiBold)
-                }
-
-                if (onDirectAccept != null) {
-                    OutlinedButton(
-                        onClick = { onAccept(proposedFare.roundToInt().toDouble(), etaMins) },
-                        enabled = remainingSeconds > 0,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = GolocalPureWhite),
-                        border = androidx.compose.foundation.BorderStroke(1.2.dp, GolocalPureWhite.copy(alpha = 0.65f)),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 50.dp)
-                            .testTag("rider_propose_fare_button")
-                    ) {
-                        Text(
-                            text = "Offer ₹${proposedFare.roundToInt()}",
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1
-                        )
-                    }
-                }
-
-                Button(
-                    onClick = {
-                        val fareDouble = proposedFare.roundToInt().toDouble()
-                        if (onDirectAccept != null) {
-                            onDirectAccept(fareDouble)
-                        } else {
-                            onAccept(fareDouble, etaMins)
-                        }
-                    },
-                    enabled = remainingSeconds > 0,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = GolocalPureWhite,
-                        contentColor = GolocalDeepNavy
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .weight(1.1f)
-                        .heightIn(min = 50.dp)
-                        .testTag("rider_accept_request_button")
-                ) {
-                    Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = if (remainingSeconds > 0) "Accept" else "Timed Out",
-                        fontWeight = FontWeight.Bold
+        // Top-Overlapping Circular Countdown Ring modeled on Screenshot 3
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .size(64.dp)
+                .testTag("rider_request_timer"),
+            shape = CircleShape,
+            color = GolocalPureWhite,
+            shadowElevation = 10.dp
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Canvas(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                    val stroke = 5.dp.toPx()
+                    drawArc(
+                        color = Color(0xFFE5ECF6),
+                        startAngle = -90f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round)
+                    )
+                    drawArc(
+                        color = if (remainingSeconds <= 5) GolocalError else GolocalSuccess,
+                        startAngle = -90f,
+                        sweepAngle = 360f * ringProgress,
+                        useCenter = false,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round)
                     )
                 }
+                Text(
+                    text = if (remainingSeconds > 0) "$remainingSeconds" else "0",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (remainingSeconds <= 5) GolocalError else GolocalDeepNavy,
+                    fontFamily = JetBrainsMono
+                )
             }
         }
     }

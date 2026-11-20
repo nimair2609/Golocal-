@@ -203,10 +203,19 @@ service cloud.firestore {
              isOptionalString(data, 'rejectionReason', 300) &&
              data.isOnline is bool &&
              (!('isTestPartner' in data) || data.isTestPartner is bool) &&
-             (!('ratingAvg' in data) || (data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5)) &&
-             (!('completedRides' in data) || (data.completedRides is int && data.completedRides >= 0)) &&
-             isValidTimestamp(data.createdAt) &&
-             isValidTimestamp(data.updatedAt);
+              (!('ratingAvg' in data) || (data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5)) &&
+              (!('completedRides' in data) || (data.completedRides is int && data.completedRides >= 0)) &&
+              isOptionalString(data, 'emergencyContactName', 100) &&
+              isOptionalString(data, 'emergencyContactPhone', 25) &&
+              isOptionalString(data, 'policeVerificationNumber', 60) &&
+              isOptionalString(data, 'alternateIdType', 40) &&
+              isOptionalString(data, 'alternateIdLast4', 10) &&
+              isOptionalString(data, 'operatingState', 20) &&
+              isOptionalString(data, 'welfareInsurancePolicyNo', 60) &&
+              (!('driverTrainingCompleted' in data) || data.driverTrainingCompleted is bool) &&
+              (!('complianceTermsAccepted' in data) || data.complianceTermsAccepted is bool) &&
+              isValidTimestamp(data.createdAt) &&
+              isValidTimestamp(data.updatedAt);
     }
 
     function isValidDriverDirectory(data) {
@@ -535,6 +544,11 @@ service cloud.firestore {
              (!('testOtpValiditySeconds' in data) || (data.testOtpValiditySeconds is int && data.testOtpValiditySeconds >= 60 && data.testOtpValiditySeconds <= 1800)) &&
              (!('testAllowAdminOtpOverride' in data) || data.testAllowAdminOtpOverride is bool) &&
              (!('testAutoCompleteEnabled' in data) || data.testAutoCompleteEnabled is bool) &&
+             isOptionalString(data, 'operatingStateCode', 12) &&
+             isOptionalString(data, 'aggregatorLicenceNumber', 80) &&
+             isOptionalString(data, 'grievanceOfficerName', 100) &&
+             isOptionalString(data, 'grievanceOfficerEmail', 150) &&
+             (!('bikeTaxiCommercialApproved' in data) || data.bikeTaxiCommercialApproved is bool) &&
              isValidTimestamp(data.updatedAt);
     }
 
@@ -853,7 +867,12 @@ service cloud.firestore {
                             'permitExpiryEpochDay', 'fitnessExpiryEpochDay', 'pucExpiryEpochDay',
                             'dlPhotoUri', 'rcPhotoUri', 'insurancePhotoUri', 'permitPhotoUri',
                             'fitnessPhotoUri', 'pucPhotoUri', 'verificationStatus', 'rejectionReason',
-                            'settlementUpiOrBank', 'documentPhotoUri', 'updatedAt'
+                            'settlementUpiOrBank', 'documentPhotoUri',
+                            'emergencyContactName', 'emergencyContactPhone',
+                            'policeVerificationNumber', 'alternateIdType', 'alternateIdLast4',
+                            'operatingState', 'welfareInsurancePolicyNo',
+                            'driverTrainingCompleted', 'complianceTermsAccepted',
+                            'updatedAt'
                           ]))
                        );
       allow delete: if isAdmin();

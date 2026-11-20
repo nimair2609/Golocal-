@@ -548,7 +548,16 @@ class DriverViewModel(
         insurancePhotoUri: String = "",
         permitPhotoUri: String = "",
         fitnessPhotoUri: String = "",
-        pucPhotoUri: String = ""
+        pucPhotoUri: String = "",
+        emergencyContactName: String = "",
+        emergencyContactPhone: String = "",
+        policeVerificationNumber: String = "",
+        alternateIdType: String = "",
+        alternateIdLast4: String = "",
+        operatingState: String = "WB",
+        welfareInsurancePolicyNo: String = "",
+        driverTrainingCompleted: Boolean = false,
+        complianceTermsAccepted: Boolean = false
     ) {
         if (legalName.trim().length < 2 || phone.trim().length < 6 ||
             vehicleRegNumber.trim().length < 4 || drivingLicenceNumber.trim().length < 4
@@ -589,6 +598,15 @@ class DriverViewModel(
                     permitPhotoUri = permitPhotoUri,
                     fitnessPhotoUri = fitnessPhotoUri,
                     pucPhotoUri = pucPhotoUri,
+                    emergencyContactName = emergencyContactName,
+                    emergencyContactPhone = emergencyContactPhone,
+                    policeVerificationNumber = policeVerificationNumber,
+                    alternateIdType = alternateIdType,
+                    alternateIdLast4 = alternateIdLast4,
+                    operatingState = operatingState,
+                    welfareInsurancePolicyNo = welfareInsurancePolicyNo,
+                    driverTrainingCompleted = driverTrainingCompleted,
+                    complianceTermsAccepted = complianceTermsAccepted,
                     verificationVersion = (existingVersion + 1L).coerceAtLeast(1L)
                 )
             ).onSuccess {

@@ -83,3 +83,20 @@ fun GolocalTheme(
         content = content
     )
 }
+
+@Composable
+fun rememberPrefersReducedMotion(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) {
+        val animatorsEnabled = android.animation.ValueAnimator.areAnimatorsEnabled()
+        val durationScale = runCatching {
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f
+            )
+        }.getOrDefault(1f)
+        !animatorsEnabled || durationScale <= 0f
+    }
+}
+

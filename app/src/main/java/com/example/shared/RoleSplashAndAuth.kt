@@ -88,21 +88,22 @@ fun GolocalRoleSplashScreen(
     mode: ExperienceMode,
     onFinished: () -> Unit
 ) {
-    var visible by remember { mutableStateOf(false) }
+    val reducedMotion = rememberPrefersReducedMotion()
+    var visible by remember(reducedMotion) { mutableStateOf(reducedMotion) }
     val alpha by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(durationMillis = 420),
+        animationSpec = tween(durationMillis = if (reducedMotion) 0 else 420),
         label = "splash_alpha"
     )
     val scale by animateFloatAsState(
         targetValue = if (visible) 1f else 0.92f,
-        animationSpec = tween(durationMillis = 480),
+        animationSpec = tween(durationMillis = if (reducedMotion) 0 else 480),
         label = "splash_scale"
     )
 
-    LaunchedEffect(mode) {
+    LaunchedEffect(mode, reducedMotion) {
         visible = true
-        delay(850)
+        delay(if (reducedMotion) 320L else 850L)
         onFinished()
     }
 
@@ -358,6 +359,7 @@ fun RoleAuthScreen(
     val phoneState by controller.uiState.collectAsStateWithLifecycle()
     var isGoogleSigningIn by remember { mutableStateOf(false) }
     var googleError by remember { mutableStateOf<String?>(null) }
+    var activeLegalDialog by remember { mutableStateOf<String?>(null) }
 
     BackHandler(enabled = phoneState.step == PhoneAuthStep.VERIFY_OTP) {
         controller.changeMobileNumber()
@@ -727,9 +729,72 @@ fun RoleAuthScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = cardSubColor
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = { activeLegalDialog = "terms" },
+                            modifier = Modifier.testTag("auth_terms_link")
+                        ) {
+                            Text(
+                                text = "Terms",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isCustomer) GolocalLightBlue else GolocalPrimaryBlue
+                            )
+                        }
+                        Text("•", color = cardSubColor)
+                        TextButton(
+                            onClick = { activeLegalDialog = "privacy" },
+                            modifier = Modifier.testTag("auth_privacy_link")
+                        ) {
+                            Text(
+                                text = "Privacy (DPDP)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isCustomer) GolocalLightBlue else GolocalPrimaryBlue
+                            )
+                        }
+                        Text("•", color = cardSubColor)
+                        TextButton(
+                            onClick = { activeLegalDialog = "help" },
+                            modifier = Modifier.testTag("auth_help_link")
+                        ) {
+                            Text(
+                                text = "Help",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isCustomer) GolocalLightBlue else GolocalPrimaryBlue
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (activeLegalDialog != null) {
+        val (title, body) = when (activeLegalDialog) {
+            "terms" -> "GoLocal Terms of Service" to
+                "Fares stay within admin-configured state fare bands. All commercial trips verify a 6-digit Pickup OTP/PIN before starting. Riders must maintain valid DL, RC, Commercial Insurance, Permit, and PUC under the Motor Vehicles Act 1988 & MVA Guidelines."
+            "privacy" -> "Privacy Notice (DPDP Act 2023)" to
+                "GoLocal processes your phone number, pickup/drop coordinates, and emergency contact solely for booking fulfilment, safety SOS alerts, and statutory invoicing. Phone numbers are never exposed directly between unrelated parties; you may request correction or account deletion anytime from Account Settings."
+            else -> "GoLocal Help & Safety Desk" to
+                "Need sign-in or trip help? Emergency SOS is available 24x7 inside active trips. Once signed in, open Profile -> Help & Support to raise a ticket with GoLocal Operations."
+        }
+        AlertDialog(
+            onDismissRequest = { activeLegalDialog = null },
+            title = { Text(title) },
+            text = { Text(body, style = MaterialTheme.typography.bodySmall) },
+            confirmButton = {
+                TextButton(
+                    onClick = { activeLegalDialog = null },
+                    modifier = Modifier.testTag("auth_legal_dialog_close")
+                ) {
+                    Text("Close")
+                }
+            }
+        )
     }
 }
 

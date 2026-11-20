@@ -47,6 +47,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.TripLocation
 import com.example.ui.components.InteractiveBengalMapCanvas
+import com.example.ui.theme.rememberPrefersReducedMotion
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -249,6 +250,7 @@ fun GolocalMapContainer(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
+    val prefersReducedMotion = rememberPrefersReducedMotion()
     val mapView = remember { MapView(context) }
     var mapController by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember { mutableStateOf(false) }
@@ -316,10 +318,10 @@ fun GolocalMapContainer(
         if (points.size >= 2) {
             val bounds = LatLngBounds.Builder().includes(points).build()
             val update = CameraUpdateFactory.newLatLngBounds(bounds, 108)
-            if (animated) map.animateCamera(update, 650) else map.moveCamera(update)
+            if (animated && !prefersReducedMotion) map.animateCamera(update, 650) else map.moveCamera(update)
         } else if (points.size == 1) {
             val update = CameraUpdateFactory.newLatLngZoom(points.first(), 14.5)
-            if (animated) map.animateCamera(update, 500) else map.moveCamera(update)
+            if (animated && !prefersReducedMotion) map.animateCamera(update, 500) else map.moveCamera(update)
         }
         lastCameraUpdateMs = System.currentTimeMillis()
     }
@@ -331,12 +333,12 @@ fun GolocalMapContainer(
         if (!styleReady || !style.isFullyLoaded) return@LaunchedEffect
         updateStyleSources(style)
         if (autoFollow && !enableCenterPinSelection && System.currentTimeMillis() - lastCameraUpdateMs >= 1500L) {
-            recenterCamera(map, animated = true)
+            recenterCamera(map, animated = !prefersReducedMotion)
         }
     }
 
     // Smooth marker interpolation decoupled from throttled camera follow
-    LaunchedEffect(styleReady, liveTripLocation?.lat, liveTripLocation?.lng) {
+    LaunchedEffect(styleReady, liveTripLocation?.lat, liveTripLocation?.lng, prefersReducedMotion) {
         val map = mapController ?: return@LaunchedEffect
         val style = map.style ?: return@LaunchedEffect
         val live = liveTripLocation ?: return@LaunchedEffect
@@ -348,7 +350,8 @@ fun GolocalMapContainer(
         lastDriverGeo = target
         val driverSrc = style.getSourceAs<GeoJsonSource>(SRC_DRIVER) ?: return@LaunchedEffect
 
-        if (start == null) {
+        if (start == null || prefersReducedMotion) {
+            activeMarkerAnimator?.cancel()
             driverSrc.setGeoJson(buildSinglePointGeoJson(target.lat, target.lng))
         } else {
             activeMarkerAnimator?.cancel()
@@ -367,7 +370,8 @@ fun GolocalMapContainer(
 
         val now = System.currentTimeMillis()
         if (autoFollow && !enableCenterPinSelection && now - lastCameraUpdateMs >= 1500L) {
-            map.animateCamera(CameraUpdateFactory.newLatLng(LatLng(target.lat, target.lng)), 800)
+            val camUpdate = CameraUpdateFactory.newLatLng(LatLng(target.lat, target.lng))
+            if (prefersReducedMotion) map.moveCamera(camUpdate) else map.animateCamera(camUpdate, 800)
             lastCameraUpdateMs = now
         }
     }

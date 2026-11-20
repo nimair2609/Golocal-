@@ -203,6 +203,15 @@ data class DriverProfile(
     val isTestPartner: Boolean = false,
     val ratingAvg: Double = 5.0,
     val completedRides: Long = 0L,
+    val emergencyContactName: String = "",
+    val emergencyContactPhone: String = "",
+    val policeVerificationNumber: String = "",
+    val alternateIdType: String = "",
+    val alternateIdLast4: String = "",
+    val operatingState: String = "WB",
+    val welfareInsurancePolicyNo: String = "",
+    val driverTrainingCompleted: Boolean = false,
+    val complianceTermsAccepted: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
@@ -619,6 +628,11 @@ data class PlatformSettings(
     val testOtpValiditySeconds: Long = 300L,
     val testAllowAdminOtpOverride: Boolean = true,
     val testAutoCompleteEnabled: Boolean = false,
+    val operatingStateCode: String = "WB",
+    val aggregatorLicenceNumber: String = "",
+    val grievanceOfficerName: String = "",
+    val grievanceOfficerEmail: String = "",
+    val bikeTaxiCommercialApproved: Boolean = false,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 

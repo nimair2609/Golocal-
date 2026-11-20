@@ -49,6 +49,10 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
         val targetApp = data["targetApp"] ?: data["target_app"] ?: data["targetRole"] ?: "customer"
         val targetScreen = data["targetScreen"] ?: data["target_screen"] ?: ""
         val bookingId = data["bookingId"] ?: data["booking_id"] ?: data["entityId"] ?: data["entity_id"] ?: ""
+        if (isExpiredRideRequestPayload(type = type, data = data)) {
+            Log.i(TAG, "Suppressed expired incoming ride request push for booking=$bookingId")
+            return
+        }
         val isSampleRide = data["isSampleRide"].equals("true", ignoreCase = true) ||
             data["is_sample_ride"].equals("true", ignoreCase = true) ||
             data["isSample"].equals("true", ignoreCase = true) ||
@@ -103,7 +107,24 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
         super.onDestroy()
     }
 
-    private companion object {
-        const val TAG = "GoLocalFcmService"
+    companion object {
+        private const val TAG = "GoLocalFcmService"
+
+        internal fun isExpiredRideRequestPayload(
+            type: String,
+            data: Map<String, String>,
+            nowMs: Long = System.currentTimeMillis()
+        ): Boolean {
+            val normalizedType = type.trim().lowercase()
+            if (normalizedType !in setOf("new_ride_request", "test_request", "sample_request")) {
+                return false
+            }
+            val rawExpiry = data["requestExpiresAtMs"]
+                ?: data["request_expires_at_ms"]
+                ?: data["expiresAtMs"]
+                ?: return false
+            val expiresAtMs = rawExpiry.trim().toLongOrNull() ?: return false
+            return expiresAtMs > 0L && nowMs > expiresAtMs
+        }
     }
 }

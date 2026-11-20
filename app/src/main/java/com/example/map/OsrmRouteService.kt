@@ -1,11 +1,15 @@
 package com.example.map
 
+import android.os.Build
+import com.example.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.Collections
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
@@ -235,3 +239,120 @@ object OsrmRouteService {
         )
     }
 }
+
+data class NominatimPlaceResult(
+    val displayName: String,
+    val primaryLabel: String,
+    val district: String,
+    val lat: Double,
+    val lng: Double
+)
+
+object NominatimGeocoder {
+    private const val DEFAULT_GEOCODING_URL = "https://nominatim.openstreetmap.org"
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(6, TimeUnit.SECONDS)
+        .build()
+
+    private val queryCache: MutableMap<String, List<NominatimPlaceResult>> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, List<NominatimPlaceResult>>(24, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<NominatimPlaceResult>>?): Boolean =
+                size > 24
+        }
+    )
+
+    suspend fun searchPlaces(
+        query: String,
+        biasLat: Double? = null,
+        biasLng: Double? = null,
+        limit: Int = 5
+    ): List<NominatimPlaceResult> {
+        val trimmed = query.trim()
+        if (trimmed.length < 3) return emptyList()
+        val fp = Build.FINGERPRINT.orEmpty()
+        val hw = Build.HARDWARE.orEmpty()
+        if (fp.contains("robolectric", ignoreCase = true) || hw.contains("robolectric", ignoreCase = true)) {
+            return emptyList()
+        }
+
+        val cacheKey = trimmed.lowercase()
+        queryCache[cacheKey]?.let { return it }
+
+        return try {
+            withContext(Dispatchers.IO) {
+                val baseUrl = BuildConfig.GEOCODING_BASE_URL.ifBlank { DEFAULT_GEOCODING_URL }.trimEnd('/')
+                val encoded = URLEncoder.encode(trimmed, "UTF-8")
+                val viewboxParam = if (
+                    biasLat != null && biasLng != null &&
+                    GpsBroadcastThrottle.isValidCoordinate(biasLat, biasLng)
+                ) {
+                    val left = biasLng - 0.6
+                    val right = biasLng + 0.6
+                    val top = biasLat + 0.6
+                    val bottom = biasLat - 0.6
+                    String.format(java.util.Locale.US, "&viewbox=%.4f,%.4f,%.4f,%.4f", left, top, right, bottom)
+                } else ""
+                val url = "$baseUrl/search?q=$encoded&format=jsonv2&addressdetails=1&countrycodes=in&limit=${limit.coerceIn(1, 8)}$viewboxParam"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "GoLocal-Android/1.0 (India Mobility)")
+                    .header("Accept", "application/json")
+                    .get()
+                    .build()
+
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext emptyList()
+                    val body = response.body?.string().orEmpty()
+                    val parsed = parseNominatimSearchJson(body)
+                    if (parsed.isNotEmpty()) {
+                        queryCache[cacheKey] = parsed
+                    }
+                    parsed
+                }
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    internal fun parseNominatimSearchJson(rawJson: String): List<NominatimPlaceResult> {
+        if (rawJson.isBlank()) return emptyList()
+        return runCatching {
+            val array = JSONArray(rawJson)
+            val results = mutableListOf<NominatimPlaceResult>()
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val lat = item.optString("lat").toDoubleOrNull() ?: continue
+                val lng = item.optString("lon").toDoubleOrNull() ?: continue
+                if (!GpsBroadcastThrottle.isValidCoordinate(lat, lng)) continue
+                val displayName = item.optString("display_name").trim()
+                if (displayName.isBlank()) continue
+                val name = item.optString("name").trim()
+                val address = item.optJSONObject("address")
+                val district = address?.optString("state_district")?.ifBlank { null }
+                    ?: address?.optString("county")?.ifBlank { null }
+                    ?: address?.optString("city")?.ifBlank { null }
+                    ?: address?.optString("state")?.ifBlank { null }
+                    ?: "India"
+                val primaryLabel = name.ifBlank {
+                    displayName.substringBefore(",").trim().ifBlank { displayName }
+                }
+                results.add(
+                    NominatimPlaceResult(
+                        displayName = displayName,
+                        primaryLabel = primaryLabel,
+                        district = district,
+                        lat = lat,
+                        lng = lng
+                    )
+                )
+            }
+            results.distinctBy { "${it.primaryLabel.lowercase()}_${it.district.lowercase()}" }
+        }.getOrDefault(emptyList())
+    }
+}
+

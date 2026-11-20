@@ -308,6 +308,38 @@ fun CustomerProfileScreen(
                         )
                     }
 
+                    SettingsSectionGroup(title = "DPDP Act 2023 Data Rights & Grievance") {
+                        Column(
+                            modifier = Modifier
+                                .padding(16.dp)
+                                .testTag("dpdp_rights_notice_card"),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("Your Personal Data & Rights", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "• Purpose & Minimisation: Verified phone, pickup/drop GPS, and private SOS contacts are used solely for dispatch, live safety sharing, and GST invoices.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "• Access, Correction & Erasure: Update your name or invoice email under Personal Information, revoke permissions in Android Settings, or submit an erasure request below.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            val officerName = platformSettings?.grievanceOfficerName?.takeIf { it.isNotBlank() } ?: "Designated Grievance Officer"
+                            val officerEmail = platformSettings?.grievanceOfficerEmail?.takeIf { it.isNotBlank() }
+                            Text(
+                                text = if (officerEmail != null) {
+                                    "• Grievance Redressal: $officerName ($officerEmail) • Helpline: ${platformSettings?.helplineNumber ?: "+91-1800-103-0000"}"
+                                } else {
+                                    "• Grievance Redressal: Helpline ${platformSettings?.helplineNumber ?: "+91-1800-103-0000"} or Support Desk."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
                     OutlinedButton(
                         onClick = { showDeleteDialog = true },
                         modifier = Modifier
@@ -373,10 +405,18 @@ fun CustomerProfileScreen(
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text("GoLocal by NR Next", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                             Text(
-                                text = "Terms of Service: Fares stay within admin-regulated West Bengal bands; every trip requires your 4-digit Trip PIN. Privacy Policy: Personal phone numbers and private emergency contacts are never exposed to drivers or passengers.",
+                                text = "Terms of Service: Fares stay within admin-regulated Motor Vehicles Aggregator fare bands; every trip requires your 4-digit Trip PIN. Privacy Policy (DPDP Act 2023): Personal phone numbers and private emergency contacts are never exposed to drivers or other passengers.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val grievanceEmail = platformSettings?.grievanceOfficerEmail?.takeIf { it.isNotBlank() }
+                            if (grievanceEmail != null) {
+                                Text(
+                                    text = "Grievance Officer: ${platformSettings?.grievanceOfficerName?.ifBlank { "GoLocal Compliance" }} ($grievanceEmail)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }

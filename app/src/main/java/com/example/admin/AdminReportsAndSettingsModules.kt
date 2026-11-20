@@ -9,9 +9,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
+import com.example.domain.IndianRegulatoryChecklist
+import com.example.domain.OperatingStateCode
+import com.example.domain.StateComplianceCatalog
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalStatusBadge
 import com.example.ui.theme.GolocalError
@@ -103,6 +108,7 @@ fun AdminReportsModule(adminViewModel: AdminViewModel) {
 @Composable
 fun AdminSettingsModule(adminViewModel: AdminViewModel) {
     val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
+    val drivers by adminViewModel.drivers.collectAsStateWithLifecycle()
     val adminAllowlist by adminViewModel.adminAllowlist.collectAsStateWithLifecycle()
     val operationsStaff by adminViewModel.operationsStaff.collectAsStateWithLifecycle()
     val auditLogs by adminViewModel.auditLogs.collectAsStateWithLifecycle()
@@ -112,6 +118,11 @@ fun AdminSettingsModule(adminViewModel: AdminViewModel) {
     var cancelPolicy by remember(platformSettings.cancellationPolicySummary) { mutableStateOf(platformSettings.cancellationPolicySummary) }
     var notice by remember(platformSettings.maintenanceNotice) { mutableStateOf(platformSettings.maintenanceNotice) }
     var parcelEnabled by remember(platformSettings.parcelDeliveryEnabled) { mutableStateOf(platformSettings.parcelDeliveryEnabled) }
+    var operatingStateCode by remember(platformSettings.operatingStateCode) { mutableStateOf(platformSettings.operatingStateCode.ifBlank { "WB" }) }
+    var aggregatorLicenceNumber by remember(platformSettings.aggregatorLicenceNumber) { mutableStateOf(platformSettings.aggregatorLicenceNumber) }
+    var grievanceOfficerName by remember(platformSettings.grievanceOfficerName) { mutableStateOf(platformSettings.grievanceOfficerName) }
+    var grievanceOfficerEmail by remember(platformSettings.grievanceOfficerEmail) { mutableStateOf(platformSettings.grievanceOfficerEmail) }
+    var bikeTaxiCommercialApproved by remember(platformSettings.bikeTaxiCommercialApproved) { mutableStateOf(platformSettings.bikeTaxiCommercialApproved) }
 
     var updatesEnabled by remember(platformSettings.updatesEnabled) { mutableStateOf(platformSettings.updatesEnabled) }
     var updateManifestUrl by remember(platformSettings.updateManifestUrl) {
@@ -173,6 +184,151 @@ fun AdminSettingsModule(adminViewModel: AdminViewModel) {
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Save Platform Settings") }
+            }
+        }
+
+        // Indian Regulatory & Aggregator Compliance Registry
+        val statePolicy = remember(operatingStateCode) { StateComplianceCatalog.policyFor(operatingStateCode) }
+        val verifiedDriversCount = remember(drivers) { drivers.count { it.verificationStatus == "verified" } }
+        val checklistItems = remember(
+            operatingStateCode,
+            aggregatorLicenceNumber,
+            grievanceOfficerName,
+            grievanceOfficerEmail,
+            bikeTaxiCommercialApproved,
+            platformSettings.defaultCommissionPct,
+            verifiedDriversCount
+        ) {
+            IndianRegulatoryChecklist.evaluate(
+                settings = platformSettings.copy(
+                    operatingStateCode = operatingStateCode,
+                    aggregatorLicenceNumber = aggregatorLicenceNumber,
+                    grievanceOfficerName = grievanceOfficerName,
+                    grievanceOfficerEmail = grievanceOfficerEmail,
+                    bikeTaxiCommercialApproved = bikeTaxiCommercialApproved
+                ),
+                verifiedDriversCount = verifiedDriversCount
+            )
+        }
+
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+                .testTag("admin_regulatory_compliance_card")
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Indian Regulatory Compliance & Licensing", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Track Motor Vehicles Act / MVA Guidelines 2025, State Aggregator Licence (${statePolicy.state.displayName}), Bike-Taxi permissibility, and DPDP Grievance Officer fields.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OperatingStateCode.entries.forEach { stateOption ->
+                        FilterChip(
+                            selected = operatingStateCode.equals(stateOption.code, ignoreCase = true),
+                            onClick = { operatingStateCode = stateOption.code },
+                            label = { Text("${stateOption.displayName} (${stateOption.code})") },
+                            modifier = Modifier.testTag("admin_state_chip_${stateOption.code}")
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = aggregatorLicenceNumber,
+                    onValueChange = { aggregatorLicenceNumber = it },
+                    label = { Text("State Aggregator Licence Ref (${statePolicy.state.code})") },
+                    placeholder = { Text("Enter Transport Department licence ref") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = grievanceOfficerName,
+                    onValueChange = { grievanceOfficerName = it },
+                    label = { Text("DPDP / Consumer Grievance Officer Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = grievanceOfficerEmail,
+                    onValueChange = { grievanceOfficerEmail = it },
+                    label = { Text("Grievance Officer Contact Email") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Bike-Taxi Commercial Permit Confirmed", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            statePolicy.bikeTaxiStatusNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = bikeTaxiCommercialApproved,
+                        onCheckedChange = { bikeTaxiCommercialApproved = it }
+                    )
+                }
+                Button(
+                    onClick = {
+                        adminViewModel.savePlatformSettings(
+                            platformSettings.copy(
+                                operatingStateCode = operatingStateCode.uppercase(),
+                                aggregatorLicenceNumber = aggregatorLicenceNumber.trim(),
+                                grievanceOfficerName = grievanceOfficerName.trim(),
+                                grievanceOfficerEmail = grievanceOfficerEmail.trim(),
+                                bikeTaxiCommercialApproved = bikeTaxiCommercialApproved
+                            )
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("admin_save_regulatory_button")
+                ) { Text("Save Regulatory Compliance") }
+
+                HorizontalDivider()
+                Text("Compliance Readiness Summary", style = MaterialTheme.typography.labelLarge)
+                checklistItems.forEach { item ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                item.title,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            GolocalStatusBadge(
+                                label = if (item.implementedInCode) "READY" else "ACTION REQ",
+                                tone = if (item.implementedInCode) "success" else "warning"
+                            )
+                        }
+                        Text(item.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (item.requiresExternalSignOff) {
+                            Text(
+                                "Requires Transport Authority / Legal Counsel Confirmation",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
             }
         }
 

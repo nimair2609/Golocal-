@@ -1435,6 +1435,15 @@ class GolocalRepository(
             if (profile.permitPhotoUri.isNotBlank()) put("permitPhotoUri", profile.permitPhotoUri)
             if (profile.fitnessPhotoUri.isNotBlank()) put("fitnessPhotoUri", profile.fitnessPhotoUri)
             if (profile.pucPhotoUri.isNotBlank()) put("pucPhotoUri", profile.pucPhotoUri)
+            if (profile.emergencyContactName.isNotBlank()) put("emergencyContactName", profile.emergencyContactName.trim())
+            if (profile.emergencyContactPhone.isNotBlank()) put("emergencyContactPhone", profile.emergencyContactPhone.trim())
+            if (profile.policeVerificationNumber.isNotBlank()) put("policeVerificationNumber", profile.policeVerificationNumber.trim())
+            if (profile.alternateIdType.isNotBlank()) put("alternateIdType", profile.alternateIdType.trim())
+            if (profile.alternateIdLast4.isNotBlank()) put("alternateIdLast4", profile.alternateIdLast4.trim().takeLast(4))
+            if (profile.operatingState.isNotBlank()) put("operatingState", profile.operatingState.trim().uppercase())
+            if (profile.welfareInsurancePolicyNo.isNotBlank()) put("welfareInsurancePolicyNo", profile.welfareInsurancePolicyNo.trim())
+            put("driverTrainingCompleted", profile.driverTrainingCompleted)
+            put("complianceTermsAccepted", profile.complianceTermsAccepted)
             put("verificationVersion", profile.verificationVersion.coerceAtLeast(1L))
             put("verificationStatus", "pending")
             put("isOnline", false)
@@ -2922,6 +2931,11 @@ class GolocalRepository(
                         "testOtpValiditySeconds" to settings.testOtpValiditySeconds.coerceIn(60L, 1800L),
                         "testAllowAdminOtpOverride" to settings.testAllowAdminOtpOverride,
                         "testAutoCompleteEnabled" to settings.testAutoCompleteEnabled,
+                        "operatingStateCode" to settings.operatingStateCode.trim().uppercase().ifBlank { "WB" },
+                        "aggregatorLicenceNumber" to settings.aggregatorLicenceNumber.trim(),
+                        "grievanceOfficerName" to settings.grievanceOfficerName.trim(),
+                        "grievanceOfficerEmail" to settings.grievanceOfficerEmail.trim(),
+                        "bikeTaxiCommercialApproved" to settings.bikeTaxiCommercialApproved,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                 )

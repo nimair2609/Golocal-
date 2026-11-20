@@ -227,6 +227,7 @@ test("Test Ride isolation: test booking search notifies ONLY approved online tes
   assert.equal(messaging.sent[1].android.notification.channelId, "golocal_test_ride_requests_v2");
   assert.equal(messaging.sent[1].android.notification.sound, "golocal_ride_request");
   assert.equal(messaging.sent[1].data.isTestRide, "true");
+  assert.ok(Number(messaging.sent[1].data.requestExpiresAtMs) > 0, "Ride request push should carry expiry timestamp");
 });
 
 test("Admin & Operations alerts fire for SOS, complaints, KYC pending, Test Rider requests, and post-assignment cancellations", async () => {

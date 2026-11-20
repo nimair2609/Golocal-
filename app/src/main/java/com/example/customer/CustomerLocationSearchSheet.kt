@@ -47,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,7 +69,10 @@ import com.example.data.model.ServiceArea
 import com.example.domain.WestBengalCatalog
 import com.example.domain.WestBengalPlace
 import com.example.map.GolocalMapContainer
+import com.example.map.NominatimGeocoder
+import com.example.map.NominatimPlaceResult
 import com.example.shared.CircularBackButton
+import kotlinx.coroutines.delay
 import com.example.shared.LocationAccessState
 import com.example.shared.LocationCoordinator
 import com.example.ui.theme.GolocalDeepNavy
@@ -105,6 +109,7 @@ fun CustomerLocationSearchSheet(
     var activeTarget by remember { mutableStateOf(initialTarget) }
     var searchQuery by remember { mutableStateOf("") }
     var mapPinMode by remember { mutableStateOf(false) }
+    var onlinePlaces by remember { mutableStateOf<List<NominatimPlaceResult>>(emptyList()) }
 
     val defaultCenterLat = when (activeTarget) {
         LocationFieldTarget.PICKUP -> gps.lat ?: draft.pickupPlace.lat
@@ -116,6 +121,20 @@ fun CustomerLocationSearchSheet(
     }
     var pinLat by remember(mapPinMode, activeTarget) { mutableDoubleStateOf(defaultCenterLat) }
     var pinLng by remember(mapPinMode, activeTarget) { mutableDoubleStateOf(defaultCenterLng) }
+
+    LaunchedEffect(searchQuery, lowNetworkMode, defaultCenterLat, defaultCenterLng) {
+        val q = searchQuery.trim()
+        if (lowNetworkMode || q.length < 3) {
+            onlinePlaces = emptyList()
+            return@LaunchedEffect
+        }
+        delay(450L)
+        onlinePlaces = NominatimGeocoder.searchPlaces(
+            query = q,
+            biasLat = defaultCenterLat,
+            biasLng = defaultCenterLng
+        )
+    }
 
     var accessState by remember { mutableStateOf(LocationCoordinator.resolveAccessState(context)) }
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -496,6 +515,28 @@ fun CustomerLocationSearchSheet(
                                 }
                             }
                         }
+                    }
+                }
+
+                if (onlinePlaces.isNotEmpty() && searchQuery.trim().length >= 3) {
+                    item {
+                        Text(
+                            text = "Online Map Results (${onlinePlaces.size})",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    items(onlinePlaces, key = { "nom_${it.lat}_${it.lng}_${it.primaryLabel}" }) { place ->
+                        LocationResultRow(
+                            icon = Icons.Filled.LocationOn,
+                            title = place.primaryLabel,
+                            subtitle = place.displayName,
+                            onClick = {
+                                onSelectCoordinates(activeTarget, place.primaryLabel, place.lat, place.lng, place.district)
+                                onClose()
+                            }
+                        )
                     }
                 }
 

@@ -35,8 +35,11 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -146,6 +149,19 @@ fun RiderRegistrationAndVerificationGate(
     var fitnessPhotoUri by remember(existingProfile?.fitnessPhotoUri) { mutableStateOf(existingProfile?.fitnessPhotoUri ?: "") }
     var pucPhotoUri by remember(existingProfile?.pucPhotoUri) { mutableStateOf(existingProfile?.pucPhotoUri ?: "") }
 
+    var emergencyContactName by remember(existingProfile?.emergencyContactName) { mutableStateOf(existingProfile?.emergencyContactName ?: "") }
+    var emergencyContactPhone by remember(existingProfile?.emergencyContactPhone) { mutableStateOf(existingProfile?.emergencyContactPhone ?: "") }
+    var policeVerification by remember(existingProfile?.policeVerificationNumber) { mutableStateOf(existingProfile?.policeVerificationNumber ?: "") }
+    var alternateIdType by remember(existingProfile?.alternateIdType) { mutableStateOf(existingProfile?.alternateIdType?.ifBlank { "Aadhaar Masked" } ?: "Aadhaar Masked") }
+    var alternateIdLast4 by remember(existingProfile?.alternateIdLast4) { mutableStateOf(existingProfile?.alternateIdLast4 ?: "") }
+    var operatingState by remember(existingProfile?.operatingState) { mutableStateOf(existingProfile?.operatingState?.ifBlank { "WB" } ?: "WB") }
+    var welfarePolicyNo by remember(existingProfile?.welfareInsurancePolicyNo) { mutableStateOf(existingProfile?.welfareInsurancePolicyNo ?: "") }
+    var trainingCompleted by remember(existingProfile?.driverTrainingCompleted) { mutableStateOf(existingProfile?.driverTrainingCompleted ?: false) }
+    var complianceAccepted by remember(existingProfile?.complianceTermsAccepted) { mutableStateOf(existingProfile?.complianceTermsAccepted ?: false) }
+
+    // 0 = Step 1 (Personal & SOS), 1 = Step 2 (Identity & DL), 2 = Step 3 (Vehicle & Permits), 3 = Step 4 (Payout & Terms), 4 = Show All
+    var kycStep by remember { mutableIntStateOf(0) }
+
     var pendingPhotoTarget by remember { mutableStateOf("general") }
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -166,6 +182,9 @@ fun RiderRegistrationAndVerificationGate(
 
     val requiredDocs = remember(vehicleCategory) {
         RequiredDocumentsCatalog.requiredFor(vehicleCategory)
+    }
+    val statePolicy = remember(operatingState) {
+        com.example.domain.StateComplianceCatalog.policyFor(operatingState)
     }
 
     Column(
@@ -288,156 +307,286 @@ fun RiderRegistrationAndVerificationGate(
                     .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Register Vehicle & KYC Documents", style = MaterialTheme.typography.titleMedium)
-                    OutlinedTextField(value = legalName, onValueChange = { legalName = it }, label = { Text("Full Legal Name *") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Mobile Number *") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Home / Stand Address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = district, onValueChange = { district = it }, label = { Text("District *") }, modifier = Modifier.weight(1f), singleLine = true)
-                        OutlinedTextField(value = block, onValueChange = { block = it }, label = { Text("Block / Town") }, modifier = Modifier.weight(1f), singleLine = true)
-                    }
+                    Text("Partner Onboarding & KYC Compliance", style = MaterialTheme.typography.titleMedium)
 
-                    Text("Vehicle Category", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("toto", "auto", "bike", "cab").forEach { cat ->
-                            FilterChip(
-                                selected = vehicleCategory == cat,
-                                onClick = { vehicleCategory = cat },
-                                label = { Text(cat.uppercase()) }
-                            )
-                        }
-                    }
-
-                    OutlinedTextField(value = vehicleModel, onValueChange = { vehicleModel = it }, label = { Text("Vehicle Model (e.g. Bajaj RE / Mayuri Toto)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    OutlinedTextField(value = vehicleReg, onValueChange = { vehicleReg = it }, label = { Text("Vehicle Registration Number *") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-
-                    Text(
-                        text = "Required for ${vehicleCategory.uppercase()}: ${requiredDocs.joinToString { it.displayLabel }}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = GolocalPrimaryBlue
-                    )
-
-                    KycDocumentInputRow(
-                        label = "Driving Licence No. *",
-                        docNum = licence,
-                        onDocNumChange = { licence = it },
-                        expiryIso = dlExpiryInput,
-                        onExpiryChange = { dlExpiryInput = it },
-                        hasPhoto = dlPhotoUri.isNotBlank() || docUri.isNotBlank(),
-                        onPickPhoto = {
-                            pendingPhotoTarget = "dl"
-                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        }
-                    )
-                    KycDocumentInputRow(
-                        label = "Vehicle RC Number",
-                        docNum = rcNumber,
-                        onDocNumChange = { rcNumber = it },
-                        expiryIso = rcExpiryInput,
-                        onExpiryChange = { rcExpiryInput = it },
-                        hasPhoto = rcPhotoUri.isNotBlank(),
-                        onPickPhoto = {
-                            pendingPhotoTarget = "rc"
-                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        }
-                    )
-                    KycDocumentInputRow(
-                        label = "Insurance Policy No.",
-                        docNum = insurance,
-                        onDocNumChange = { insurance = it },
-                        expiryIso = insuranceExpiryInput,
-                        onExpiryChange = { insuranceExpiryInput = it },
-                        hasPhoto = insurancePhotoUri.isNotBlank(),
-                        onPickPhoto = {
-                            pendingPhotoTarget = "insurance"
-                            photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        }
-                    )
-                    if (KycDocType.FITNESS in requiredDocs) {
-                        KycDocumentInputRow(
-                            label = "Fitness Certificate No.",
-                            docNum = fitness,
-                            onDocNumChange = { fitness = it },
-                            expiryIso = fitnessExpiryInput,
-                            onExpiryChange = { fitnessExpiryInput = it },
-                            hasPhoto = fitnessPhotoUri.isNotBlank(),
-                            onPickPhoto = {
-                                pendingPhotoTarget = "fitness"
-                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            }
-                        )
-                    }
-                    if (KycDocType.PERMIT in requiredDocs) {
-                        KycDocumentInputRow(
-                            label = "Commercial / Route Permit",
-                            docNum = permit,
-                            onDocNumChange = { permit = it },
-                            expiryIso = permitExpiryInput,
-                            onExpiryChange = { permitExpiryInput = it },
-                            hasPhoto = permitPhotoUri.isNotBlank(),
-                            onPickPhoto = {
-                                pendingPhotoTarget = "permit"
-                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            }
-                        )
-                    }
-                    if (KycDocType.PUC in requiredDocs) {
-                        KycDocumentInputRow(
-                            label = "PUC Certificate No.",
-                            docNum = puc,
-                            onDocNumChange = { puc = it },
-                            expiryIso = pucExpiryInput,
-                            onExpiryChange = { pucExpiryInput = it },
-                            hasPhoto = pucPhotoUri.isNotBlank(),
-                            onPickPhoto = {
-                                pendingPhotoTarget = "puc"
-                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            }
-                        )
-                    }
-
-                    OutlinedTextField(value = upi, onValueChange = { upi = it }, label = { Text("Settlement UPI ID or Bank Ref") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-
-                    Button(
-                        onClick = {
-                            driverViewModel.registerDriver(
-                                legalName = legalName,
-                                phone = phone,
-                                address = address,
-                                district = district,
-                                block = block,
-                                vehicleCategory = vehicleCategory,
-                                vehicleModel = vehicleModel,
-                                vehicleRegNumber = vehicleReg,
-                                drivingLicenceNumber = licence,
-                                rcNumber = rcNumber,
-                                insuranceNumber = insurance,
-                                permitInfo = permit,
-                                settlementUpi = upi,
-                                documentPhotoUri = docUri.ifBlank { dlPhotoUri.ifBlank { rcPhotoUri } },
-                                pucNumber = puc,
-                                fitnessCertificateNumber = fitness,
-                                dlExpiryEpochDay = parseIsoDateToEpochDay(dlExpiryInput),
-                                rcExpiryEpochDay = parseIsoDateToEpochDay(rcExpiryInput),
-                                insuranceExpiryEpochDay = parseIsoDateToEpochDay(insuranceExpiryInput),
-                                permitExpiryEpochDay = parseIsoDateToEpochDay(permitExpiryInput),
-                                fitnessExpiryEpochDay = parseIsoDateToEpochDay(fitnessExpiryInput),
-                                pucExpiryEpochDay = parseIsoDateToEpochDay(pucExpiryInput),
-                                dlPhotoUri = dlPhotoUri,
-                                rcPhotoUri = rcPhotoUri,
-                                insurancePhotoUri = insurancePhotoUri,
-                                permitPhotoUri = permitPhotoUri,
-                                fitnessPhotoUri = fitnessPhotoUri,
-                                pucPhotoUri = pucPhotoUri
-                            )
-                        },
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("rider_submit_kyc_button"),
-                        shape = RoundedCornerShape(14.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("Submit Rider Verification", fontWeight = FontWeight.Bold)
+                        listOf(
+                            0 to "1. Personal",
+                            1 to "2. ID & DL",
+                            2 to "3. Vehicle",
+                            3 to "4. Terms",
+                            4 to "All"
+                        ).forEach { (stepIdx, label) ->
+                            FilterChip(
+                                selected = kycStep == stepIdx,
+                                onClick = { kycStep = stepIdx },
+                                label = { Text(label) },
+                                modifier = Modifier.testTag("kyc_step_chip_$stepIdx")
+                            )
+                        }
+                    }
+
+                    if (kycStep == 0 || kycStep == 4) {
+                        Text("Step 1: Personal Details & Emergency Contact", style = MaterialTheme.typography.labelLarge, color = GolocalPrimaryBlue)
+                        OutlinedTextField(value = legalName, onValueChange = { legalName = it }, label = { Text("Full Legal Name *") }, modifier = Modifier.fillMaxWidth().testTag("kyc_legal_name_input"), singleLine = true)
+                        OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Mobile Number *") }, modifier = Modifier.fillMaxWidth().testTag("kyc_phone_input"), singleLine = true)
+                        OutlinedTextField(value = address, onValueChange = { address = it }, label = { Text("Home / Stand Address") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(value = district, onValueChange = { district = it }, label = { Text("District *") }, modifier = Modifier.weight(1f), singleLine = true)
+                            OutlinedTextField(value = block, onValueChange = { block = it }, label = { Text("Block / Town") }, modifier = Modifier.weight(1f), singleLine = true)
+                        }
+                        Text("Operating State Policy", style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            com.example.domain.OperatingStateCode.entries.forEach { st ->
+                                FilterChip(
+                                    selected = operatingState.equals(st.code, ignoreCase = true),
+                                    onClick = { operatingState = st.code },
+                                    label = { Text("${st.displayName} (${st.code})") }
+                                )
+                            }
+                        }
+                        OutlinedTextField(value = emergencyContactName, onValueChange = { emergencyContactName = it }, label = { Text("Rider Emergency Contact Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(value = emergencyContactPhone, onValueChange = { emergencyContactPhone = it }, label = { Text("Rider Emergency Contact Phone") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    }
+
+                    if (kycStep == 1 || kycStep == 4) {
+                        Text("Step 2: Identity, Driving Licence & Police Verification", style = MaterialTheme.typography.labelLarge, color = GolocalPrimaryBlue)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Aadhaar Masked", "Voter ID", "PAN").forEach { idOpt ->
+                                FilterChip(
+                                    selected = alternateIdType == idOpt,
+                                    onClick = { alternateIdType = idOpt },
+                                    label = { Text(idOpt) }
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = alternateIdLast4,
+                            onValueChange = { if (it.length <= 4) alternateIdLast4 = it.uppercase() },
+                            label = { Text("$alternateIdType Last 4 Characters (No full Aadhaar stored)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = policeVerification,
+                            onValueChange = { policeVerification = it },
+                            label = { Text("Police Verification / PCC Certificate No.") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        KycDocumentInputRow(
+                            label = "Driving Licence No. *",
+                            docNum = licence,
+                            onDocNumChange = { licence = it },
+                            expiryIso = dlExpiryInput,
+                            onExpiryChange = { dlExpiryInput = it },
+                            hasPhoto = dlPhotoUri.isNotBlank() || docUri.isNotBlank(),
+                            onPickPhoto = {
+                                pendingPhotoTarget = "dl"
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                    }
+
+                    if (kycStep == 2 || kycStep == 4) {
+                        Text("Step 3: Vehicle Details & Statutory Permits", style = MaterialTheme.typography.labelLarge, color = GolocalPrimaryBlue)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("toto", "auto", "bike", "cab").forEach { cat ->
+                                FilterChip(
+                                    selected = vehicleCategory == cat,
+                                    onClick = { vehicleCategory = cat },
+                                    label = { Text(cat.uppercase()) }
+                                )
+                            }
+                        }
+                        if (vehicleCategory == "bike") {
+                            Text(
+                                text = statePolicy.bikeTaxiStatusNote,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = GolocalWarning
+                            )
+                        }
+                        OutlinedTextField(value = vehicleModel, onValueChange = { vehicleModel = it }, label = { Text("Vehicle Model (e.g. Bajaj RE / Mayuri Toto)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(value = vehicleReg, onValueChange = { vehicleReg = it }, label = { Text("Commercial Vehicle Reg No. *") }, modifier = Modifier.fillMaxWidth().testTag("kyc_vehicle_reg_input"), singleLine = true)
+                        Text(
+                            text = "Required for ${vehicleCategory.uppercase()}: ${requiredDocs.joinToString { it.displayLabel }}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = GolocalPrimaryBlue
+                        )
+                        KycDocumentInputRow(
+                            label = "Vehicle RC Number",
+                            docNum = rcNumber,
+                            onDocNumChange = { rcNumber = it },
+                            expiryIso = rcExpiryInput,
+                            onExpiryChange = { rcExpiryInput = it },
+                            hasPhoto = rcPhotoUri.isNotBlank(),
+                            onPickPhoto = {
+                                pendingPhotoTarget = "rc"
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                        KycDocumentInputRow(
+                            label = "Commercial Insurance No.",
+                            docNum = insurance,
+                            onDocNumChange = { insurance = it },
+                            expiryIso = insuranceExpiryInput,
+                            onExpiryChange = { insuranceExpiryInput = it },
+                            hasPhoto = insurancePhotoUri.isNotBlank(),
+                            onPickPhoto = {
+                                pendingPhotoTarget = "insurance"
+                                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                        if (KycDocType.FITNESS in requiredDocs) {
+                            KycDocumentInputRow(
+                                label = "Fitness Certificate No.",
+                                docNum = fitness,
+                                onDocNumChange = { fitness = it },
+                                expiryIso = fitnessExpiryInput,
+                                onExpiryChange = { fitnessExpiryInput = it },
+                                hasPhoto = fitnessPhotoUri.isNotBlank(),
+                                onPickPhoto = {
+                                    pendingPhotoTarget = "fitness"
+                                    photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }
+                            )
+                        }
+                        if (KycDocType.PERMIT in requiredDocs) {
+                            KycDocumentInputRow(
+                                label = "Commercial / Route Permit",
+                                docNum = permit,
+                                onDocNumChange = { permit = it },
+                                expiryIso = permitExpiryInput,
+                                onExpiryChange = { permitExpiryInput = it },
+                                hasPhoto = permitPhotoUri.isNotBlank(),
+                                onPickPhoto = {
+                                    pendingPhotoTarget = "permit"
+                                    photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }
+                            )
+                        }
+                        if (KycDocType.PUC in requiredDocs) {
+                            KycDocumentInputRow(
+                                label = "PUC Certificate No.",
+                                docNum = puc,
+                                onDocNumChange = { puc = it },
+                                expiryIso = pucExpiryInput,
+                                onExpiryChange = { pucExpiryInput = it },
+                                hasPhoto = pucPhotoUri.isNotBlank(),
+                                onPickPhoto = {
+                                    pendingPhotoTarget = "puc"
+                                    photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }
+                            )
+                        }
+                    }
+
+                    if (kycStep == 3 || kycStep == 4) {
+                        Text("Step 4: Settlement, Welfare Insurance & Declarations", style = MaterialTheme.typography.labelLarge, color = GolocalPrimaryBlue)
+                        OutlinedTextField(value = upi, onValueChange = { upi = it }, label = { Text("Settlement UPI ID or Bank Ref") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(
+                            value = welfarePolicyNo,
+                            onValueChange = { welfarePolicyNo = it },
+                            label = { Text("Health / Accident Welfare Policy No. (MVA Guidelines 2025)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = trainingCompleted, onCheckedChange = { trainingCompleted = it })
+                            Text(
+                                text = "I completed road-safety, SOS & passenger etiquette induction.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = complianceAccepted, onCheckedChange = { complianceAccepted = it })
+                            Text(
+                                text = "I confirm all vehicle documents are commercial-compliant & consent to GoLocal Admin verification under DPDP Act 2023.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (kycStep in 1..3) {
+                            OutlinedButton(
+                                onClick = { kycStep -= 1 },
+                                modifier = Modifier.weight(1f).height(52.dp)
+                            ) {
+                                Text("Previous")
+                            }
+                        }
+                        if (kycStep in 0..2) {
+                            Button(
+                                onClick = { kycStep += 1 },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp)
+                                    .testTag("kyc_next_step_button"),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("Continue (Step ${kycStep + 2}/4)", fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    driverViewModel.registerDriver(
+                                        legalName = legalName,
+                                        phone = phone,
+                                        address = address,
+                                        district = district,
+                                        block = block,
+                                        vehicleCategory = vehicleCategory,
+                                        vehicleModel = vehicleModel,
+                                        vehicleRegNumber = vehicleReg,
+                                        drivingLicenceNumber = licence,
+                                        rcNumber = rcNumber,
+                                        insuranceNumber = insurance,
+                                        permitInfo = permit,
+                                        settlementUpi = upi,
+                                        documentPhotoUri = docUri.ifBlank { dlPhotoUri.ifBlank { rcPhotoUri } },
+                                        pucNumber = puc,
+                                        fitnessCertificateNumber = fitness,
+                                        dlExpiryEpochDay = parseIsoDateToEpochDay(dlExpiryInput),
+                                        rcExpiryEpochDay = parseIsoDateToEpochDay(rcExpiryInput),
+                                        insuranceExpiryEpochDay = parseIsoDateToEpochDay(insuranceExpiryInput),
+                                        permitExpiryEpochDay = parseIsoDateToEpochDay(permitExpiryInput),
+                                        fitnessExpiryEpochDay = parseIsoDateToEpochDay(fitnessExpiryInput),
+                                        pucExpiryEpochDay = parseIsoDateToEpochDay(pucExpiryInput),
+                                        dlPhotoUri = dlPhotoUri,
+                                        rcPhotoUri = rcPhotoUri,
+                                        insurancePhotoUri = insurancePhotoUri,
+                                        permitPhotoUri = permitPhotoUri,
+                                        fitnessPhotoUri = fitnessPhotoUri,
+                                        pucPhotoUri = pucPhotoUri,
+                                        emergencyContactName = emergencyContactName,
+                                        emergencyContactPhone = emergencyContactPhone,
+                                        policeVerificationNumber = policeVerification,
+                                        alternateIdType = alternateIdType,
+                                        alternateIdLast4 = alternateIdLast4,
+                                        operatingState = operatingState,
+                                        welfareInsurancePolicyNo = welfarePolicyNo,
+                                        driverTrainingCompleted = trainingCompleted,
+                                        complianceTermsAccepted = complianceAccepted
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp)
+                                    .testTag("rider_submit_kyc_button"),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text("Submit Rider Verification", fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }

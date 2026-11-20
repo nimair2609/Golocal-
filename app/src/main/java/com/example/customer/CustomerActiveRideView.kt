@@ -106,6 +106,7 @@ import com.example.ui.theme.GolocalSuccess
 import com.example.ui.theme.GolocalWarning
 import com.example.ui.theme.GolocalWarningContainer
 import com.example.ui.theme.JetBrainsMono
+import com.example.ui.theme.rememberPrefersReducedMotion
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -914,16 +915,22 @@ private fun IncomingOfferCard(
 
 @Composable
 private fun RadarPulseOverlay(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "radar")
-    val pulse by transition.animateFloat(
-        initialValue = 0.25f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "radar_pulse"
-    )
+    val reducedMotion = rememberPrefersReducedMotion()
+    val pulse = if (reducedMotion) {
+        0.72f
+    } else {
+        val transition = rememberInfiniteTransition(label = "radar")
+        val animated by transition.animateFloat(
+            initialValue = 0.25f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "radar_pulse"
+        )
+        animated
+    }
     Box(modifier = modifier.size(180.dp), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val maxR = size.minDimension / 2f

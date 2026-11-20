@@ -16,8 +16,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.DriverProfile
+import com.example.domain.BoraiLaunchConfig
 import com.example.domain.ExpiryStatus
 import com.example.domain.RequiredDocumentsCatalog
+import com.example.map.GolocalMapContainer
 import com.example.ui.components.BookingsOverviewChart
 import com.example.ui.components.GolocalEmptyState
 import com.example.ui.components.GolocalMetricCard
@@ -33,6 +35,27 @@ fun AdminDashboardModule(adminViewModel: AdminViewModel) {
     val metrics by adminViewModel.metrics.collectAsStateWithLifecycle()
     val bookings by adminViewModel.bookings.collectAsStateWithLifecycle()
     val auditLogs by adminViewModel.auditLogs.collectAsStateWithLifecycle()
+    val onlineDrivers by adminViewModel.onlineDriverDirectory.collectAsStateWithLifecycle()
+    val drivers by adminViewModel.drivers.collectAsStateWithLifecycle()
+    val platformSettings by adminViewModel.platformSettings.collectAsStateWithLifecycle()
+
+    val todayEpochDay = remember { TimeUnit.MILLISECONDS.toDays(System.currentTimeMillis()) }
+    val activeFocusBooking = remember(bookings) {
+        bookings.firstOrNull { it.status in setOf("in_progress", "arrived", "arriving", "assigned", "searching") }
+    }
+    val expiredDriversCount = remember(drivers, todayEpochDay) {
+        drivers.count { d ->
+            RequiredDocumentsCatalog.assessDriverCompliance(d, todayEpochDay).any { it.status == ExpiryStatus.EXPIRED }
+        }
+    }
+    val expiringSoonDriversCount = remember(drivers, todayEpochDay) {
+        drivers.count { d ->
+            RequiredDocumentsCatalog.assessDriverCompliance(d, todayEpochDay).any { it.status == ExpiryStatus.EXPIRING_SOON }
+        }
+    }
+    val missingPoliceVerificationCount = remember(drivers) {
+        drivers.count { it.verificationStatus == "verified" && it.policeVerificationNumber.isBlank() }
+    }
 
     Column(
         modifier = Modifier
@@ -95,6 +118,64 @@ fun AdminDashboardModule(adminViewModel: AdminViewModel) {
         }
 
         BookingsOverviewChart(bookings = bookings)
+
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
+                .testTag("admin_live_ops_map_card")
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Live Fleet & Active Dispatch Map", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "${onlineDrivers.size} online verified riders • State: ${platformSettings.operatingStateCode.uppercase()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    GolocalStatusBadge(
+                        label = if (onlineDrivers.isNotEmpty()) "${onlineDrivers.size} LIVE" else "STANDBY",
+                        tone = if (onlineDrivers.isNotEmpty()) "success" else "info"
+                    )
+                }
+                GolocalMapContainer(
+                    pickupLat = activeFocusBooking?.pickupLat?.takeIf { it != 0.0 } ?: BoraiLaunchConfig.DEFAULT_LAT,
+                    pickupLng = activeFocusBooking?.pickupLng?.takeIf { it != 0.0 } ?: BoraiLaunchConfig.DEFAULT_LNG,
+                    pickupLabel = activeFocusBooking?.pickupLabel ?: BoraiLaunchConfig.DEFAULT_DISPLAY_LABEL,
+                    destLat = activeFocusBooking?.destinationLat?.takeIf { it != 0.0 } ?: BoraiLaunchConfig.DEFAULT_LAT,
+                    destLng = activeFocusBooking?.destinationLng?.takeIf { it != 0.0 } ?: BoraiLaunchConfig.DEFAULT_LNG,
+                    destLabel = activeFocusBooking?.destinationLabel ?: "",
+                    onlineDrivers = onlineDrivers,
+                    liveTripLocation = null,
+                    lowNetworkMode = false,
+                    mapHeight = 200.dp,
+                    cornerRadius = 14.dp,
+                    showTopRouteChip = activeFocusBooking != null
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GolocalStatusBadge(
+                        label = "$expiredDriversCount Expired Docs",
+                        tone = if (expiredDriversCount > 0) "error" else "success"
+                    )
+                    GolocalStatusBadge(
+                        label = "$expiringSoonDriversCount Expiring Soon",
+                        tone = if (expiringSoonDriversCount > 0) "warning" else "success"
+                    )
+                    GolocalStatusBadge(
+                        label = "$missingPoliceVerificationCount No Police ID",
+                        tone = if (missingPoliceVerificationCount > 0) "warning" else "success"
+                    )
+                }
+            }
+        }
 
         Text("Recent Platform Activities", style = MaterialTheme.typography.titleMedium)
         if (auditLogs.isEmpty() && bookings.isEmpty()) {

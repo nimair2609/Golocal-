@@ -204,3 +204,122 @@ object AbuseDetectionEngine {
         return advisories.sortedByDescending { it.cancelledCount }
     }
 }
+
+enum class OperatingStateCode(val code: String, val displayName: String) {
+    WEST_BENGAL("WB", "West Bengal"),
+    KARNATAKA("KA", "Karnataka");
+
+    companion object {
+        fun fromCode(raw: String): OperatingStateCode =
+            entries.firstOrNull { it.code.equals(raw.trim(), ignoreCase = true) } ?: WEST_BENGAL
+    }
+}
+
+data class StateCompliancePolicy(
+    val state: OperatingStateCode,
+    val commercialPlateMandatoryForCabsAndAutos: Boolean,
+    val bikeTaxiRequiresExplicitStatePermit: Boolean,
+    val bikeTaxiStatusNote: String,
+    val aggregatorLicenceAuthorityName: String,
+    val minDriverHealthAccidentCoverInr: Long,
+    val grievanceAckDays: Int,
+    val grievanceResolutionDays: Int,
+    val legalConfirmationNotice: String
+)
+
+object StateComplianceCatalog {
+    fun policyFor(stateCode: String): StateCompliancePolicy =
+        when (OperatingStateCode.fromCode(stateCode)) {
+            OperatingStateCode.WEST_BENGAL -> StateCompliancePolicy(
+                state = OperatingStateCode.WEST_BENGAL,
+                commercialPlateMandatoryForCabsAndAutos = true,
+                bikeTaxiRequiresExplicitStatePermit = true,
+                bikeTaxiStatusNote = "Two-wheeler commercial hire & regional Toto/E-rickshaw municipal permits must be verified against current West Bengal Transport Department notifications.",
+                aggregatorLicenceAuthorityName = "West Bengal Transport Department / STA",
+                minDriverHealthAccidentCoverInr = 500_000L,
+                grievanceAckDays = 7,
+                grievanceResolutionDays = 30,
+                legalConfirmationNotice = "Requires West Bengal Transport Department & legal counsel confirmation of aggregator licence, local Toto fare caps, and two-wheeler commercial rules prior to public launch."
+            )
+            OperatingStateCode.KARNATAKA -> StateCompliancePolicy(
+                state = OperatingStateCode.KARNATAKA,
+                commercialPlateMandatoryForCabsAndAutos = true,
+                bikeTaxiRequiresExplicitStatePermit = true,
+                bikeTaxiStatusNote = "Karnataka bike-taxi / non-transport two-wheeler passenger operations are strictly restricted unless specifically notified/licensed under state law.",
+                aggregatorLicenceAuthorityName = "Karnataka Transport Department (KOTAG / On-Demand Aggregator Rules)",
+                minDriverHealthAccidentCoverInr = 500_000L,
+                grievanceAckDays = 7,
+                grievanceResolutionDays = 30,
+                legalConfirmationNotice = "Requires Karnataka Transport Department KOTAG aggregator licence & legal confirmation of auto/cab fare tariff notifications and bike-taxi permissibility prior to commercial operation."
+            )
+        }
+}
+
+data class RegulatoryReadinessItem(
+    val code: String,
+    val title: String,
+    val detail: String,
+    val implementedInCode: Boolean,
+    val requiresExternalSignOff: Boolean
+)
+
+object IndianRegulatoryChecklist {
+    fun evaluate(
+        settings: com.example.data.model.PlatformSettings,
+        verifiedDriversCount: Int
+    ): List<RegulatoryReadinessItem> {
+        val statePolicy = StateComplianceCatalog.policyFor(settings.operatingStateCode)
+        val hasLicence = settings.aggregatorLicenceNumber.isNotBlank()
+        val hasGrievance = settings.grievanceOfficerName.isNotBlank() && settings.grievanceOfficerEmail.isNotBlank()
+        return listOf(
+            RegulatoryReadinessItem(
+                code = "MVA_AGGREGATOR_2025",
+                title = "Aggregator Licence (${statePolicy.state.displayName})",
+                detail = if (hasLicence) {
+                    "Configured licence ref: ${settings.aggregatorLicenceNumber}. Authority: ${statePolicy.aggregatorLicenceAuthorityName}. Valid commercial licence document must be signed off by transport counsel."
+                } else {
+                    "Aggregator licence reference not yet entered. State Transport Authority (${statePolicy.aggregatorLicenceAuthorityName}) registration is required before commercial launch."
+                },
+                implementedInCode = hasLicence,
+                requiresExternalSignOff = true
+            ),
+            RegulatoryReadinessItem(
+                code = "KYC_DOCS_EXPIRY",
+                title = "Driver KYC, Expiry & Police Verification",
+                detail = "App enforces admin approval before go-online and checks DL, RC, Insurance, Fitness, Permit, PUC, Police Verification, and emergency contact ($verifiedDriversCount verified partners).",
+                implementedInCode = true,
+                requiresExternalSignOff = true
+            ),
+            RegulatoryReadinessItem(
+                code = "BIKE_TAXI_PLATE_POLICY",
+                title = "Vehicle Class & Two-Wheeler Restrictions",
+                detail = if (settings.bikeTaxiCommercialApproved) {
+                    "Bike-taxi dispatch enabled by Admin in ${statePolicy.state.displayName}. Requires documented state transport legal authorization."
+                } else {
+                    "Conservative policy: ${statePolicy.bikeTaxiStatusNote}"
+                },
+                implementedInCode = true,
+                requiresExternalSignOff = true
+            ),
+            RegulatoryReadinessItem(
+                code = "DPDP_GRIEVANCE",
+                title = "DPDP Act 2023 & Consumer Grievance Officer",
+                detail = if (hasGrievance) {
+                    "Grievance Officer: ${settings.grievanceOfficerName} (${settings.grievanceOfficerEmail}) • Target SLA ${statePolicy.grievanceAckDays}d ack / ${statePolicy.grievanceResolutionDays}d resolution. Legal review of DPDP notices required."
+                } else {
+                    "Set Grievance Officer name & email below for IT Rules / DPDP Act 2023 compliance."
+                },
+                implementedInCode = hasGrievance,
+                requiresExternalSignOff = true
+            ),
+            RegulatoryReadinessItem(
+                code = "TAX_GST_194O",
+                title = "Fare Band, Commission, GST & Invoice Breakdown",
+                detail = "Receipts display gross fare, commission (${settings.defaultCommissionPct}%), GST component, and net partner payout. Chartered accountant sign-off required for Sec. 9(5) GST & Sec. 194-O TDS remittances.",
+                implementedInCode = true,
+                requiresExternalSignOff = true
+            )
+        )
+    }
+}
+
