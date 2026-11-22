@@ -148,7 +148,7 @@ object FareCalculator {
 
     fun isValidTransition(fromStatus: String, toStatus: String): Boolean {
         return when (fromStatus) {
-            "searching" -> toStatus in setOf("assigned", "cancelled")
+            "searching" -> toStatus in setOf("assigned", "cancelled", "expired")
             "assigned" -> toStatus in setOf("arriving", "cancelled")
             "arriving" -> toStatus in setOf("arrived", "cancelled")
             "arrived" -> toStatus in setOf("in_progress", "cancelled")

@@ -225,37 +225,42 @@ fun AdminAuthenticatedShell(
         val adminNotifications by sessionViewModel.notificationsState.collectAsStateWithLifecycle()
         val unreadAdminNotifCount = remember(adminNotifications) { adminNotifications.count { !it.read } }
         val updateController = rememberAppUpdateController(platformSettings = platformSettings)
-        val defaultModule = if (isAdmin) "dashboard" else "test_rides"
+        val defaultModule = if (isAdmin || !com.example.BuildConfig.ENABLE_TEST_SANDBOX) "dashboard" else "test_rides"
         var selectedModule by remember(isAdmin) { mutableStateOf(defaultModule) }
         var showAdminNotificationsDialog by remember { mutableStateOf(false) }
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
         LaunchedEffect(testBookings.size, platformSettings.testRideModeEnabled, platformSettings.testAutoAssignEnabled) {
-            if (platformSettings.testRideModeEnabled && platformSettings.testAutoAssignEnabled) {
+            if (com.example.BuildConfig.ENABLE_TEST_SANDBOX &&
+                platformSettings.testRideModeEnabled &&
+                platformSettings.testAutoAssignEnabled
+            ) {
                 adminViewModel.tryAutoAssignPendingTestRides(actorRoleLabel)
             }
         }
 
         val modules = remember(isAdmin) {
-            if (isAdmin) {
-                listOf(
-                    Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
-                    Triple("test_rides", "Test Rides", Icons.Filled.Science),
-                    Triple("customers", "Customers", Icons.Filled.People),
-                    Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi),
-                    Triple("bookings", "Bookings", Icons.Filled.DirectionsCar),
-                    Triple("buses", "Private Bus", Icons.Filled.DirectionsBus),
-                    Triple("services", "Services & Fares", Icons.Filled.Tune),
-                    Triple("payments", "Payments", Icons.Filled.AccountBalance),
-                    Triple("reports", "Reports", Icons.Filled.Analytics),
-                    Triple("settings", "Settings", Icons.Filled.Settings)
-                )
-            } else {
-                listOf(
-                    Triple("test_rides", "Test Rides", Icons.Filled.Science),
-                    Triple("dashboard", "Dashboard", Icons.Filled.Dashboard),
-                    Triple("bookings", "Bookings", Icons.Filled.DirectionsCar)
-                )
+            buildList {
+                if (isAdmin) {
+                    add(Triple("dashboard", "Dashboard", Icons.Filled.Dashboard))
+                    if (com.example.BuildConfig.ENABLE_TEST_SANDBOX) {
+                        add(Triple("test_rides", "Test Rides", Icons.Filled.Science))
+                    }
+                    add(Triple("customers", "Customers", Icons.Filled.People))
+                    add(Triple("riders", "Riders & KYC", Icons.Filled.LocalTaxi))
+                    add(Triple("bookings", "Bookings", Icons.Filled.DirectionsCar))
+                    add(Triple("buses", "Private Bus", Icons.Filled.DirectionsBus))
+                    add(Triple("services", "Services & Fares", Icons.Filled.Tune))
+                    add(Triple("payments", "Payments", Icons.Filled.AccountBalance))
+                    add(Triple("reports", "Reports", Icons.Filled.Analytics))
+                    add(Triple("settings", "Settings", Icons.Filled.Settings))
+                } else {
+                    if (com.example.BuildConfig.ENABLE_TEST_SANDBOX) {
+                        add(Triple("test_rides", "Test Rides", Icons.Filled.Science))
+                    }
+                    add(Triple("dashboard", "Dashboard", Icons.Filled.Dashboard))
+                    add(Triple("bookings", "Bookings", Icons.Filled.DirectionsCar))
+                }
             }
         }
 
@@ -566,11 +571,15 @@ private fun AdminModuleContent(
 ) {
     when (selectedModule) {
         "dashboard" -> AdminDashboardModule(adminViewModel)
-        "test_rides" -> AdminTestRideModule(
-            adminViewModel = adminViewModel,
-            isOwnerAdmin = isOwnerAdmin,
-            actorRoleLabel = actorRoleLabel
-        )
+        "test_rides" -> if (com.example.BuildConfig.ENABLE_TEST_SANDBOX) {
+            AdminTestRideModule(
+                adminViewModel = adminViewModel,
+                isOwnerAdmin = isOwnerAdmin,
+                actorRoleLabel = actorRoleLabel
+            )
+        } else {
+            AdminDashboardModule(adminViewModel)
+        }
         "customers" -> AdminCustomersModule(adminViewModel)
         "riders" -> AdminRidersModule(adminViewModel)
         "bookings" -> AdminBookingsModule(adminViewModel)

@@ -5,33 +5,33 @@
     "auth_roles": {
       "owners": {
         "$uid": {
-          ".read": "auth != null && (auth.uid === $uid || root.child('auth_roles/owners/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
-          ".write": "auth != null && auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'",
+          ".read": "auth != null && (auth.uid === $uid || root.child('auth_roles/owners/' + auth.uid).exists() || auth.token.admin === true)",
+          ".write": "auth != null && auth.token.ownerAdmin === true && auth.token.admin === true",
           ".validate": "newData.hasChildren(['uid', 'updatedAt']) && newData.child('uid').val() === $uid"
         }
       },
       "ops": {
         "$uid": {
-          ".read": "auth != null && (auth.uid === $uid || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
-          ".write": "auth != null && (root.child('auth_roles/owners/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
+          ".read": "auth != null && (auth.uid === $uid || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || auth.token.admin === true)",
+          ".write": "auth != null && (root.child('auth_roles/owners/' + auth.uid).exists() || auth.token.admin === true)",
           ".validate": "!newData.exists() || (newData.hasChildren(['uid', 'updatedAt']) && newData.child('uid').val() === $uid)"
         }
       }
     },
     "live_locations": {
       "drivers": {
-        ".read": "auth != null && (root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
+        ".read": "auth != null && (root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || auth.token.admin === true)",
         "$driverId": {
-          ".read": "auth != null && (auth.uid === $driverId || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
+          ".read": "auth != null && (auth.uid === $driverId || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || auth.token.admin === true)",
           ".write": "auth != null && auth.uid === $driverId",
           ".validate": "!newData.exists() || (newData.hasChildren(['driverId', 'lat', 'lng', 'trackingStatus', 'updatedAtEpochMs']) && newData.child('driverId').val() === $driverId && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && (newData.child('trackingStatus').val() === 'active' || newData.child('trackingStatus').val() === 'paused_gps_lost' || newData.child('trackingStatus').val() === 'stopped') && (!newData.child('activeBookingId').exists() || newData.child('activeBookingId').isString()) && (!newData.child('accuracyMeters').exists() || newData.child('accuracyMeters').isNumber()) && (!newData.child('speedMps').exists() || newData.child('speedMps').isNumber()) && (!newData.child('headingDeg').exists() || newData.child('headingDeg').isNumber()) && newData.child('updatedAtEpochMs').isNumber())"
         }
       },
       "trips": {
-        ".read": "auth != null && (root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
+        ".read": "auth != null && (root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || auth.token.admin === true)",
         "$bookingId": {
-          ".read": "auth != null && (data.child('customerId').val() === auth.uid || data.child('driverId').val() === auth.uid || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
-          ".write": "auth != null && ((!data.exists() && newData.child('driverId').val() === auth.uid) || (data.exists() && data.child('driverId').val() === auth.uid && (!newData.exists() || newData.child('driverId').val() === auth.uid)) || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || (auth.token.email_verified === true && auth.token.email === 'renukadas083@gmail.com'))",
+          ".read": "auth != null && (data.child('customerId').val() === auth.uid || data.child('driverId').val() === auth.uid || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || auth.token.admin === true)",
+          ".write": "auth != null && ((!data.exists() && newData.child('driverId').val() === auth.uid) || (data.exists() && data.child('driverId').val() === auth.uid && (!newData.exists() || newData.child('driverId').val() === auth.uid)) || root.child('auth_roles/owners/' + auth.uid).exists() || root.child('auth_roles/ops/' + auth.uid).exists() || auth.token.admin === true)",
           ".validate": "!newData.exists() || (newData.hasChildren(['bookingId', 'customerId', 'driverId', 'lat', 'lng', 'trackingStatus', 'updatedAtEpochMs']) && newData.child('bookingId').val() === $bookingId && newData.child('customerId').isString() && newData.child('driverId').isString() && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && (newData.child('trackingStatus').val() === 'active' || newData.child('trackingStatus').val() === 'paused_gps_lost' || newData.child('trackingStatus').val() === 'stopped') && (!newData.child('accuracyMeters').exists() || newData.child('accuracyMeters').isNumber()) && (!newData.child('speedMps').exists() || newData.child('speedMps').isNumber()) && (!newData.child('headingDeg').exists() || newData.child('headingDeg').isNumber()) && (!newData.child('tripStatus').exists() || newData.child('tripStatus').isString()) && (!newData.child('isTestRide').exists() || newData.child('isTestRide').isBoolean()) && newData.child('updatedAtEpochMs').isNumber())"
         }
       }

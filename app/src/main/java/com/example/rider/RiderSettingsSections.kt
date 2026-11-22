@@ -243,6 +243,7 @@ internal fun RiderPreferencesSubScreen(
     }
 
     SettingsSectionGroup(title = "Device Permissions") {
+        val supportsFullScreenIntentToggle = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
         SettingsNavigationRow(
             icon = Icons.Filled.GppGood,
             title = "Location Permission",
@@ -253,9 +254,24 @@ internal fun RiderPreferencesSubScreen(
             icon = Icons.Filled.Notifications,
             title = "OS Notification Permission",
             subtitle = if (hasNotif) "Allowed on device" else "Tap to allow notifications in Android settings",
-            showDivider = false,
+            showDivider = supportsFullScreenIntentToggle,
             onClick = { LocationCoordinator.openAppPermissionSettings(context) }
         )
+        if (supportsFullScreenIntentToggle) {
+            val canFullScreen = NotificationHelper.canUseFullScreenIntent(context)
+            SettingsNavigationRow(
+                icon = Icons.Filled.NotificationsActive,
+                title = "Full-Screen Lock-Screen Alerts",
+                subtitle = if (canFullScreen) {
+                    "Enabled for urgent incoming ride requests"
+                } else {
+                    "Tap to allow full-screen alerts when screen is locked"
+                },
+                showDivider = false,
+                testTag = "rider_fullscreen_intent_settings_row",
+                onClick = { NotificationHelper.openFullScreenIntentSettings(context) }
+            )
+        }
     }
 
     SettingsSectionGroup(title = "Language / ভাষা / भाषा") {

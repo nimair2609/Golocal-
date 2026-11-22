@@ -105,9 +105,14 @@ test("RTDB live_locations/trips: customer & assigned driver can read, only assig
   await assertSucceeds(driverDb.ref("live_locations/trips/booking_rtdb_1").remove());
 });
 
-test("RTDB auth_roles: only bootstrapped owner can provision owner/ops roles", async () => {
+test("RTDB auth_roles: only custom-claim owner admin can provision owner/ops roles", async () => {
   const ownerDb = testEnv
-    .authenticatedContext(OWNER_UID, { email: "renukadas083@gmail.com", email_verified: true })
+    .authenticatedContext(OWNER_UID, {
+      email: "owner@example.com",
+      email_verified: true,
+      admin: true,
+      ownerAdmin: true,
+    })
     .database();
   const otherDb = testEnv.authenticatedContext(OTHER_UID, { email: "attacker@example.com", email_verified: true }).database();
 

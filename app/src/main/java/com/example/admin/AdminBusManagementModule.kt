@@ -357,7 +357,7 @@ fun AdminBusManagementModule(adminViewModel: AdminViewModel) {
                 Button(
                     enabled = selectedOp != null && routeName.isNotBlank() && origin.isNotBlank() && dest.isNotBlank(),
                     onClick = {
-                        val op = selectedOp!!
+                        val op = selectedOp ?: return@Button
                         val draftRoute = BusRoute(
                             operatorId = op.id,
                             operatorName = op.operatorName,
@@ -411,7 +411,7 @@ fun AdminBusManagementModule(adminViewModel: AdminViewModel) {
                 Button(
                     enabled = selectedRoute != null,
                     onClick = {
-                        val rt = selectedRoute!!
+                        val rt = selectedRoute ?: return@Button
                         adminViewModel.createBusSchedule(
                             schedule = BusSchedule(
                                 busLabel = busLabel,

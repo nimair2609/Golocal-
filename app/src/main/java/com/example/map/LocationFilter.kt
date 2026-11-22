@@ -18,7 +18,8 @@ data class LocationSample(
 class GpsBroadcastThrottle(
     private val minIntervalMs: Long = 3_000L,
     private val minDistanceMeters: Double = 15.0,
-    private val maxAcceptedAccuracyMeters: Float = 100f
+    private val maxAcceptedAccuracyMeters: Float = 100f,
+    private val maxHeartbeatIntervalMs: Long = 20_000L
 ) {
     private var lastSample: LocationSample? = null
 
@@ -40,7 +41,7 @@ class GpsBroadcastThrottle(
         }
         val elapsed = candidate.timestampMs - prev.timestampMs
         val movedMeters = haversineMeters(prev.lat, prev.lng, candidate.lat, candidate.lng)
-        if (elapsed >= minIntervalMs && movedMeters >= minDistanceMeters) {
+        if ((elapsed >= minIntervalMs && movedMeters >= minDistanceMeters) || elapsed >= maxHeartbeatIntervalMs) {
             lastSample = candidate
             return true
         }

@@ -600,8 +600,7 @@ fun RiderEarningsHistoryTab(
         }
     }
 
-    if (passengerRateTarget != null) {
-        val booking = passengerRateTarget!!
+    passengerRateTarget?.let { booking ->
         var stars by remember { mutableIntStateOf(5) }
         var note by remember { mutableStateOf("") }
         AlertDialog(
@@ -632,8 +631,7 @@ fun RiderEarningsHistoryTab(
         )
     }
 
-    if (appealTarget != null) {
-        val booking = appealTarget!!
+    appealTarget?.let { booking ->
         var reason by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { appealTarget = null },

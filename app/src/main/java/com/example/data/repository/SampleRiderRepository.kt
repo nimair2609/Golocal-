@@ -543,6 +543,53 @@ class SampleRiderRepository(
         }
     }
 
+    suspend fun getSampleRiderOnce(uid: String): SampleRiderProfile? {
+        val cleanUid = uid.trim()
+        if (cleanUid.isBlank()) return null
+        val snap = runCatching { db.collection("sample_riders").document(cleanUid).get().await() }.getOrNull()
+            ?: return null
+        return if (snap.exists()) {
+            snap.toObject(SampleRiderProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+    }
+
+    suspend fun getSampleRideOnce(rideId: String): SampleRide? {
+        val cleanId = rideId.trim()
+        if (cleanId.isBlank()) return null
+        val snap = runCatching { db.collection("sample_rides").document(cleanId).get().await() }.getOrNull()
+            ?: return null
+        return if (snap.exists()) {
+            snap.toObject(SampleRide::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+    }
+
+    suspend fun acceptSampleRide(
+        ride: SampleRide,
+        rider: SampleRiderProfile
+    ): Result<Unit> {
+        val cleanId = ride.rideId.ifBlank { ride.id }
+        return when (val outcome = acceptSampleRideAtomically(
+            rideId = cleanId,
+            rider = rider,
+            currentLat = rider.currentLat,
+            currentLng = rider.currentLng
+        )) {
+            is SampleAcceptOutcome.Accepted -> Result.success(Unit)
+            SampleAcceptOutcome.AlreadyTaken -> Result.failure(IllegalStateException("This sample ride was already accepted by another rider."))
+            SampleAcceptOutcome.Expired -> Result.failure(IllegalStateException("This sample ride request has expired."))
+            is SampleAcceptOutcome.Failed -> Result.failure(IllegalStateException(outcome.message))
+        }
+    }
+
+    suspend fun rejectSampleRide(rideId: String): Result<Unit> = runCatching {
+        val uid = requireUid()
+        dismissSampleRide(uid, rideId).getOrThrow()
+    }
+
     suspend fun advanceSampleRideStatus(
         rideId: String,
         nextStatus: String,

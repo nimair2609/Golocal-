@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class DriverGpsHealth(
     val isServiceRunning: Boolean = false,
@@ -58,7 +60,8 @@ class RiderLocationForegroundService : Service() {
     private val throttle = GpsBroadcastThrottle(
         minIntervalMs = 4_000L,
         minDistanceMeters = 10.0,
-        maxAcceptedAccuracyMeters = 80f
+        maxAcceptedAccuracyMeters = 80f,
+        maxHeartbeatIntervalMs = 20_000L
     )
 
     private var activeDriverId: String = ""
@@ -70,6 +73,9 @@ class RiderLocationForegroundService : Service() {
     private var isOnline: Boolean = true
     private var lastLat: Double = 0.0
     private var lastLng: Double = 0.0
+    private var hasCalledStartForeground: Boolean = false
+    @Volatile
+    private var isStopping: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -89,10 +95,16 @@ class RiderLocationForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                if (!hasCalledStartForeground) {
+                    startForegroundCompat()
+                }
                 stopTrackingAndSelf()
                 return START_NOT_STICKY
             }
             ACTION_START_OR_UPDATE, null -> {
+                isStopping = false
+                // Always enter foreground before any early stop to prevent Android 8+ ForegroundServiceDidNotStartInTimeException
+                startForegroundCompat()
                 if (!LocationCoordinator.hasLocationPermission(applicationContext)) {
                     _gpsHealth.value = DriverGpsHealth(
                         isServiceRunning = false,
@@ -171,6 +183,7 @@ class RiderLocationForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notif)
         }
+        hasCalledStartForeground = true
     }
 
     private fun startLocationStream() {
@@ -294,25 +307,44 @@ class RiderLocationForegroundService : Service() {
     }
 
     private fun stopTrackingAndSelf() {
+        if (isStopping) return
+        isStopping = true
         val dId = activeDriverId
         val bId = activeBookingId
         val cId = activeCustomerId
         val lat = lastLat
         val lng = lastLng
+        val wasSample = isSampleMode
         tracker?.stopTracking("Rider stopped tracking")
-        if (!isSampleMode && dId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lat, lng)) {
-            serviceScope.launch {
-                rtdbRepo?.stopTripTracking(dId, bId.takeIf { it.isNotBlank() }, cId.takeIf { it.isNotBlank() }, lat, lng)
-            }
-        }
         if (_gpsHealth.value.gpsStatus != "permission_denied") {
             _gpsHealth.value = DriverGpsHealth(isServiceRunning = false, gpsStatus = "inactive")
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
+        val shouldFlushStop = !wasSample && dId.isNotBlank() && GpsBroadcastThrottle.isValidCoordinate(lat, lng)
+        if (!shouldFlushStop) {
+            finishForegroundStop()
+            return
+        }
+        serviceScope.launch {
+            withTimeoutOrNull(2_000L) {
+                rtdbRepo?.stopTripTracking(dId, bId.takeIf { it.isNotBlank() }, cId.takeIf { it.isNotBlank() }, lat, lng)
+            }
+            withContext(Dispatchers.Main) {
+                if (isStopping) {
+                    finishForegroundStop()
+                }
+            }
+        }
+    }
+
+    private fun finishForegroundStop() {
+        if (hasCalledStartForeground) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            hasCalledStartForeground = false
         }
         stopSelf()
     }

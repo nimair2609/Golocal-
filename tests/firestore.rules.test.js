@@ -9,7 +9,7 @@ const crypto = require("crypto");
 
 let testEnv;
 const PROJECT_ID = process.env.GCP_PROJECT || "demo-golocal-v2";
-const ADMIN_EMAIL = "renukadas083@gmail.com";
+const ADMIN_EMAIL = "owner@example.com";
 const CUSTOMER_UID = "cust_1";
 const DRIVER_UID = "drv_1";
 const UNVERIFIED_UID = "drv_pending";
@@ -238,7 +238,9 @@ test("Operations Staff can triage complaints, flag bookings, and atomically assi
 test("Owner Admin can configure platform promo banners and Web user_tokens register cleanly", async () => {
   const adminDb = testEnv.authenticatedContext("owner_uid", {
     email: ADMIN_EMAIL,
-    email_verified: true
+    email_verified: true,
+    admin: true,
+    ownerAdmin: true
   }).firestore();
 
   await assertSucceeds(
@@ -306,6 +308,48 @@ test("Unverified rider cannot read commercial searching bookings or go online", 
   await assertFails(
     pendingDb.collection("driver_profiles").doc(UNVERIFIED_UID).update({
       isOnline: true,
+      updatedAt: now()
+    })
+  );
+});
+
+test("Customer participant can transition their searching booking to expired after 45s timeout while non-participants cannot", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const admin = ctx.firestore();
+    await admin.collection("bookings").doc("bk_expire_1").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Arijit",
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Borai",
+      destinationLabel: "Mohanpur",
+      distanceKm: 5.0,
+      estimatedFareInr: 75,
+      minPermittedFareInr: 65,
+      maxPermittedFareInr: 95,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "searching",
+      is_test_ride: false,
+      createdAt: now(),
+      updatedAt: now()
+    });
+  });
+
+  const otherDb = testEnv.authenticatedContext("other_cust", { phone_number: "+919800009999" }).firestore();
+  await assertFails(
+    otherDb.collection("bookings").doc("bk_expire_1").update({
+      status: "expired",
+      cancellationReason: "No rider accepted within 45 seconds",
+      updatedAt: now()
+    })
+  );
+
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919800004444" }).firestore();
+  await assertSucceeds(
+    custDb.collection("bookings").doc("bk_expire_1").update({
+      status: "expired",
+      cancellationReason: "No rider accepted within 45 seconds",
       updatedAt: now()
     })
   );

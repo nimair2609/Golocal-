@@ -539,15 +539,22 @@ fun RiderTestModeDashboardShell(
             return@LaunchedEffect
         }
         openTestBookings.filter { it.id !in alertedTestIds }.forEach { req ->
+            val reqTitle = "TEST RIDE • ${req.vehicleCategory.uppercase()} (₹0)"
+            val reqBody = "${req.pickupLabel} -> ${req.destinationLabel} (${req.distanceKm} km)"
             com.example.notifications.NotificationHelper.displayRideRequestAlert(
                 context = context,
                 bookingId = req.id,
-                title = "TEST RIDE • ${req.vehicleCategory.uppercase()} (₹0)",
-                body = "${req.pickupLabel} -> ${req.destinationLabel} (${req.distanceKm} km)",
+                title = reqTitle,
+                body = reqBody,
                 isTestRide = true,
                 soundEnabled = prefs.rideRequestSoundEnabled,
                 vibrationEnabled = prefs.rideRequestVibrationEnabled,
-                notificationsEnabled = prefs.notificationsEnabled
+                notificationsEnabled = prefs.notificationsEnabled,
+                payload = com.example.notifications.RideRequestPayload.fromBooking(
+                    booking = req,
+                    title = reqTitle,
+                    body = reqBody
+                )
             )
         }
         alertedTestIds = currentIds

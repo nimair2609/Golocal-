@@ -336,7 +336,7 @@ jobs:
           fi
 
       - name: Email Administrator Notification (If SMTP Secrets Configured)
-        if: always() && steps.validate_secrets.outputs.has_secrets == 'true' && secrets.SMTP_SERVER != '' && secrets.SMTP_USERNAME != '' && secrets.SMTP_PASSWORD != ''
+        if: always() && steps.validate_secrets.outputs.has_secrets == 'true' && secrets.SMTP_SERVER != '' && secrets.SMTP_USERNAME != '' && secrets.SMTP_PASSWORD != '' && secrets.ADMIN_NOTIFY_EMAIL != ''
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_SERVER }}
@@ -344,7 +344,7 @@ jobs:
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
           subject: "[GoLocal CI] APK Build ${{ job.status }} - v${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.version_code }})"
-          to: ${{ secrets.ADMIN_NOTIFY_EMAIL || 'renukadas083@gmail.com' }}
+          to: ${{ secrets.ADMIN_NOTIFY_EMAIL }}
           from: "GoLocal Build Bot <${{ secrets.SMTP_USERNAME }}>"
           body: |
             GoLocal Android APK build status: ${{ job.status }}

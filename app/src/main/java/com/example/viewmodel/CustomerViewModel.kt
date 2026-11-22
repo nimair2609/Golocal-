@@ -111,9 +111,8 @@ class CustomerViewModel(
             if (remote.isEmpty()) FareCalculator.defaultFareConfigs()
             else {
                 remote.groupBy { it.vehicleCategory }
-                    .mapValues { (_, list) -> list.maxByOrNull { it.version }!! }
                     .values
-                    .toList()
+                    .mapNotNull { list -> list.maxByOrNull { it.version } }
             }
         }
         .catch { error ->
@@ -632,7 +631,7 @@ class CustomerViewModel(
                     _actionMessage.value = if (isTestRideActive) {
                         "TEST RIDE #$id created. Waiting for Admin/Ops Test Driver assignment."
                     } else {
-                        "Booking #$id created. Verified local drivers can now submit fare proposals."
+                        "Booking #$id created. Searching riders within 3 km (45s window)..."
                     }
                 }
                 .onFailure { exc ->
@@ -681,6 +680,56 @@ class CustomerViewModel(
                 .onSuccess { _actionMessage.value = "Booking cancelled." }
                 .onFailure { _actionMessage.value = it.localizedMessage ?: "Cancellation failed" }
         }
+    }
+
+    fun expireTimedOutSearch(bookingId: String) {
+        viewModelScope.launch {
+            repository.expireTimedOutSearchingBooking(bookingId)
+                .onSuccess { expiredNow ->
+                    if (expiredNow) {
+                        _actionMessage.value = "No rider found nearby within 45 seconds. Tap Retry Ride to search again."
+                    }
+                }
+        }
+    }
+
+    fun retryExpiredBooking(booking: Booking) {
+        val pickupPlace = WestBengalPlace(
+            id = "retry_pickup_${booking.id}",
+            nameEn = booking.pickupLabel.ifBlank { "Selected Pickup" },
+            nameBn = booking.pickupLabel.ifBlank { "Selected Pickup" },
+            district = booking.pickupDistrict.ifBlank { "West Bengal" },
+            block = "",
+            category = "custom",
+            lat = booking.pickupLat,
+            lng = booking.pickupLng
+        )
+        val destPlace = WestBengalPlace(
+            id = "retry_dest_${booking.id}",
+            nameEn = booking.destinationLabel.ifBlank { "Selected Destination" },
+            nameBn = booking.destinationLabel.ifBlank { "Selected Destination" },
+            district = booking.destinationDistrict.ifBlank { "West Bengal" },
+            block = "",
+            category = "custom",
+            lat = booking.destinationLat,
+            lng = booking.destinationLng
+        )
+        _draft.value = _draft.value.copy(
+            pickupPlace = pickupPlace,
+            destinationPlace = destPlace,
+            customPickupLabel = booking.pickupLabel,
+            customDestinationLabel = booking.destinationLabel,
+            selectedCategory = booking.vehicleCategory.ifBlank { "toto" },
+            bookingType = booking.bookingType.ifBlank { "now" },
+            paymentMethod = booking.paymentMethod.ifBlank { "cash" },
+            trainNumber = booking.trainNumber,
+            scheduledDateTimeLabel = booking.scheduledDateTimeLabel,
+            familyMemberName = booking.familyMemberName,
+            familyConsentConfirmed = booking.familyConsentConfirmed,
+            isRoundTrip = booking.isRoundTrip,
+            bookAsTestRide = false
+        )
+        _actionMessage.value = null
     }
 
     fun submitRating(

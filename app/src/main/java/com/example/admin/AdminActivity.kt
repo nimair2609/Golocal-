@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import com.example.notifications.NotificationDeepLinkExtras
 import com.example.notifications.NotificationDeepLinkTarget
 import com.example.notifications.NotificationHelper
+import com.example.security.AppCheckHelper
 
 class AdminActivity : ComponentActivity() {
     private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
@@ -18,6 +19,7 @@ class AdminActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppCheckHelper.configureAppCheck(this, intent)
         NotificationHelper.ensureChannels(this)
         applyIntentDeepLink(intent)
         enableEdgeToEdge()

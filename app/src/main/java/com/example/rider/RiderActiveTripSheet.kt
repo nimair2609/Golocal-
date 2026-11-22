@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
 import com.example.data.model.BookingCallContact
 import com.example.data.model.CommissionRecord
@@ -101,6 +102,7 @@ fun RiderActiveTripSheet(
     onClearCommercialOtpError: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val gpsHealth by com.example.data.tracking.RiderLocationForegroundService.gpsHealth.collectAsStateWithLifecycle()
     var enteredPin by remember(booking.id) { mutableStateOf("") }
     var enteredTestOtp by remember(booking.id) { mutableStateOf("") }
     var activeRouteState by remember(booking.id) { mutableStateOf<RouteUiState>(RouteUiState.Idle) }
@@ -315,6 +317,28 @@ fun RiderActiveTripSheet(
                 }
 
                 TripProgressStepperRow(currentStatus = booking.status)
+
+                if (gpsHealth.gpsStatus in setOf("gps_lost", "network_interrupted", "permission_denied")) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = GolocalWarningContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("rider_active_gps_warning_banner")
+                    ) {
+                        Text(
+                            text = gpsHealth.lastError ?: when (gpsHealth.gpsStatus) {
+                                "gps_lost" -> "GPS signal lost — waiting for satellite lock"
+                                "network_interrupted" -> "Network interrupted — live location will resume automatically"
+                                else -> "Location permission required for live trip tracking"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = GolocalDeepNavy,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
 
                 BookingCommunicationBar(
                     booking = booking,

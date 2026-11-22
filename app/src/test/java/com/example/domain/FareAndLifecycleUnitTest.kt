@@ -40,6 +40,7 @@ class FareAndLifecycleUnitTest {
     @Test
     fun `trip lifecycle transitions enforce strict ordering and terminal lock`() {
         assertTrue(FareCalculator.isValidTransition("searching", "assigned"))
+        assertTrue(FareCalculator.isValidTransition("searching", "expired"))
         assertTrue(FareCalculator.isValidTransition("assigned", "arriving"))
         assertTrue(FareCalculator.isValidTransition("arriving", "arrived"))
         assertTrue(FareCalculator.isValidTransition("arrived", "in_progress"))
@@ -49,6 +50,8 @@ class FareAndLifecycleUnitTest {
         assertFalse(FareCalculator.isValidTransition("searching", "in_progress"))
         assertFalse(FareCalculator.isValidTransition("completed", "cancelled"))
         assertFalse(FareCalculator.isValidTransition("cancelled", "assigned"))
+        assertFalse(FareCalculator.isValidTransition("expired", "assigned"))
+        assertEquals(45_000L, com.example.data.repository.GolocalRepository.RIDE_REQUEST_TIMEOUT_MS)
     }
 
     @Test

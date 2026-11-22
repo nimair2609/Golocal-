@@ -216,22 +216,22 @@ fun SampleRiderDashboardShell(
         val canAlert = profile?.isOnline() == true && activeRide == null && prefs.notificationsEnabled
         if (canAlert) {
             val fresh = incomingRides.filter { it.rideId !in previouslyAlertedIds }
-            if (fresh.isNotEmpty()) {
-                NotificationHelper.playSampleRequestSoundAndVibrate(
-                    context = context,
-                    soundEnabled = prefs.rideRequestSoundEnabled,
-                    vibrationEnabled = prefs.rideRequestVibrationEnabled
-                )
-            }
             fresh.forEach { req ->
+                val reqTitle = "SAMPLE RIDE • ₹${req.estimatedFareInr.toInt()} (${req.vehicleCategory.uppercase()})"
+                val reqBody = "${req.pickupLabel} -> ${req.destinationLabel} (${String.format(Locale.US, "%.1f", req.distanceKm)} km)"
                 NotificationHelper.displaySampleRideRequestAlert(
                     context = context,
                     rideId = req.rideId,
-                    title = "SAMPLE RIDE • ₹${req.estimatedFareInr.toInt()} (${req.vehicleCategory.uppercase()})",
-                    body = "${req.pickupLabel} -> ${req.destinationLabel} (${String.format(Locale.US, "%.1f", req.distanceKm)} km)",
+                    title = reqTitle,
+                    body = reqBody,
                     soundEnabled = prefs.rideRequestSoundEnabled,
                     vibrationEnabled = prefs.rideRequestVibrationEnabled,
-                    notificationsEnabled = prefs.notificationsEnabled
+                    notificationsEnabled = prefs.notificationsEnabled,
+                    payload = com.example.notifications.RideRequestPayload.fromSampleRide(
+                        ride = req,
+                        title = reqTitle,
+                        body = reqBody
+                    )
                 )
             }
         }

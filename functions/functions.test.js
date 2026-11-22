@@ -229,8 +229,12 @@ test("Test Ride isolation: test booking search notifies ONLY approved online tes
   assert.ok(sentTokens.includes("tok_c"));
   assert.ok(sentTokens.includes("tok_test_r"));
   assert.ok(!sentTokens.includes("tok_prod"), "Commercial driver must NEVER receive Test Ride push");
-  assert.equal(messaging.sent[1].android.notification.channelId, "golocal_test_ride_requests_v2");
-  assert.equal(messaging.sent[1].android.notification.sound, "golocal_ride_request");
+  assert.equal(messaging.sent[0].notification.title, "TEST RIDE Created — Finding Test Rider");
+  assert.equal(messaging.sent[1].notification, undefined, "Ride request push must be data-only to wake background service");
+  assert.equal(messaging.sent[1].android.notification, undefined);
+  assert.equal(messaging.sent[1].android.priority, "high");
+  assert.equal(messaging.sent[1].android.ttl, 45000);
+  assert.equal(messaging.sent[1].data.channelId, "golocal_test_ride_requests_v2");
   assert.equal(messaging.sent[1].data.isTestRide, "true");
   assert.ok(Number(messaging.sent[1].data.requestExpiresAtMs) > 0, "Ride request push should carry expiry timestamp");
 });
@@ -291,8 +295,10 @@ test("Sample Ride dispatch notifies ONLY online sample_riders on golocal_sample_
 
   assert.equal(messaging.sent.length, 1);
   assert.deepEqual(messaging.sent[0].tokens, ["tok_sample_online"]);
-  assert.equal(messaging.sent[0].android.notification.channelId, "golocal_sample_ride_requests_v2");
-  assert.equal(messaging.sent[0].android.notification.sound, "golocal_ride_request");
+  assert.equal(messaging.sent[0].notification, undefined);
+  assert.equal(messaging.sent[0].android.notification, undefined);
+  assert.equal(messaging.sent[0].android.ttl, 45000);
+  assert.equal(messaging.sent[0].data.channelId, "golocal_sample_ride_requests_v2");
 
   await handlers.handleSampleRideWrite(
     "sr_1",
@@ -353,3 +359,169 @@ test("Payment webhook verifies HMAC-SHA256 signature, updates payment & booking 
   const testRes = await handlers.handlePaymentWebhook({ rawBody: testBody, headers: { "x-golocal-signature": testSig }, secret });
   assert.equal(testRes.statusCode, 403);
 });
+
+test("Admin custom-claim bootstrap only grants ownerAdmin to verified allowlisted ADMIN_EMAILS", async () => {
+  const db = createFakeFirestore();
+  const messaging = createMockMessaging();
+  const handlers = createNotificationHandlers({ db, messaging, fieldValue: fakeFieldValue });
+
+  const claimsStore = new Map([["owner_1", { existing: "yes" }], ["other_1", {}]]);
+  const authApi = {
+    async getUser(uid) {
+      return { uid, customClaims: claimsStore.get(uid) || {} };
+    },
+    async setCustomUserClaims(uid, claims) {
+      claimsStore.set(uid, claims);
+    },
+  };
+  const rtdbWrites = [];
+  const rtdbApi = {
+    ref(path) {
+      return {
+        async set(val) {
+          rtdbWrites.push({ path, val });
+        },
+      };
+    },
+  };
+
+  const deniedUnverified = await handlers.syncOwnerAdminClaims({
+    uid: "owner_1",
+    email: "owner@nrnext.in",
+    emailVerified: false,
+    adminEmailsEnv: "owner@nrnext.in",
+    authApi,
+    rtdbApi,
+  });
+  assert.equal(deniedUnverified.granted, false);
+
+  const deniedNonAllowlist = await handlers.syncOwnerAdminClaims({
+    uid: "other_1",
+    email: "attacker@example.com",
+    emailVerified: true,
+    adminEmailsEnv: "owner@nrnext.in",
+    authApi,
+    rtdbApi,
+  });
+  assert.equal(deniedNonAllowlist.granted, false);
+
+  const granted = await handlers.syncOwnerAdminClaims({
+    uid: "owner_1",
+    email: "Owner@nrnext.in",
+    emailVerified: true,
+    adminEmailsEnv: "ops-backup@nrnext.in, owner@nrnext.in",
+    authApi,
+    rtdbApi,
+  });
+  assert.equal(granted.granted, true);
+  assert.deepEqual(claimsStore.get("owner_1"), { existing: "yes", admin: true, ownerAdmin: true });
+  assert.equal(db.store.get("admins").get("owner_1").role, "owner_admin");
+  assert.equal(rtdbWrites[0].path, "auth_roles/owners/owner_1");
+
+  await handlers.syncDelegatedAdminClaims({ uid: "other_1", afterExists: true, authApi });
+  assert.equal(claimsStore.get("other_1").admin, true);
+  await handlers.syncDelegatedAdminClaims({ uid: "other_1", afterExists: false, authApi });
+  assert.equal(claimsStore.get("other_1").admin, undefined);
+});
+
+test("Commercial 2-wave radius dispatch (3km -> 6km), data-only 45s TTL push, and automatic expiry notification", async () => {
+  const pickupLat = 21.8400;
+  const pickupLng = 87.3800;
+  const db = createFakeFirestore({
+    driver_directory: {
+      drv_near: {
+        driverId: "drv_near",
+        verificationStatus: "verified",
+        isOnline: true,
+        vehicleCategory: "toto",
+        currentLat: 21.852, // ~1.3 km
+        currentLng: 87.382,
+      },
+      drv_mid: {
+        driverId: "drv_mid",
+        verificationStatus: "verified",
+        isOnline: true,
+        vehicleCategory: "toto",
+        currentLat: 21.880, // ~4.5 km
+        currentLng: 87.380,
+      },
+      drv_far: {
+        driverId: "drv_far",
+        verificationStatus: "verified",
+        isOnline: true,
+        vehicleCategory: "toto",
+        currentLat: 21.950, // ~12.2 km
+        currentLng: 87.380,
+      },
+    },
+    user_tokens: {
+      cust1_c: { userId: "cust1", appVariant: "customer", active: true, token: "tok_cust" },
+      drv_near_r: { userId: "drv_near", appVariant: "rider", active: true, token: "tok_near" },
+      drv_mid_r: { userId: "drv_mid", appVariant: "rider", active: true, token: "tok_mid" },
+      drv_far_r: { userId: "drv_far", appVariant: "rider", active: true, token: "tok_far" },
+    },
+  });
+  const messaging = createMockMessaging();
+  const handlers = createNotificationHandlers({ db, messaging, fieldValue: fakeFieldValue });
+
+  const now = Date.now();
+  const bookingDoc = {
+    status: "searching",
+    customerId: "cust1",
+    customerName: "Ananya Roy",
+    vehicleCategory: "toto",
+    pickupLabel: "Borai More",
+    destinationLabel: "Mohanpur Bus Stand",
+    pickupLat,
+    pickupLng,
+    destinationLat: 21.855,
+    destinationLng: 87.395,
+    distanceKm: 3.1,
+    estimatedDurationMin: 12,
+    estimatedFareInr: 48,
+    minPermittedFareInr: 40,
+    maxPermittedFareInr: 60,
+    paymentMethod: "cash",
+    requestExpiresAtMs: now + 45_000,
+    is_test_ride: false,
+  };
+  await db.collection("bookings").doc("bk_wave_1").set(bookingDoc);
+
+  // Wave 1 on booking create
+  await handlers.handleBookingWrite("bk_wave_1", undefined, bookingDoc);
+
+  assert.equal(messaging.sent.length, 2);
+  assert.equal(messaging.sent[0].notification.title, "Searching for Nearby Rider");
+  assert.ok(!messaging.sent[0].notification.title.includes("Confirmed"));
+  assert.deepEqual(messaging.sent[1].tokens, ["tok_near"]);
+  assert.equal(messaging.sent[1].notification, undefined);
+  assert.equal(messaging.sent[1].android.priority, "high");
+  assert.equal(messaging.sent[1].android.ttl, 45_000);
+  assert.equal(messaging.sent[1].data.dispatchWave, "1");
+  assert.equal(messaging.sent[1].data.pickupLabel, "Borai More");
+
+  // Wave 2 after 20s expands to 6km without duplicating Wave 1 or reaching >6km driver
+  const w2 = await handlers.expandDispatchWaveIfNeeded("bk_wave_1", now + 21_000);
+  assert.equal(w2.expanded, true);
+  assert.equal(w2.notifiedCount, 1);
+  assert.equal(messaging.sent.length, 3);
+  assert.deepEqual(messaging.sent[2].tokens, ["tok_mid"]);
+  assert.equal(messaging.sent[2].data.dispatchWave, "2");
+  assert.ok(!messaging.sent.flatMap((m) => m.tokens).includes("tok_far"));
+
+  // Expire after 45s
+  const beforeExp = await db.collection("bookings").doc("bk_wave_1").get();
+  const expRes = await handlers.expireSearchingBookingIfUnanswered("bk_wave_1", now + 46_000);
+  assert.equal(expRes.expired, true);
+  const afterExp = await db.collection("bookings").doc("bk_wave_1").get();
+  assert.equal(afterExp.data().status, "expired");
+
+  // Trigger lifecycle notification on searching -> expired
+  await handlers.handleBookingWrite("bk_wave_1", beforeExp.data(), afterExp.data());
+  const dismissalMsgs = messaging.sent.filter((m) => m.data.type === "ride_request_expired");
+  assert.equal(dismissalMsgs.length, 2); // drv_near + drv_mid
+  const customerExpired = messaging.sent.find((m) => m.data.type === "booking_expired");
+  assert.ok(customerExpired);
+  assert.equal(customerExpired.notification.title, "No Rider Found Nearby");
+});
+

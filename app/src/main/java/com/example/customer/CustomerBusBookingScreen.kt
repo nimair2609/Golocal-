@@ -137,7 +137,8 @@ fun CustomerBusBookingScreen(
                 .testTag("bus_search_input")
         )
 
-        if (selectedSchedule == null) {
+        val sch = selectedSchedule
+        if (sch == null) {
             if (openSchedules.isEmpty()) {
                 GolocalEmptyState(
                     title = "No Verified Bus Schedules Open",
@@ -206,7 +207,6 @@ fun CustomerBusBookingScreen(
                 }
             }
         } else {
-            val sch = selectedSchedule!!
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surface,

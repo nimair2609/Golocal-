@@ -8,12 +8,14 @@
  *   firebase deploy --only functions
  */
 const { initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const { getDatabase } = require("firebase-admin/database");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onRequest } = require("firebase-functions/v2/https");
-const { createNotificationHandlers } = require("./handlers");
+const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { createNotificationHandlers, WAVE_2_DELAY_MS, RIDE_REQUEST_TIMEOUT_MS } = require("./handlers");
 
 initializeApp();
 
@@ -26,6 +28,10 @@ const handlers = createNotificationHandlers({
   messaging,
   fieldValue: FieldValue,
 });
+
+function delayMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 exports.paymentWebhook = onRequest({ cors: false }, async (req, res) => {
   if (req.method !== "POST") {
@@ -42,13 +48,27 @@ exports.paymentWebhook = onRequest({ cors: false }, async (req, res) => {
 });
 
 exports.onBookingWriteNotify = onDocumentWritten(
-  { document: "bookings/{bookingId}", database: DATABASE_ID },
+  { document: "bookings/{bookingId}", database: DATABASE_ID, timeoutSeconds: 120 },
   async (event) => {
-    await handlers.handleBookingWrite(
-      event.params.bookingId,
-      event.data?.before?.data(),
-      event.data?.after?.data()
-    );
+    const before = event.data?.before?.data();
+    const after = event.data?.after?.data();
+    const bookingId = event.params.bookingId;
+    await handlers.handleBookingWrite(bookingId, before, after);
+
+    if (!before && after?.status === "searching") {
+      const isTestRide = after.is_test_ride === true || after.test_mode === true;
+      if (!isTestRide) {
+        await delayMs(WAVE_2_DELAY_MS);
+        const w2 = await handlers.expandDispatchWaveIfNeeded(bookingId);
+        if (w2.reason === "not_searching" || w2.reason === "missing") return;
+      }
+      const remainingMs = Math.max(
+        1_000,
+        Math.min(RIDE_REQUEST_TIMEOUT_MS, Number(after.requestExpiresAtMs || Date.now() + RIDE_REQUEST_TIMEOUT_MS) - Date.now())
+      );
+      await delayMs(isTestRide ? remainingMs : Math.max(1_000, remainingMs));
+      await handlers.expireSearchingBookingIfUnanswered(bookingId);
+    }
   }
 );
 
@@ -160,3 +180,33 @@ exports.onBusBookingWriteNotify = onDocumentWritten(
 exports.dailyDocumentExpiryReminder = onSchedule("every 24 hours", async () => {
   await handlers.runDailyDocumentExpiryReminder();
 });
+
+exports.sweepExpiredBookings = onSchedule("every 1 minutes", async () => {
+  await handlers.sweepExpiredSearchingBookings();
+});
+
+exports.syncOwnerAdminAccess = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required.");
+  }
+  const result = await handlers.syncOwnerAdminClaims({
+    uid: request.auth.uid,
+    email: request.auth.token.email,
+    emailVerified: request.auth.token.email_verified === true,
+    adminEmailsEnv: process.env.ADMIN_EMAILS || "",
+    authApi: getAuth(),
+    rtdbApi: getDatabase(),
+  });
+  return result;
+});
+
+exports.onAdminDocWriteSyncClaims = onDocumentWritten(
+  { document: "admins/{adminUid}", database: DATABASE_ID },
+  async (event) => {
+    await handlers.syncDelegatedAdminClaims({
+      uid: event.params.adminUid,
+      afterExists: Boolean(event.data?.after?.exists),
+      authApi: getAuth(),
+    });
+  }
+);

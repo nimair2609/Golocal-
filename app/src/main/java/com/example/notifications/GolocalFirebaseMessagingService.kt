@@ -68,38 +68,56 @@ class GolocalFirebaseMessagingService : FirebaseMessagingService() {
             ?: message.messageId
             ?: "$targetApp|$type|$bookingId|$title|$body"
 
-        if (bookingId.isNotBlank() && type.lowercase() in setOf(
+        val normalizedType = type.trim().lowercase()
+        if (bookingId.isNotBlank() && normalizedType in setOf(
                 "ride_request_taken",
                 "ride_request_cancelled",
                 "ride_request_expired",
                 "booking_cancelled"
             )
         ) {
-            NotificationHelper.cancelRideRequestNotification(applicationContext, bookingId)
-            if (type.lowercase() != "booking_cancelled") return
+            RideRequestAlertController.stopAlert(applicationContext, bookingId)
+            if (normalizedType != "booking_cancelled") return
         }
 
-        val prefs = kotlinx.coroutines.runBlocking {
-            runCatching {
+        val rideRequestPayload = if (
+            bookingId.isNotBlank() &&
+            normalizedType in setOf("new_ride_request", "test_request", "sample_request")
+        ) {
+            RideRequestPayload.fromFcmData(
+                data = data,
+                bookingId = bookingId,
+                title = title,
+                body = body,
+                isTestRide = isTestRide,
+                isSampleRide = isSampleRide
+            )
+        } else {
+            null
+        }
+
+        serviceScope.launch {
+            val prefs = runCatching {
                 com.example.data.repository.PreferencesRepository(applicationContext).preferencesFlow.first()
-            }.getOrNull()
-        }
+            }.getOrDefault(com.example.data.repository.ClientPreferences())
 
-        NotificationHelper.displayNotification(
-            context = applicationContext,
-            title = title,
-            body = body,
-            type = type,
-            targetApp = targetApp,
-            targetScreen = targetScreen,
-            bookingId = bookingId,
-            dedupeKey = dedupeKey,
-            isTestRide = isTestRide,
-            isSampleRide = isSampleRide,
-            soundEnabled = prefs?.rideRequestSoundEnabled ?: true,
-            vibrationEnabled = prefs?.rideRequestVibrationEnabled ?: true,
-            notificationsEnabled = prefs?.notificationsEnabled ?: true
-        )
+            NotificationHelper.displayNotification(
+                context = applicationContext,
+                title = title,
+                body = body,
+                type = type,
+                targetApp = targetApp,
+                targetScreen = targetScreen,
+                bookingId = bookingId,
+                dedupeKey = dedupeKey,
+                isTestRide = isTestRide,
+                isSampleRide = isSampleRide,
+                soundEnabled = prefs.rideRequestSoundEnabled,
+                vibrationEnabled = prefs.rideRequestVibrationEnabled,
+                notificationsEnabled = prefs.notificationsEnabled,
+                rideRequestPayload = rideRequestPayload
+            )
+        }
     }
 
     override fun onDestroy() {

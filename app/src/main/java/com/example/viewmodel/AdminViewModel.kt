@@ -217,7 +217,7 @@ class AdminViewModel(
     val fareConfigs: StateFlow<List<FareConfig>> = repository.observeFareConfigs()
         .map { remote ->
             if (remote.isEmpty()) FareCalculator.defaultFareConfigs()
-            else remote.groupBy { it.vehicleCategory }.mapValues { it.value.maxByOrNull { c -> c.version }!! }.values.toList()
+            else remote.groupBy { it.vehicleCategory }.values.mapNotNull { list -> list.maxByOrNull { c -> c.version } }
         }
         .catch { if (it is CancellationException && it.cause !is FirebaseFirestoreException) throw it; emit(FareCalculator.defaultFareConfigs()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), FareCalculator.defaultFareConfigs())

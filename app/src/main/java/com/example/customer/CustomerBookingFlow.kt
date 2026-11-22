@@ -2,6 +2,7 @@ package com.example.customer
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import com.example.BuildConfig
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -162,7 +163,9 @@ fun CustomerBookRideScreen(
     val customerUid = customerAccount?.uid.orEmpty()
     val customerPhone = customerAccount?.effectiveMobileNumber().orEmpty()
     val isAuthorizedTestCustomer = customerAccount?.isTestCustomer == true
-    val canSelectTestRide = platformSettings?.testRideModeEnabled == true && isAuthorizedTestCustomer
+    val canSelectTestRide = BuildConfig.ENABLE_TEST_SANDBOX &&
+        platformSettings?.testRideModeEnabled == true &&
+        isAuthorizedTestCustomer
     val allBookings = (bookingsState as? UiState.Success)?.data.orEmpty()
 
     LaunchedEffect(canSelectTestRide) {
@@ -193,9 +196,9 @@ fun CustomerBookRideScreen(
         if (searchTarget != null) searchTarget = null else onBackHome()
     }
 
-    if (searchTarget != null) {
+    searchTarget?.let { activeSearchTarget ->
         CustomerLocationSearchSheet(
-            initialTarget = searchTarget!!,
+            initialTarget = activeSearchTarget,
             draft = draft,
             gps = gps,
             customerProfile = customerProfile,
@@ -255,7 +258,8 @@ fun CustomerBookRideScreen(
             testOtpError = testOtpError,
             rideOtpSecret = activeRideOtpSecret,
             onVerifyTestOtp = { otp -> customerViewModel.verifyTestRideOtp(currentBooking, otp) },
-            onClearTestOtpError = { customerViewModel.clearTestOtpError() }
+            onClearTestOtpError = { customerViewModel.clearTestOtpError() },
+            onSearchTimeout = { bid -> customerViewModel.expireTimedOutSearch(bid) }
         )
     } else {
         // Route Preview & Vehicle Selection Screen (modeled on Image 1 Panels 1 & 2)
@@ -384,6 +388,61 @@ fun CustomerBookRideScreen(
                         }
                     }
                 }
+
+                val latestBooking = allBookings.firstOrNull()
+                var dismissedExpiredBannerId by remember { mutableStateOf<String?>(null) }
+                val showExpiredBanner = latestBooking != null &&
+                    latestBooking.status == "expired" &&
+                    dismissedExpiredBannerId != latestBooking.id &&
+                    ((System.currentTimeMillis() - (latestBooking.updatedAt?.toDate()?.time ?: 0L)) in 0L..180_000L)
+                if (showExpiredBanner && latestBooking != null) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = GolocalWarningContainer,
+                        shadowElevation = 5.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("booking_expired_retry_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "No rider found nearby",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = GolocalDeepNavy
+                                )
+                                Text(
+                                    text = "${latestBooking.pickupLabel} -> ${latestBooking.destinationLabel}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = GolocalDeepNavy.copy(alpha = 0.85f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    dismissedExpiredBannerId = latestBooking.id
+                                    customerViewModel.retryExpiredBooking(latestBooking)
+                                    customerViewModel.submitBooking(
+                                        invoiceEmail = customerInvoiceEmail,
+                                        isAuthorizedTestCustomer = isAuthorizedTestCustomer
+                                    )
+                                },
+                                enabled = !isSubmitting,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("booking_retry_ride_button")
+                            ) {
+                                Text("Retry Ride", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
 
             // Bottom Sheet: Choose a Ride + Sort Filters + Pinned Fare & Find Rider Bar
@@ -427,7 +486,7 @@ fun CustomerBookRideScreen(
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
                             )
-                            if (platformSettings?.testRideModeEnabled == true) {
+                            if (BuildConfig.ENABLE_TEST_SANDBOX && platformSettings?.testRideModeEnabled == true) {
                                 GolocalStatusBadge(
                                     label = "TEST RIDE MODE",
                                     tone = "warning",
@@ -903,10 +962,11 @@ fun CustomerBookRideScreen(
                 Button(
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                     onClick = {
+                        val currentBooking = activeBooking ?: return@Button
                         customerViewModel.triggerSos(
-                            activeBooking!!.id,
-                            gps.lat ?: activeBooking!!.pickupLat,
-                            gps.lng ?: activeBooking!!.pickupLng,
+                            currentBooking.id,
+                            gps.lat ?: currentBooking.pickupLat,
+                            gps.lng ?: currentBooking.pickupLng,
                             notes
                         )
                         showSosDialog = false
@@ -960,8 +1020,9 @@ fun CustomerBookRideScreen(
                 Button(
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                     onClick = {
+                        val currentBooking = activeBooking ?: return@Button
                         val combined = if (extraNote.isBlank()) selectedCategory else "$selectedCategory: ${extraNote.trim()}"
-                        customerViewModel.cancelBooking(activeBooking!!.id, combined, selectedCategory)
+                        customerViewModel.cancelBooking(currentBooking.id, combined, selectedCategory)
                         showCancelDialog = false
                     },
                     modifier = Modifier.testTag("confirm_cancel_ride_button")
@@ -971,10 +1032,12 @@ fun CustomerBookRideScreen(
         )
     }
 
-    if (showCallDialog && activeBooking != null && activeCallContact != null && activeCallContact!!.driverPhone.isNotBlank()) {
+    val callBooking = activeBooking
+    val callContact = activeCallContact
+    if (showCallDialog && callBooking != null && callContact != null && callContact.driverPhone.isNotBlank()) {
         CallPeerConfirmDialog(
-            peerLabel = activeBooking!!.assignedDriverName.ifBlank { "Driver" },
-            phoneNumber = activeCallContact!!.driverPhone,
+            peerLabel = callBooking.assignedDriverName.ifBlank { "Driver" },
+            phoneNumber = callContact.driverPhone,
             onDismiss = { showCallDialog = false },
             onOpenChat = {
                 customerViewModel.markActiveChatRead()
@@ -983,13 +1046,14 @@ fun CustomerBookRideScreen(
         )
     }
 
-    if (showChatSheet && activeBooking != null) {
+    val chatBooking = activeBooking
+    if (showChatSheet && chatBooking != null) {
         BookingChatModalSheet(
-            booking = activeBooking!!,
+            booking = chatBooking,
             viewerUid = customerUid,
             viewerRole = "customer",
             messages = activeChatMessages,
-            onSendMessage = { text -> customerViewModel.sendChatMessage(activeBooking!!, text) },
+            onSendMessage = { text -> customerViewModel.sendChatMessage(chatBooking, text) },
             onMarkRead = { customerViewModel.markActiveChatRead() },
             onDismiss = { showChatSheet = false }
         )
@@ -1011,7 +1075,8 @@ fun CustomerBookRideScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        customerViewModel.submitComplaint(activeBooking!!.id, "trip_issue", desc)
+                        val currentBooking = activeBooking ?: return@Button
+                        customerViewModel.submitComplaint(currentBooking.id, "trip_issue", desc)
                         showComplaintDialog = false
                     }
                 ) { Text("Submit") }

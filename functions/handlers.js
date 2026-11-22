@@ -11,10 +11,49 @@
 
 const crypto = require("node:crypto");
 
+const RIDE_REQUEST_TIMEOUT_MS = 45_000;
+const WAVE_1_RADIUS_KM = 3.0;
+const WAVE_2_RADIUS_KM = 6.0;
+const WAVE_2_DELAY_MS = 20_000;
+
 const INVALID_TOKEN_CODES = new Set([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
 ]);
+
+function isValidLatLng(lat, lng) {
+  return (
+    typeof lat === "number" &&
+    typeof lng === "number" &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    !(lat === 0 && lng === 0) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.asin(Math.sqrt(Math.min(1, Math.max(0, a))));
+  return 6371.0 * c;
+}
+
+function isCategoryCompatible(driverCategory, bookingCategory) {
+  const drv = String(driverCategory || "").trim().toLowerCase();
+  const req = String(bookingCategory || "").trim().toLowerCase();
+  if (!drv || !req) return true;
+  if (drv === req) return true;
+  if ((req === "outstation" || req === "scheduled") && drv === "cab") return true;
+  return false;
+}
 
 function verifyHmacSha256Signature(rawBody, signatureHeader, secret) {
   if (!secret || typeof secret !== "string" || !secret.trim()) return false;
@@ -210,19 +249,55 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       const tokens = [...tokenToDocs.keys()];
       if (tokens.length === 0) continue;
 
+      const normType = String(payload.type || "").trim().toLowerCase();
       const isRideRequestChannel =
         channelId === "golocal_ride_requests_v2" ||
         channelId === "golocal_test_ride_requests_v2" ||
         channelId === "golocal_sample_ride_requests_v2";
+      const isRideDismissal =
+        normType === "ride_request_taken" ||
+        normType === "ride_request_cancelled" ||
+        normType === "ride_request_expired";
+      const isDataOnlyPush = payload.dataOnly === true || isRideRequestChannel || isRideDismissal;
       const androidSound = isRideRequestChannel ? "golocal_ride_request" : "default";
 
-      const response = await messaging.sendEachForMulticast({
+      const sanitizedExtra = {};
+      if (payload.extraData && typeof payload.extraData === "object") {
+        for (const [k, v] of Object.entries(payload.extraData)) {
+          if (v !== undefined && v !== null) {
+            sanitizedExtra[String(k)] = sanitizeNotificationText(String(v), 160);
+          }
+        }
+      }
+
+      const rawTtlMs =
+        payload.ttlMs != null
+          ? Number(payload.ttlMs)
+          : isRideRequestChannel
+            ? Math.min(
+                RIDE_REQUEST_TIMEOUT_MS,
+                Math.max(5_000, (Number(payload.requestExpiresAtMs) || Date.now() + RIDE_REQUEST_TIMEOUT_MS) - Date.now())
+              )
+            : 0;
+      const androidConfig = {
+        priority: "high",
+      };
+      if (Number.isFinite(rawTtlMs) && rawTtlMs > 0) {
+        androidConfig.ttl = Math.round(rawTtlMs);
+      }
+      if (!isDataOnlyPush) {
+        androidConfig.notification = {
+          channelId,
+          sound: androidSound,
+          clickAction,
+          tag: String(payload.tag || payload.bookingId || payload.entityId || payload.type || "golocal"),
+        };
+      }
+
+      const multicastMessage = {
         tokens,
-        notification: {
-          title: safeTitle,
-          body: safeBody,
-        },
         data: {
+          ...sanitizedExtra,
           eventId: String(payload.eventId || claim.safeKey),
           dedupeKey: String(dedupeKey || claim.safeKey),
           type: String(payload.type || "general"),
@@ -239,16 +314,16 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
           channelId,
           timestampMs: String(Date.now()),
         },
-        android: {
-          priority: "high",
-          notification: {
-            channelId,
-            sound: androidSound,
-            clickAction,
-            tag: String(payload.tag || payload.bookingId || payload.entityId || payload.type || "golocal"),
-          },
-        },
-      });
+        android: androidConfig,
+      };
+      if (!isDataOnlyPush) {
+        multicastMessage.notification = {
+          title: safeTitle,
+          body: safeBody,
+        };
+      }
+
+      const response = await messaging.sendEachForMulticast(multicastMessage);
       sentRecipients += 1;
 
       const deletions = [];
@@ -270,6 +345,158 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     return { sentRecipients, skippedDuplicate: false, deletedTokens };
   }
 
+  function buildRideRequestExtraData(booking, dispatchWave = 1) {
+    const firstName =
+      String(booking.customerName || "Passenger")
+        .trim()
+        .split(/\s+/)[0] || "Passenger";
+    return {
+      pickupLabel: booking.pickupLabel || "",
+      destinationLabel: booking.destinationLabel || "",
+      pickupLat: booking.pickupLat ?? 0,
+      pickupLng: booking.pickupLng ?? 0,
+      destinationLat: booking.destinationLat ?? 0,
+      destinationLng: booking.destinationLng ?? 0,
+      distanceKm: booking.distanceKm ?? 0,
+      estimatedDurationMin: booking.estimatedDurationMin ?? 0,
+      estimatedFareInr: booking.estimatedFareInr ?? 0,
+      minPermittedFareInr: booking.minPermittedFareInr ?? booking.estimatedFareInr ?? 0,
+      maxPermittedFareInr: booking.maxPermittedFareInr ?? booking.estimatedFareInr ?? 0,
+      vehicleCategory: booking.vehicleCategory || "toto",
+      paymentMethod: booking.paymentMethod || "cash",
+      passengerFirstName: firstName,
+      dispatchWave: String(dispatchWave),
+    };
+  }
+
+  async function selectDriversByRadius(booking, maxRadiusKm, excludeDriverIds = []) {
+    const excluded = new Set((excludeDriverIds || []).filter(Boolean));
+    const snap = await db
+      .collection("driver_directory")
+      .where("verificationStatus", "==", "verified")
+      .where("isOnline", "==", true)
+      .get();
+    const hasPickupCoords = isValidLatLng(booking.pickupLat, booking.pickupLng);
+    const ranked = [];
+    for (const doc of snap.docs) {
+      const d = doc.data() || {};
+      const driverId = d.driverId || doc.id;
+      if (!driverId || driverId === booking.customerId || excluded.has(driverId)) continue;
+      if (!isCategoryCompatible(d.vehicleCategory, booking.vehicleCategory)) continue;
+      const hasDriverCoords = isValidLatLng(d.currentLat, d.currentLng);
+      if (hasPickupCoords && hasDriverCoords) {
+        const distKm = haversineKm(booking.pickupLat, booking.pickupLng, d.currentLat, d.currentLng);
+        if (distKm <= maxRadiusKm) {
+          ranked.push({ driverId, distKm });
+        }
+      } else if (maxRadiusKm >= WAVE_2_RADIUS_KM) {
+        ranked.push({ driverId, distKm: maxRadiusKm });
+      }
+    }
+    ranked.sort((a, b) => a.distKm - b.distKm);
+    return ranked.slice(0, 35).map((r) => r.driverId);
+  }
+
+  async function dispatchCommercialWave({ bookingId, booking, driverIds, wave, requestExpiresAtMs }) {
+    if (!driverIds || driverIds.length === 0) return { sentRecipients: 0 };
+    return sendToUserIds(driverIds, {
+      eventId: `driver_new_req_${bookingId}_w${wave}`,
+      dedupeKey: `driver_new_req_${bookingId}_w${wave}`,
+      type: "new_ride_request",
+      targetApp: "rider",
+      targetRole: "driver",
+      targetScreen: "requests",
+      bookingId,
+      entityId: bookingId,
+      isTestRide: false,
+      dataOnly: true,
+      ttlMs: RIDE_REQUEST_TIMEOUT_MS,
+      requestExpiresAtMs,
+      channelId: "golocal_ride_requests_v2",
+      title: "New Nearby Ride Request",
+      body: `${booking.pickupLabel} -> ${booking.destinationLabel} (Est. ₹${Math.round(booking.estimatedFareInr || 0)})`,
+      extraData: buildRideRequestExtraData(booking, wave),
+    });
+  }
+
+  async function expandDispatchWaveIfNeeded(bookingId, nowMs = Date.now()) {
+    const ref = db.collection("bookings").doc(bookingId);
+    const snap = await ref.get();
+    if (!snap.exists) return { expanded: false, reason: "missing" };
+    const data = snap.data() || {};
+    if (
+      data.status !== "searching" ||
+      data.assignedDriverId ||
+      data.is_test_ride === true ||
+      data.test_mode === true
+    ) {
+      return { expanded: false, reason: "not_searching" };
+    }
+    const expiresAt = Number(data.requestExpiresAtMs || 0);
+    if (expiresAt > 0 && nowMs >= expiresAt) {
+      return { expanded: false, reason: "expired" };
+    }
+    if (Number(data.dispatchWave || 1) >= 2) {
+      return { expanded: false, reason: "already_wave2" };
+    }
+    const alreadyIds = Array.isArray(data.dispatchedDriverIds) ? data.dispatchedDriverIds : [];
+    const wave2Ids = await selectDriversByRadius(data, WAVE_2_RADIUS_KM, alreadyIds);
+    const mergedIds = [...new Set([...alreadyIds, ...wave2Ids])];
+    await ref.set(
+      {
+        dispatchWave: 2,
+        dispatchedDriverIds: mergedIds,
+        updatedAt: fieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    if (wave2Ids.length > 0) {
+      await dispatchCommercialWave({
+        bookingId,
+        booking: data,
+        driverIds: wave2Ids,
+        wave: 2,
+        requestExpiresAtMs: expiresAt > 0 ? expiresAt : nowMs + RIDE_REQUEST_TIMEOUT_MS,
+      });
+    }
+    return { expanded: true, notifiedCount: wave2Ids.length };
+  }
+
+  async function expireSearchingBookingIfUnanswered(bookingId, nowMs = Date.now()) {
+    const ref = db.collection("bookings").doc(bookingId);
+    const snap = await ref.get();
+    if (!snap.exists) return { expired: false, reason: "missing" };
+    const data = snap.data() || {};
+    if (data.status !== "searching" || data.assignedDriverId) {
+      return { expired: false, reason: "not_searching" };
+    }
+    const expiresAt = Number(data.requestExpiresAtMs || 0);
+    const createdMs = data.createdAt?.toMillis ? data.createdAt.toMillis() : 0;
+    const effectiveExpiresAt = expiresAt > 0 ? expiresAt : createdMs > 0 ? createdMs + RIDE_REQUEST_TIMEOUT_MS : 0;
+    if (effectiveExpiresAt > 0 && nowMs < effectiveExpiresAt) {
+      return { expired: false, reason: "not_yet_expired" };
+    }
+    await ref.set(
+      {
+        status: "expired",
+        cancellationReason: "No rider accepted within 45 seconds",
+        updatedAt: fieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { expired: true };
+  }
+
+  async function sweepExpiredSearchingBookings(nowMs = Date.now()) {
+    const snap = await db.collection("bookings").where("status", "==", "searching").limit(50).get();
+    let expiredCount = 0;
+    for (const doc of snap.docs) {
+      const res = await expireSearchingBookingIfUnanswered(doc.id, nowMs);
+      if (res.expired) expiredCount += 1;
+    }
+    return expiredCount;
+  }
+
   async function handleBookingWrite(bookingId, before, after) {
     if (!after) return;
     const prevStatus = before?.status || "";
@@ -278,10 +505,11 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     const prefix = isTestRide ? "[TEST RIDE] " : "";
 
     if (!before && newStatus === "searching") {
+      const requestExpiresAtMs = Number(after.requestExpiresAtMs || Date.now() + RIDE_REQUEST_TIMEOUT_MS);
       await sendToUserIds([after.customerId], {
         eventId: `booking_created_${bookingId}`,
         dedupeKey: `booking_created_${bookingId}`,
-        type: isTestRide ? "test_booking_confirmation" : "booking_confirmation",
+        type: isTestRide ? "test_booking_searching" : "booking_searching",
         targetApp: "customer",
         targetRole: "customer",
         targetScreen: isTestRide ? "booking" : "bookings",
@@ -289,8 +517,8 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
         entityId: bookingId,
         isTestRide,
         channelId: isTestRide ? "golocal_test_rides" : "golocal_rides",
-        title: isTestRide ? "TEST RIDE Created — Awaiting Dispatch" : "Booking Confirmed — Finding Rider",
-        body: `${prefix}${(after.vehicleCategory || "ride").toUpperCase()} from ${after.pickupLabel} to ${after.destinationLabel}.`,
+        title: isTestRide ? "TEST RIDE Created — Finding Test Rider" : "Searching for Nearby Rider",
+        body: `${prefix}Looking for a nearby ${(after.vehicleCategory || "ride").toUpperCase()} from ${after.pickupLabel} to ${after.destinationLabel}.`,
       });
 
       if (isTestRide) {
@@ -313,47 +541,97 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
             bookingId,
             entityId: bookingId,
             isTestRide: true,
-            requestExpiresAtMs: Number(after.requestExpiresAtMs || Date.now() + 300000),
+            dataOnly: true,
+            ttlMs: RIDE_REQUEST_TIMEOUT_MS,
+            requestExpiresAtMs,
             channelId: "golocal_test_ride_requests_v2",
             title: "[TEST RIDE] New Sandbox Request",
             body: `${after.pickupLabel} -> ${after.destinationLabel} (₹0 Test Simulation)`,
+            extraData: buildRideRequestExtraData(after, 1),
           }
         );
         return;
       }
 
-      const onlineDrivers = await db
-        .collection("driver_directory")
-        .where("verificationStatus", "==", "verified")
-        .where("isOnline", "==", true)
-        .where("vehicleCategory", "==", after.vehicleCategory)
-        .limit(35)
-        .get();
-      await sendToUserIds(
-        onlineDrivers.docs.map((d) => d.data().driverId || d.id),
-        {
-          eventId: `driver_new_req_${bookingId}`,
-          dedupeKey: `driver_new_req_${bookingId}`,
-          type: "new_ride_request",
-          targetApp: "rider",
-          targetRole: "driver",
-          targetScreen: "requests",
+      const wave1Ids = await selectDriversByRadius(after, WAVE_1_RADIUS_KM, []);
+      if (wave1Ids.length > 0) {
+        await db.collection("bookings").doc(bookingId).set(
+          {
+            dispatchWave: 1,
+            dispatchedDriverIds: wave1Ids,
+            wave2AtMs: Date.now() + WAVE_2_DELAY_MS,
+            requestExpiresAtMs,
+          },
+          { merge: true }
+        );
+        await dispatchCommercialWave({
           bookingId,
-          entityId: bookingId,
-          isTestRide: false,
-          requestExpiresAtMs: Number(after.requestExpiresAtMs || Date.now() + 45000),
-          channelId: "golocal_ride_requests_v2",
-          title: "New Nearby Ride Request",
-          body: `${after.pickupLabel} -> ${after.destinationLabel} (Est. ₹${Math.round(after.estimatedFareInr || 0)})`,
+          booking: after,
+          driverIds: wave1Ids,
+          wave: 1,
+          requestExpiresAtMs,
+        });
+      } else {
+        const wave2Ids = await selectDriversByRadius(after, WAVE_2_RADIUS_KM, []);
+        await db.collection("bookings").doc(bookingId).set(
+          {
+            dispatchWave: 2,
+            dispatchedDriverIds: wave2Ids,
+            requestExpiresAtMs,
+          },
+          { merge: true }
+        );
+        if (wave2Ids.length > 0) {
+          await dispatchCommercialWave({
+            bookingId,
+            booking: after,
+            driverIds: wave2Ids,
+            wave: 2,
+            requestExpiresAtMs,
+          });
         }
-      );
+      }
       return;
     }
 
     if (prevStatus === newStatus) return;
 
+    if (prevStatus === "searching" && newStatus !== "searching") {
+      const dispatchedIds = Array.isArray(after.dispatchedDriverIds) ? after.dispatchedDriverIds : [];
+      const dismissTargets = dispatchedIds.filter((id) => id && id !== after.assignedDriverId);
+      if (dismissTargets.length > 0) {
+        const dismissType =
+          newStatus === "expired"
+            ? "ride_request_expired"
+            : newStatus === "cancelled"
+              ? "ride_request_cancelled"
+              : "ride_request_taken";
+        await sendToUserIds(dismissTargets, {
+          eventId: `dismiss_${bookingId}_${newStatus}`,
+          dedupeKey: `dismiss_${bookingId}_${newStatus}`,
+          type: dismissType,
+          targetApp: "rider",
+          targetRole: "driver",
+          targetScreen: "home",
+          bookingId,
+          entityId: bookingId,
+          isTestRide,
+          dataOnly: true,
+          skipInAppSync: true,
+          ttlMs: 30_000,
+          channelId: isTestRide ? "golocal_test_rides" : "golocal_rides",
+          title: "Ride Request Closed",
+          body: "This ride request is no longer available.",
+        });
+      }
+    }
+
     const customerMessages = isTestRide
       ? {
+          accepted: [
+            `${prefix}Test Rider Accepted`,
+            `${after.assignedDriverName || "Test Partner"} accepted your test ride. Open Active Ride for your 6-digit Test OTP.`,
+          ],
           assigned: [
             `${prefix}Test Rider Assigned`,
             `${after.assignedDriverName || "Test Partner"} assigned. Open Active Ride to view your 6-digit Test OTP.`,
@@ -372,8 +650,16 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
             `${prefix}Test Ride Cancelled`,
             `Booking cancelled (${after.cancellationReason || "cancelled"}).`,
           ],
+          expired: [
+            `${prefix}No Test Rider Found Nearby`,
+            "No approved test rider accepted within 45s. Tap to retry.",
+          ],
         }
       : {
+          accepted: [
+            "Rider Accepted Your Ride",
+            `${after.assignedDriverName || "Your rider"} accepted! Open Active Ride for your 6-digit Pickup OTP.`,
+          ],
           assigned: [
             "Rider Assigned",
             `${after.assignedDriverName || "Your rider"} confirmed. Open Active Ride for your 6-digit Pickup OTP.`,
@@ -395,6 +681,10 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
             "Ride Cancelled",
             `Booking cancelled (${after.cancellationReason || "cancelled"}).`,
           ],
+          expired: [
+            "No Rider Found Nearby",
+            `No nearby ${(after.vehicleCategory || "ride").toUpperCase()} rider accepted within 45s. Tap to retry.`,
+          ],
         };
 
     const msg = customerMessages[newStatus];
@@ -405,7 +695,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
         type: `booking_${newStatus}`,
         targetApp: "customer",
         targetRole: "customer",
-        targetScreen: newStatus === "completed" || newStatus === "cancelled" ? "bookings" : "booking",
+        targetScreen: newStatus === "completed" || newStatus === "cancelled" || newStatus === "expired" ? "bookings" : "booking",
         bookingId,
         entityId: bookingId,
         isTestRide,
@@ -415,7 +705,11 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       });
     }
 
-    if (after.assignedDriverId && !String(after.assignedDriverId).startsWith("test_driver_")) {
+    if (
+      newStatus !== "expired" &&
+      after.assignedDriverId &&
+      !String(after.assignedDriverId).startsWith("test_driver_")
+    ) {
       const driverTitle =
         newStatus === "cancelled"
           ? `${prefix}Booking Cancelled`
@@ -789,6 +1083,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
         .get();
       const targetRiders = sampleSnap.docs.map((d) => d.data().uid || d.id).filter(Boolean);
       if (targetRiders.length > 0) {
+        const sampleExpiresAtMs = Number(after.requestExpiresAtMs || Date.now() + RIDE_REQUEST_TIMEOUT_MS);
         await sendToUserIds(targetRiders, {
           eventId: `sample_request_${rideId}`,
           dedupeKey: `sample_request_${rideId}`,
@@ -799,9 +1094,13 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
           bookingId: rideId,
           entityId: rideId,
           isSampleRide: true,
+          dataOnly: true,
+          ttlMs: RIDE_REQUEST_TIMEOUT_MS,
+          requestExpiresAtMs: sampleExpiresAtMs,
           channelId: "golocal_sample_ride_requests_v2",
           title: `SAMPLE RIDE • ₹${Math.round(after.estimatedFareInr || 0)}`,
           body: `${routeLabel} • ${(after.distanceKm || 0).toFixed(1)} km`,
+          extraData: buildRideRequestExtraData(after, 1),
         });
       }
       return;
@@ -983,9 +1282,66 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     return { statusCode: 200, body: { ok: true, bookingId, status: nextPaymentStatus } };
   }
 
+  async function syncOwnerAdminClaims({ uid, email, emailVerified, adminEmailsEnv, authApi, rtdbApi }) {
+    if (!uid || !email || emailVerified !== true) {
+      return { granted: false, reason: "unverified_or_missing_identity" };
+    }
+    const allowed = String(adminEmailsEnv || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const normalizedEmail = String(email).trim().toLowerCase();
+    if (!allowed.includes(normalizedEmail)) {
+      return { granted: false, reason: "not_in_admin_allowlist" };
+    }
+    const userRecord = await authApi.getUser(uid);
+    const prevClaims = userRecord?.customClaims || {};
+    await authApi.setCustomUserClaims(uid, {
+      ...prevClaims,
+      admin: true,
+      ownerAdmin: true,
+    });
+    await db.collection("admins").doc(uid).set(
+      {
+        uid,
+        email: normalizedEmail,
+        role: "owner_admin",
+        updatedAt: fieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    if (rtdbApi) {
+      await rtdbApi.ref(`auth_roles/owners/${uid}`).set({
+        uid,
+        updatedAt: Date.now(),
+      });
+    }
+    return { granted: true, isAdmin: true, isOwnerAdmin: true };
+  }
+
+  async function syncDelegatedAdminClaims({ uid, afterExists, authApi }) {
+    if (!uid || !authApi) return { updated: false };
+    const userRecord = await authApi.getUser(uid);
+    const prevClaims = userRecord?.customClaims || {};
+    if (afterExists) {
+      await authApi.setCustomUserClaims(uid, { ...prevClaims, admin: true });
+      return { updated: true, admin: true };
+    }
+    if (prevClaims.ownerAdmin === true) {
+      return { updated: false, preservedOwner: true };
+    }
+    const nextClaims = { ...prevClaims };
+    delete nextClaims.admin;
+    await authApi.setCustomUserClaims(uid, nextClaims);
+    return { updated: true, admin: false };
+  }
+
   return {
     sendToUserIds,
     handleBookingWrite,
+    expandDispatchWaveIfNeeded,
+    expireSearchingBookingIfUnanswered,
+    sweepExpiredSearchingBookings,
     handleRideOfferWrite,
     handleBookingChatMessageCreate,
     handleDriverProfileWrite,
@@ -998,11 +1354,20 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
     handleBusBookingWrite,
     runDailyDocumentExpiryReminder,
     handlePaymentWebhook,
+    syncOwnerAdminClaims,
+    syncDelegatedAdminClaims,
   };
 }
 
 module.exports = {
+  RIDE_REQUEST_TIMEOUT_MS,
+  WAVE_1_RADIUS_KM,
+  WAVE_2_RADIUS_KM,
+  WAVE_2_DELAY_MS,
   INVALID_TOKEN_CODES,
+  isValidLatLng,
+  haversineKm,
+  isCategoryCompatible,
   normalizeAppVariant,
   clickActionForApp,
   channelForPayload,

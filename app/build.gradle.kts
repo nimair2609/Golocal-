@@ -71,14 +71,18 @@ android {
 
   buildTypes {
     release {
+      val enableTestSandboxRelease = (System.getenv("ENABLE_TEST_SANDBOX") ?: "false").toBoolean()
+      buildConfigField("boolean", "ENABLE_TEST_SANDBOX", enableTestSandboxRelease.toString())
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      buildConfigField("boolean", "ENABLE_TEST_SANDBOX", "true")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
@@ -108,6 +112,7 @@ secrets {
     listOf(
       "FIREBASE_APPCHECK_DEBUG_TOKEN",
       "PAYMENT_WEBHOOK_SECRET",
+      "ADMIN_EMAILS",
       "OSM_TILE_URL_TEMPLATE",
       "OSRM_BASE_URL",
       "GEOCODING_BASE_URL",
@@ -234,7 +239,8 @@ dependencies {
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
   // implementation(libs.firebase.appcheck.recaptcha)
-  // implementation(libs.firebase.appcheck.debug)
+  releaseImplementation(libs.firebase.appcheck.playintegrity)
+  debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)

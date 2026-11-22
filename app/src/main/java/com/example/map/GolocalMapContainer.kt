@@ -44,6 +44,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.data.map.MapProviderConfig
 import com.example.data.model.DriverDirectoryEntry
 import com.example.data.model.TripLocation
 import com.example.ui.components.InteractiveBengalMapCanvas
@@ -64,30 +65,6 @@ import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
-
-private const val OSM_STYLE_JSON = """
-{
-  "version": 8,
-  "name": "GoLocal OSM",
-  "sources": {
-    "osm-raster": {
-      "type": "raster",
-      "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-      "tileSize": 256,
-      "attribution": "© OpenStreetMap contributors"
-    }
-  },
-  "layers": [
-    {
-      "id": "osm-base",
-      "type": "raster",
-      "source": "osm-raster",
-      "minzoom": 0,
-      "maxzoom": 19
-    }
-  ]
-}
-"""
 
 private const val SRC_ROUTE = "golocal-route-src"
 private const val SRC_PICKUP = "golocal-pickup-src"
@@ -254,6 +231,7 @@ fun GolocalMapContainer(
     val mapView = remember { MapView(context) }
     var mapController by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember { mutableStateOf(false) }
+    var isMapDestroyed by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(!enableCenterPinSelection) }
     var lastCameraUpdateMs by remember { mutableLongStateOf(0L) }
     var lastDriverGeo by remember { mutableStateOf<GeoPoint?>(null) }
@@ -261,22 +239,36 @@ fun GolocalMapContainer(
 
     DisposableEffect(lifecycleOwner, mapView) {
         val observer = LifecycleEventObserver { _, event ->
+            if (isMapDestroyed) return@LifecycleEventObserver
             when (event) {
-                Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
-                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
-                Lifecycle.Event.ON_STOP -> mapView.onStop()
+                Lifecycle.Event.ON_START -> runCatching { mapView.onStart() }
+                Lifecycle.Event.ON_RESUME -> runCatching { mapView.onResume() }
+                Lifecycle.Event.ON_PAUSE -> runCatching { mapView.onPause() }
+                Lifecycle.Event.ON_STOP -> runCatching { mapView.onStop() }
                 Lifecycle.Event.ON_DESTROY -> {
+                    isMapDestroyed = true
+                    styleReady = false
                     activeMarkerAnimator?.cancel()
-                    mapView.onDestroy()
+                    activeMarkerAnimator = null
+                    mapController = null
+                    runCatching { mapView.onDestroy() }
                 }
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            activeMarkerAnimator?.cancel()
             lifecycleOwner.lifecycle.removeObserver(observer)
+            activeMarkerAnimator?.cancel()
+            activeMarkerAnimator = null
+            styleReady = false
+            mapController = null
+            if (!isMapDestroyed) {
+                isMapDestroyed = true
+                runCatching { mapView.onPause() }
+                runCatching { mapView.onStop() }
+                runCatching { mapView.onDestroy() }
+            }
         }
     }
 
@@ -328,10 +320,19 @@ fun GolocalMapContainer(
 
     // Update static endpoints & route GeoJson without re-creating style layers
     LaunchedEffect(styleReady, routeState, pickupLat, pickupLng, destLat, destLng, onlineDrivers, userLat, userLng) {
+        if (isMapDestroyed) return@LaunchedEffect
         val map = mapController ?: return@LaunchedEffect
         val style = map.style ?: return@LaunchedEffect
         if (!styleReady || !style.isFullyLoaded) return@LaunchedEffect
         updateStyleSources(style)
+    }
+
+    // Recenter camera only when endpoints or computed route change (never hijack pan/zoom when fleet updates)
+    LaunchedEffect(styleReady, routeState, pickupLat, pickupLng, destLat, destLng) {
+        if (isMapDestroyed) return@LaunchedEffect
+        val map = mapController ?: return@LaunchedEffect
+        val style = map.style ?: return@LaunchedEffect
+        if (!styleReady || !style.isFullyLoaded) return@LaunchedEffect
         if (autoFollow && !enableCenterPinSelection && System.currentTimeMillis() - lastCameraUpdateMs >= 1500L) {
             recenterCamera(map, animated = !prefersReducedMotion)
         }
@@ -339,6 +340,7 @@ fun GolocalMapContainer(
 
     // Smooth marker interpolation decoupled from throttled camera follow
     LaunchedEffect(styleReady, liveTripLocation?.lat, liveTripLocation?.lng, prefersReducedMotion) {
+        if (isMapDestroyed) return@LaunchedEffect
         val map = mapController ?: return@LaunchedEffect
         val style = map.style ?: return@LaunchedEffect
         val live = liveTripLocation ?: return@LaunchedEffect
@@ -359,6 +361,7 @@ fun GolocalMapContainer(
                 duration = 900L
                 interpolator = LinearInterpolator()
                 addUpdateListener { anim ->
+                    if (isMapDestroyed || !style.isFullyLoaded) return@addUpdateListener
                     val fraction = anim.animatedValue as Float
                     val lat = start.lat + (target.lat - start.lat) * fraction
                     val lng = start.lng + (target.lng - start.lng) * fraction
@@ -406,7 +409,8 @@ fun GolocalMapContainer(
                                 }
                             }
                         }
-                        map.setStyle(Style.Builder().fromJson(OSM_STYLE_JSON)) { style ->
+                        map.setStyle(Style.Builder().fromJson(MapProviderConfig.buildOsmStyleJson())) { style ->
+                            if (isMapDestroyed) return@setStyle
                             style.addSource(GeoJsonSource(SRC_ROUTE, buildLineGeoJson(emptyList())))
                             style.addSource(GeoJsonSource(SRC_PICKUP, buildSinglePointGeoJson(pickupLat, pickupLng)))
                             style.addSource(GeoJsonSource(SRC_DROP, buildSinglePointGeoJson(destLat, destLng)))

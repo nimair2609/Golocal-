@@ -240,12 +240,39 @@ fun RiderAuthenticatedShell(
 
         val completedAccount = (registrationStatus as? RegistrationStatus.Completed)?.account
         if (completedAccount?.isSampleRiderAccount() == true) {
-            SampleRiderDashboardShell(
-                currentUserId = currentUserId,
-                sessionViewModel = sessionViewModel,
-                deepLinkTarget = deepLinkTarget,
-                onDeepLinkHandled = onDeepLinkHandled
-            )
+            if (com.example.BuildConfig.ENABLE_TEST_SANDBOX) {
+                SampleRiderDashboardShell(
+                    currentUserId = currentUserId,
+                    sessionViewModel = sessionViewModel,
+                    deepLinkTarget = deepLinkTarget,
+                    onDeepLinkHandled = onDeepLinkHandled
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Sample Rider Sandbox Disabled",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            text = "Sample rider testing is disabled in commercial release builds.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Button(onClick = { signOut(scope = scope, context = context) }) {
+                            Text("Sign out")
+                        }
+                    }
+                }
+            }
             return@GolocalTheme
         }
 
@@ -346,24 +373,31 @@ fun RiderAuthenticatedShell(
                 activeBooking = activeAssignedBooking,
                 isTestMode = inTestRiderMode
             )
+            val gpsHealthNow = RiderLocationForegroundService.gpsHealth.value
             if (shouldTrackGps && LocationCoordinator.resolveAccessState(context) == LocationAccessState.GRANTED_READY) {
-                val intervalMs = if (activeAssignedBooking != null) 2_500L else 4_000L
-                LocationCoordinator.observeLocationUpdates(context, intervalMs = intervalMs)
-                    .catch { /* keep foreground UI resilient if GPS provider stops */ }
-                    .collect { fix ->
-                        driverViewModel.broadcastGpsSample(
-                            lat = fix.lat,
-                            lng = fix.lng,
-                            accuracyMeters = fix.accuracyMeters,
-                            speedMps = fix.speedMps,
-                            headingDeg = fix.bearingDeg,
-                            isTestRiderMode = inTestRiderMode
-                        )
-                    }
+                if (!gpsHealthNow.isServiceRunning) {
+                    val intervalMs = if (activeAssignedBooking != null) 2_500L else 4_000L
+                    LocationCoordinator.observeLocationUpdates(context, intervalMs = intervalMs)
+                        .catch { /* keep foreground UI resilient if GPS provider stops */ }
+                        .collect { fix ->
+                            if (!RiderLocationForegroundService.gpsHealth.value.isServiceRunning) {
+                                driverViewModel.broadcastGpsSample(
+                                    lat = fix.lat,
+                                    lng = fix.lng,
+                                    accuracyMeters = fix.accuracyMeters,
+                                    speedMps = fix.speedMps,
+                                    headingDeg = fix.bearingDeg,
+                                    isTestRiderMode = inTestRiderMode
+                                )
+                            }
+                        }
+                }
             } else {
+                val fallbackLat = gpsHealthNow.lastLat ?: gps.lat ?: 0.0
+                val fallbackLng = gpsHealthNow.lastLng ?: gps.lng ?: 0.0
                 driverViewModel.stopLiveLocationBroadcast(
-                    lastLat = gps.lat ?: 0.0,
-                    lastLng = gps.lng ?: 0.0
+                    lastLat = fallbackLat,
+                    lastLng = fallbackLng
                 )
             }
         }
@@ -399,15 +433,22 @@ fun RiderAuthenticatedShell(
                     gstPercent = req.gstPercent,
                     commissionPercent = req.commissionPercent
                 ).toInt()
+                val reqTitle = "New ${req.vehicleCategory.uppercase()} Ride • Est. Net ₹$netEst"
+                val reqBody = "${req.pickupLabel} -> ${req.destinationLabel} (${req.distanceKm} km)"
                 NotificationHelper.displayRideRequestAlert(
                     context = context,
                     bookingId = req.id,
-                    title = "New ${req.vehicleCategory.uppercase()} Ride • Est. Net ₹$netEst",
-                    body = "${req.pickupLabel} -> ${req.destinationLabel} (${req.distanceKm} km)",
+                    title = reqTitle,
+                    body = reqBody,
                     isTestRide = false,
                     soundEnabled = prefs.rideRequestSoundEnabled,
                     vibrationEnabled = prefs.rideRequestVibrationEnabled,
-                    notificationsEnabled = prefs.notificationsEnabled
+                    notificationsEnabled = prefs.notificationsEnabled,
+                    payload = com.example.notifications.RideRequestPayload.fromBooking(
+                        booking = req,
+                        title = reqTitle,
+                        body = reqBody
+                    )
                 )
             }
             previouslyAlertedIds = currentIds
@@ -614,12 +655,21 @@ fun RiderAuthenticatedShell(
                                                     onOpenRequests = { selectedTab = "requests" },
                                                     onOpenNotifications = { selectedTab = "notifications" }
                                                 )
-                                                "requests" -> RiderRequestsTab(
-                                                    profile = profile,
-                                                    driverViewModel = driverViewModel,
-                                                    currentLat = gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT,
-                                                    currentLng = gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
-                                                )
+                                                "requests" -> {
+                                                    val serviceHealth by RiderLocationForegroundService.gpsHealth.collectAsStateWithLifecycle()
+                                                    val reqLat = serviceHealth.lastLat?.takeIf {
+                                                        com.example.map.GpsBroadcastThrottle.isValidCoordinate(it, serviceHealth.lastLng ?: 0.0)
+                                                    } ?: gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT
+                                                    val reqLng = serviceHealth.lastLng?.takeIf {
+                                                        com.example.map.GpsBroadcastThrottle.isValidCoordinate(serviceHealth.lastLat ?: 0.0, it)
+                                                    } ?: gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
+                                                    RiderRequestsTab(
+                                                        profile = profile,
+                                                        driverViewModel = driverViewModel,
+                                                        currentLat = reqLat,
+                                                        currentLng = reqLng
+                                                    )
+                                                }
                                                 "earnings" -> RiderEarningsHistoryTab(profile = profile, driverViewModel = driverViewModel)
                                                 "notifications" -> RiderNotificationsTab(
                                                     sessionViewModel = sessionViewModel,

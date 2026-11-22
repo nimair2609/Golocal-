@@ -10,12 +10,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.notifications.NotificationDeepLinkTarget
 import com.example.notifications.NotificationHelper
+import com.example.security.AppCheckHelper
 
 class RiderActivity : ComponentActivity() {
     private var deepLinkState by mutableStateOf<NotificationDeepLinkTarget?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppCheckHelper.configureAppCheck(this, intent)
         enableEdgeToEdge()
         NotificationHelper.ensureChannels(this)
         deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)

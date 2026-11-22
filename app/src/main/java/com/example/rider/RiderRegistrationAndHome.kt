@@ -702,8 +702,11 @@ fun RiderHomeDashboardTab(
             .filter { it.status == ExpiryStatus.EXPIRED || it.status == ExpiryStatus.EXPIRING_SOON }
     }
 
-    val currentLat = gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT
-    val currentLng = gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG
+    val gpsHealth by com.example.data.tracking.RiderLocationForegroundService.gpsHealth.collectAsStateWithLifecycle()
+    val hasLiveServiceFix = gpsHealth.lastLat != null && gpsHealth.lastLng != null &&
+        com.example.map.GpsBroadcastThrottle.isValidCoordinate(gpsHealth.lastLat!!, gpsHealth.lastLng!!)
+    val currentLat = if (hasLiveServiceFix) gpsHealth.lastLat!! else (gps.lat ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LAT)
+    val currentLng = if (hasLiveServiceFix) gpsHealth.lastLng!! else (gps.lng ?: com.example.domain.BoraiLaunchConfig.DEFAULT_LNG)
 
     val isVerifyingTestOtp by driverViewModel.isVerifyingTestOtp.collectAsStateWithLifecycle()
     val testOtpError by driverViewModel.testOtpError.collectAsStateWithLifecycle()
@@ -711,7 +714,6 @@ fun RiderHomeDashboardTab(
     val commercialOtpError by driverViewModel.commercialOtpError.collectAsStateWithLifecycle()
     val openRequestsError by driverViewModel.openRequestsError.collectAsStateWithLifecycle()
     val assignedBookingsError by driverViewModel.assignedBookingsError.collectAsStateWithLifecycle()
-    val gpsHealth by com.example.data.tracking.RiderLocationForegroundService.gpsHealth.collectAsStateWithLifecycle()
 
     if (activeTrip != null) {
         RiderActiveTripSheet(
@@ -815,10 +817,12 @@ fun RiderHomeDashboardTab(
         )
     }
 
-    if (showCallDialog && activeTrip != null && activeCallContact != null && activeCallContact!!.customerPhone.isNotBlank()) {
+    val currentTrip = activeTrip
+    val callContact = activeCallContact
+    if (showCallDialog && currentTrip != null && callContact != null && callContact.customerPhone.isNotBlank()) {
         CallPeerConfirmDialog(
-            peerLabel = activeTrip.customerName.trim().substringBefore(" ").ifBlank { "Passenger" },
-            phoneNumber = activeCallContact!!.customerPhone,
+            peerLabel = currentTrip.customerName.trim().substringBefore(" ").ifBlank { "Passenger" },
+            phoneNumber = callContact.customerPhone,
             onDismiss = { showCallDialog = false },
             onOpenChat = {
                 driverViewModel.markActiveChatRead()

@@ -20,14 +20,15 @@ service cloud.firestore {
 
     function isBootstrappedAdmin() {
       return isSignedIn() &&
-             'email_verified' in request.auth.token &&
-             request.auth.token.email_verified == true &&
-             'email' in request.auth.token &&
-             request.auth.token.email == 'renukadas083@gmail.com';
+             ('ownerAdmin' in request.auth.token) &&
+             request.auth.token.ownerAdmin == true &&
+             ('admin' in request.auth.token) &&
+             request.auth.token.admin == true;
     }
 
     function isAdmin() {
       return isBootstrappedAdmin() ||
+             (isSignedIn() && ('admin' in request.auth.token) && request.auth.token.admin == true) ||
              (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
@@ -298,7 +299,7 @@ service cloud.firestore {
              (!('gstPercent' in data) || data.gstPercent is number) &&
              data.paymentMethod in ['cash', 'upi'] &&
              data.paymentStatus in ['pending', 'pending_verification', 'settled_cash', 'paid', 'refunded'] &&
-             data.status in ['searching', 'assigned', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled'] &&
+             data.status in ['searching', 'assigned', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled', 'expired'] &&
              isOptionalString(data, 'assignedDriverId', 128) &&
              isOptionalString(data, 'assignedDriverName', 100) &&
              isOptionalString(data, 'assignedVehicleLabel', 100) &&
@@ -337,7 +338,7 @@ service cloud.firestore {
     }
 
     function isValidBookingUpdate(data) {
-      return data.status in ['searching', 'assigned', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled'] &&
+      return data.status in ['searching', 'assigned', 'arriving', 'arrived', 'in_progress', 'completed', 'cancelled', 'expired'] &&
              data.paymentStatus in ['pending', 'pending_verification', 'settled_cash', 'paid', 'refunded'] &&
              (!('agreedFareInr' in data) || (data.agreedFareInr is number && data.agreedFareInr >= 0)) &&
              (!('assignedDriverId' in data) || (data.assignedDriverId is string && data.assignedDriverId.size() <= 128)) &&
@@ -1035,6 +1036,12 @@ service cloud.firestore {
                             incoming().status == 'cancelled' &&
                             incoming().diff(existing()).affectedKeys().hasOnly([
                               'status', 'cancellationReason', 'cancelledBy', 'cancelledByRole', 'cancellationCategory', 'updatedAt'
+                            ])) ||
+                           // Expire searching request when 45s dispatch window elapses
+                           (existing().status == 'searching' &&
+                            incoming().status == 'expired' &&
+                            incoming().diff(existing()).affectedKeys().hasOnly([
+                              'status', 'cancellationReason', 'updatedAt'
                             ])) ||
                            // Submit rating after completion
                            (existing().status == 'completed' &&

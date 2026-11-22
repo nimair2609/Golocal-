@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.content.Context
 import android.util.Log
 import com.example.R
+import com.example.data.map.MapProviderConfig
 import com.example.data.model.Booking
 import com.example.data.model.TripLocation
 import com.example.map.GpsBroadcastThrottle
@@ -12,9 +13,12 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import java.util.Date
 
@@ -72,13 +76,18 @@ class RealtimeLocationRepository(context: Context) {
     private val database: FirebaseDatabase? by lazy {
         runCatching {
             if (FirebaseApp.getApps(appContext).isEmpty()) return@runCatching null
-            val url = appContext.getString(R.string.firebase_rtdb_url)
-            if (url.isBlank()) return@runCatching null
-            FirebaseDatabase.getInstance(url)
+            val configured = appContext.getString(R.string.firebase_rtdb_url).ifBlank {
+                MapProviderConfig.firebaseRtdbUrl
+            }
+            if (configured.isBlank()) return@runCatching null
+            FirebaseDatabase.getInstance(configured)
         }.getOrNull()
     }
 
-    private val offlineRetryBuffer = ArrayDeque<RealtimeLocationPayload>(16)
+    private val bufferMutex = Mutex()
+    private var pendingRetrySample: RealtimeLocationPayload? = null
+    private var registeredDisconnectDriverId: String? = null
+    private var registeredDisconnectBookingId: String? = null
 
     suspend fun publishDriverAndTripLocation(
         driverId: String,
@@ -99,7 +108,7 @@ class RealtimeLocationRepository(context: Context) {
             lng = lng,
             accuracyMeters = accuracyMeters.toDouble().coerceAtLeast(0.0),
             speedMps = speedMps.toDouble().coerceAtLeast(0.0),
-            headingDeg = ((headingDeg % 360f) + 360f) % 360f.toDouble(),
+            headingDeg = (((headingDeg % 360f) + 360f) % 360f).toDouble(),
             tripStatus = activeBooking?.status.orEmpty(),
             trackingStatus = trackingStatus,
             isTestRide = activeBooking?.let { it.isTestRide || it.testMode } ?: false,
@@ -108,11 +117,26 @@ class RealtimeLocationRepository(context: Context) {
         if (!RealtimeLocationValidator.isValidTelemetry(payload, nowMs)) return
 
         val rtdb = database ?: return
-        flushBufferedSamples(rtdb)
-        writeSample(rtdb, payload)
+        val stalePending = bufferMutex.withLock {
+            val prev = pendingRetrySample
+            pendingRetrySample = null
+            prev
+        }
+        // Only write the latest live sample; if an earlier sample failed and wasn't overwritten, we already have a newer fix now.
+        if (!writeSample(rtdb, payload)) {
+            bufferMutex.withLock {
+                pendingRetrySample = payload
+            }
+            return
+        }
+        if (stalePending != null && stalePending.bookingId.isNotBlank() && stalePending.bookingId != payload.bookingId &&
+            RealtimeLocationValidator.isValidTelemetry(stalePending)
+        ) {
+            writeSample(rtdb, stalePending)
+        }
     }
 
-    private suspend fun writeSample(rtdb: FirebaseDatabase, payload: RealtimeLocationPayload) {
+    private suspend fun writeSample(rtdb: FirebaseDatabase, payload: RealtimeLocationPayload): Boolean {
         val driverMap = mutableMapOf<String, Any>(
             "driverId" to payload.driverId,
             "lat" to payload.lat,
@@ -127,10 +151,15 @@ class RealtimeLocationRepository(context: Context) {
             driverMap["activeBookingId"] = payload.bookingId
         }
 
-        try {
-            rtdb.getReference("live_locations/drivers/${payload.driverId}")
-                .setValue(driverMap)
-                .await()
+        return try {
+            val driverRef = rtdb.getReference("live_locations/drivers/${payload.driverId}")
+            driverRef.setValue(driverMap).await()
+            if (registeredDisconnectDriverId != payload.driverId) {
+                runCatching {
+                    driverRef.onDisconnect().updateChildren(mapOf("trackingStatus" to "paused_gps_lost"))
+                    registeredDisconnectDriverId = payload.driverId
+                }
+            }
 
             if (payload.bookingId.isNotBlank() && payload.customerId.isNotBlank()) {
                 val tripMap = mapOf(
@@ -147,42 +176,50 @@ class RealtimeLocationRepository(context: Context) {
                     "isTestRide" to payload.isTestRide,
                     "updatedAtEpochMs" to payload.updatedAtEpochMs
                 )
-                rtdb.getReference("live_locations/trips/${payload.bookingId}")
-                    .setValue(tripMap)
-                    .await()
+                val tripRef = rtdb.getReference("live_locations/trips/${payload.bookingId}")
+                tripRef.setValue(tripMap).await()
+                if (registeredDisconnectBookingId != payload.bookingId) {
+                    runCatching {
+                        tripRef.onDisconnect().updateChildren(mapOf("trackingStatus" to "paused_gps_lost"))
+                        registeredDisconnectBookingId = payload.bookingId
+                    }
+                }
             }
+            true
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (e: Exception) {
             Log.w(TAG, "RTDB live location publish buffered for retry", e)
-            if (offlineRetryBuffer.size >= 12) offlineRetryBuffer.removeFirst()
-            offlineRetryBuffer.addLast(payload)
-        }
-    }
-
-    private suspend fun flushBufferedSamples(rtdb: FirebaseDatabase) {
-        while (offlineRetryBuffer.isNotEmpty()) {
-            val next = offlineRetryBuffer.removeFirst()
-            runCatching {
-                val latestCheck = RealtimeLocationValidator.isValidTelemetry(next)
-                if (latestCheck) {
-                    rtdb.getReference("live_locations/drivers/${next.driverId}")
-                        .child("lat").get().await()
-                    writeSample(rtdb, next)
-                }
-            }.onFailure {
-                offlineRetryBuffer.addFirst(next)
-                return
-            }
+            false
         }
     }
 
     suspend fun stopTripTracking(driverId: String, bookingId: String?, customerId: String?, lastLat: Double, lastLng: Double) {
         val rtdb = database ?: return
         val nowMs = System.currentTimeMillis()
+        bufferMutex.withLock { pendingRetrySample = null }
         runCatching {
+            val driverRef = rtdb.getReference("live_locations/drivers/$driverId")
+            runCatching { driverRef.onDisconnect().cancel() }
+            registeredDisconnectDriverId = null
             if (GpsBroadcastThrottle.isValidCoordinate(lastLat, lastLng)) {
-                rtdb.getReference("live_locations/drivers/$driverId")
-                    .setValue(
+                driverRef.setValue(
+                    mapOf(
+                        "driverId" to driverId,
+                        "lat" to lastLat,
+                        "lng" to lastLng,
+                        "trackingStatus" to "stopped",
+                        "updatedAtEpochMs" to nowMs
+                    )
+                ).await()
+                if (!bookingId.isNullOrBlank() && !customerId.isNullOrBlank()) {
+                    val tripRef = rtdb.getReference("live_locations/trips/$bookingId")
+                    runCatching { tripRef.onDisconnect().cancel() }
+                    registeredDisconnectBookingId = null
+                    tripRef.setValue(
                         mapOf(
+                            "bookingId" to bookingId,
+                            "customerId" to customerId,
                             "driverId" to driverId,
                             "lat" to lastLat,
                             "lng" to lastLng,
@@ -190,19 +227,6 @@ class RealtimeLocationRepository(context: Context) {
                             "updatedAtEpochMs" to nowMs
                         )
                     ).await()
-                if (!bookingId.isNullOrBlank() && !customerId.isNullOrBlank()) {
-                    rtdb.getReference("live_locations/trips/$bookingId")
-                        .setValue(
-                            mapOf(
-                                "bookingId" to bookingId,
-                                "customerId" to customerId,
-                                "driverId" to driverId,
-                                "lat" to lastLat,
-                                "lng" to lastLng,
-                                "trackingStatus" to "stopped",
-                                "updatedAtEpochMs" to nowMs
-                            )
-                        ).await()
                 }
             }
         }

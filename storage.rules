@@ -8,12 +8,15 @@ service firebase.storage {
 
     function isBootstrappedAdmin() {
       return isSignedIn() &&
-             request.auth.token.email_verified == true &&
-             request.auth.token.email == 'renukadas083@gmail.com';
+             ('ownerAdmin' in request.auth.token) &&
+             request.auth.token.ownerAdmin == true &&
+             ('admin' in request.auth.token) &&
+             request.auth.token.admin == true;
     }
 
     function isAdmin() {
       return isBootstrappedAdmin() ||
+             (isSignedIn() && ('admin' in request.auth.token) && request.auth.token.admin == true) ||
              (isSignedIn() &&
               firestore.exists(/databases/ai-studio-android-golocal-e1a2a68b-450b-4d1b-817a-6a38c9c578bb/documents/admins/$(request.auth.uid)));
     }

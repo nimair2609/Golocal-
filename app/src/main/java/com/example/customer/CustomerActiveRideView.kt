@@ -131,7 +131,8 @@ fun CustomerActiveRideView(
     testOtpError: String? = null,
     rideOtpSecret: RideOtpSecret? = null,
     onVerifyTestOtp: (String) -> Unit = {},
-    onClearTestOtpError: () -> Unit = {}
+    onClearTestOtpError: () -> Unit = {},
+    onSearchTimeout: (String) -> Unit = {}
 ) {
     val isTestRide = booking.isTestRide || booking.testMode
     var declinedOfferIds by remember(booking.id) { mutableStateOf<Set<String>>(emptySet()) }
@@ -216,6 +217,36 @@ fun CustomerActiveRideView(
                 }
 
                 // Bottom Locating Sheet
+                val searchExpiresAtMs = remember(booking.id, booking.requestExpiresAtMs) {
+                    booking.requestExpiresAtMs.takeIf { it > 0L }
+                        ?: (System.currentTimeMillis() + com.example.data.repository.GolocalRepository.RIDE_REQUEST_TIMEOUT_MS)
+                }
+                var searchRemainingSeconds by remember(booking.id, searchExpiresAtMs) {
+                    mutableIntStateOf(
+                        ((searchExpiresAtMs - System.currentTimeMillis()) / 1000L)
+                            .toInt()
+                            .coerceIn(0, 45)
+                    )
+                }
+                var expiryTriggered by remember(booking.id) { mutableStateOf(false) }
+                LaunchedEffect(booking.id, searchExpiresAtMs) {
+                    while (true) {
+                        val secs = ((searchExpiresAtMs - System.currentTimeMillis()) / 1000L)
+                            .toInt()
+                            .coerceAtLeast(0)
+                        searchRemainingSeconds = secs
+                        if (secs <= 0) {
+                            if (!expiryTriggered && !isTestRide) {
+                                expiryTriggered = true
+                                onSearchTimeout(booking.id)
+                            }
+                            break
+                        }
+                        delay(1000L)
+                    }
+                }
+                val isWaveTwo = searchRemainingSeconds in 0..25
+
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -236,33 +267,51 @@ fun CustomerActiveRideView(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (isTestRide) {
-                                    "Test Ride queued — assigning simulated driver"
-                                } else if (visibleOffers.isEmpty()) {
-                                    "Locating rider nearby..."
-                                } else {
-                                    "${visibleOffers.size} rider offer(s) ready"
+                                text = when {
+                                    isTestRide -> "Test Ride queued — assigning simulated driver"
+                                    visibleOffers.isNotEmpty() -> "${visibleOffers.size} rider offer(s) ready"
+                                    searchRemainingSeconds <= 0 -> "No rider found nearby — updating..."
+                                    isWaveTwo -> "Expanding search to 6 km..."
+                                    else -> "Searching riders within 3 km..."
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.weight(1f)
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                if (isTestRide) {
+                                if (!isTestRide) {
+                                    GolocalStatusBadge(
+                                        label = "${searchRemainingSeconds}s",
+                                        tone = if (searchRemainingSeconds <= 10) "error" else "warning"
+                                    )
+                                } else {
                                     GolocalStatusBadge(label = "TEST RIDE", tone = "warning")
                                 }
                                 GolocalStatusBadge(label = booking.vehicleCategory.uppercase(), tone = "info")
                             }
                         }
 
-                        LinearProgressIndicator(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(999.dp)),
-                            color = GolocalPrimaryBlue,
-                            trackColor = MaterialTheme.colorScheme.primaryContainer
-                        )
+                        if (isTestRide) {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(999.dp)),
+                                color = GolocalPrimaryBlue,
+                                trackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { (searchRemainingSeconds.toFloat() / 45f).coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .testTag("customer_searching_countdown_bar"),
+                                color = if (searchRemainingSeconds <= 10) GolocalError else GolocalPrimaryBlue,
+                                trackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        }
 
                         Text(
                             text = "${booking.pickupLabel} -> ${booking.destinationLabel}",
@@ -727,9 +776,14 @@ fun CustomerActiveRideView(
                                 speedMps = loc.speedKmph / 3.6,
                                 vehicleCategory = booking.vehicleCategory
                             )
-                            val gpsStatus = when (loc.trackingStatus) {
-                                "paused_gps_lost" -> "GPS Paused"
-                                "stopped" -> "Tracking Stopped"
+                            val ageSec = loc.updatedAt?.toDate()?.time?.let { ts ->
+                                ((System.currentTimeMillis() - ts) / 1000L).coerceAtLeast(0L)
+                            } ?: 0L
+                            val isDelayedSignal = loc.trackingStatus == "active" && ageSec > 35L
+                            val gpsStatus = when {
+                                loc.trackingStatus == "paused_gps_lost" -> "GPS Paused"
+                                loc.trackingStatus == "stopped" -> "Tracking Stopped"
+                                isDelayedSignal -> "GPS Delayed (${ageSec}s)"
                                 else -> "Live GPS"
                             }
                             Text(
@@ -742,7 +796,11 @@ fun CustomerActiveRideView(
                                     loc.headingDeg
                                 ),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (loc.trackingStatus == "paused_gps_lost") GolocalWarning else MaterialTheme.colorScheme.primary,
+                                color = if (loc.trackingStatus == "paused_gps_lost" || isDelayedSignal) {
+                                    GolocalWarning
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.testTag("customer_live_telemetry_line")
                             )

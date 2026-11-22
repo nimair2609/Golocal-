@@ -230,14 +230,17 @@ export async function searchNominatim(query) {
 
 export async function resolvePortalRole(user) {
   if (!user) return { isOwnerAdmin: false, isOperationsStaff: false };
-  if (user.emailVerified && user.email === "renukadas083@gmail.com") {
-    return { isOwnerAdmin: true, isOperationsStaff: false };
-  }
-  const [adminSnap, opsSnap] = await Promise.all([
+  const [tokenResult, adminSnap, opsSnap] = await Promise.all([
+    user.getIdTokenResult().catch(() => null),
     getDoc(doc(db, "admins", user.uid)).catch(() => null),
     getDoc(doc(db, "operations_staff", user.uid)).catch(() => null),
   ]);
-  const isOwnerAdmin = Boolean(adminSnap && adminSnap.exists());
+  const claims = tokenResult?.claims || {};
+  const isOwnerAdmin = Boolean(
+    claims.ownerAdmin === true ||
+      claims.admin === true ||
+      (adminSnap && adminSnap.exists())
+  );
   const isOperationsStaff = Boolean(
     opsSnap && opsSnap.exists() && opsSnap.data()?.isActive === true
   );

@@ -15,7 +15,7 @@ const DRIVER_UID = "driver_rahul";
 const UNVERIFIED_DRIVER_UID = "driver_pending";
 const DELEGATED_ADMIN_UID = "admin_sub";
 const EMERGENCY_RESPONDER_UID = "sos_responder_1";
-const ADMIN_EMAIL = "renukadas083@gmail.com";
+const ADMIN_EMAIL = "owner@example.com";
 
 const [emulatorHost, emulatorPortStr] = (process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085").split(":");
 const emulatorPort = parseInt(emulatorPortStr, 10);
@@ -170,7 +170,7 @@ test("Private Emergency Contacts: strict isolation from other users and drivers,
   // Authorized emergency personnel and Admin CAN read for SOS response
   const responderDb = testEnv.authenticatedContext(EMERGENCY_RESPONDER_UID).firestore();
   await assertSucceeds(responderDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   await assertSucceeds(adminDb.collection("emergency_contacts").doc(CUSTOMER_UID).get());
 });
 
@@ -425,8 +425,8 @@ test("Trip location updates strictly bound to assignedDriverId", async () => {
   );
 });
 
-test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{uid} succeed", async () => {
-  const spoofedDb = testEnv.authenticatedContext("spoof_uid", { email: ADMIN_EMAIL, email_verified: false }).firestore();
+test("Admin RBAC: email spoofing & missing custom claims fail, bootstrapped claim admin & delegated /admins/{uid} succeed", async () => {
+  const spoofedDb = testEnv.authenticatedContext("spoof_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
   await assertFails(
     spoofedDb.collection("fare_configs").doc("toto_v1").set({
       vehicleCategory: "toto",
@@ -443,7 +443,7 @@ test("Admin RBAC: email spoofing fails, bootstrapped admin & delegated /admins/{
     })
   );
 
-  const realAdminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const realAdminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   await assertSucceeds(
     realAdminDb.collection("fare_configs").doc("toto_v1").set({
       vehicleCategory: "toto",
@@ -635,7 +635,7 @@ test("Two-way booking chat & participant contact bridge: scoped to booking parti
 });
 
 test("FCM user tokens & Private Bus tariff gating / atomic seat reservation rules", async () => {
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   const custDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
   const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
 
@@ -750,7 +750,7 @@ test("FCM user tokens & Private Bus tariff gating / atomic seat reservation rule
 
 test("Operations Staff RBAC: no default access, admin-only grant/revoke, scoped Live Ops/SOS only (no pricing/payouts/KYC)", async () => {
   const OPS_UID = "ops_staff_1";
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   const custDb = testEnv.authenticatedContext(CUSTOMER_UID).firestore();
   const opsDb = testEnv.authenticatedContext(OPS_UID).firestore();
   const bobDb = testEnv.authenticatedContext(OTHER_UID).firestore();
@@ -924,7 +924,7 @@ test("Operations Staff RBAC: no default access, admin-only grant/revoke, scoped 
 
 test("Admin-Controlled Live Test Ride Mode (13 Acceptance Scenarios): authorization, atomic dispatch, OTP security, driver bypass prevention, Ops/Owner override split, financial isolation, and mode OFF preservation", async () => {
   const OPS_UID = "ops_test_mgr";
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
   const bobDb = testEnv.authenticatedContext(OTHER_UID, { phone_number: "+919876543211" }).firestore();
   const driverDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
@@ -1514,7 +1514,7 @@ test("Test Rider Sandbox Mode: applicant onboarding, Ops recommend-only vs Owner
   const ADMIN_UID = "admin_uid";
   const TEST_BOOKING_ID = "sandbox_ride_001";
 
-  const adminDb = testEnv.authenticatedContext(ADMIN_UID, { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext(ADMIN_UID, { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   const opsDb = testEnv.authenticatedContext(OPS_UID).firestore();
   const riderDb = testEnv.authenticatedContext(TEST_RIDER_UID, { phone_number: "+919811112222" }).firestore();
   const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919876543210" }).firestore();
@@ -1872,7 +1872,7 @@ test("Multi-device FCM tokens & Notification Centre isolation rules", async () =
   const riderDb = testEnv.authenticatedContext(DRIVER_UID).firestore();
   const rogueDb = testEnv.authenticatedContext(OTHER_UID).firestore();
   const opsDb = testEnv.authenticatedContext("ops_staff_notif").firestore();
-  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_uid", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
 
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await ctx.firestore().collection("operations_staff").doc("ops_staff_notif").set({
@@ -1961,7 +1961,7 @@ test("Sample Rider: allowlist-gated OTP auto-provisioning, zero plaintext OTP, a
     return crypto.createHash("sha256").update(`${rideId}:${otp}`).digest("hex");
   }
 
-  const adminDb = testEnv.authenticatedContext("admin_sample_mgr", { email: ADMIN_EMAIL, email_verified: true }).firestore();
+  const adminDb = testEnv.authenticatedContext("admin_sample_mgr", { email: ADMIN_EMAIL, email_verified: true, admin: true, ownerAdmin: true }).firestore();
   const sampleRider1Db = testEnv.authenticatedContext(SAMPLE_RIDER_UID, { phone_number: SAMPLE_PHONE_1 }).firestore();
   const sampleRider2Db = testEnv.authenticatedContext(SECOND_SAMPLE_UID, { phone_number: SAMPLE_PHONE_2 }).firestore();
   const unauthorizedPhoneDb = testEnv.authenticatedContext("unlisted_phone_uid", { phone_number: UNAUTHORIZED_PHONE }).firestore();

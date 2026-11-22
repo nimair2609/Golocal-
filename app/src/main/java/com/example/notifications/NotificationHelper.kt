@@ -159,6 +159,7 @@ object NotificationHelper {
     const val CHANNEL_SOS = "golocal_sos"
     const val CHANNEL_TEST_RIDES = "golocal_test_rides"
     const val CHANNEL_GENERAL = "golocal_general"
+    const val RIDE_REQUEST_TIMEOUT_MS = 45_000L
 
     val RIDE_REQUEST_VIBRATION_PATTERN = longArrayOf(0L, 280L, 140L, 360L, 140L, 280L)
 
@@ -276,6 +277,31 @@ object NotificationHelper {
             ) == PackageManager.PERMISSION_GRANTED
         } else {
             true
+        }
+    }
+
+    fun canUseFullScreenIntent(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            manager?.canUseFullScreenIntent() ?: true
+        } else {
+            true
+        }
+    }
+
+    fun openFullScreenIntentSettings(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                data = android.net.Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }.onFailure {
+                val fallback = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(fallback) }
+            }
         }
     }
 
@@ -454,6 +480,28 @@ object NotificationHelper {
         return recentDedupeKeys.add(dedupeKey)
     }
 
+    fun buildRideRequestActionPendingIntent(
+        context: Context,
+        action: String,
+        bookingId: String,
+        isTestRide: Boolean,
+        isSampleRide: Boolean,
+        requestCode: Int
+    ): PendingIntent {
+        val actionIntent = Intent(context, RideRequestActionReceiver::class.java).apply {
+            this.action = action
+            putExtra(NotificationDeepLinkExtras.EXTRA_BOOKING_ID, bookingId)
+            putExtra(NotificationDeepLinkExtras.EXTRA_IS_TEST_RIDE, isTestRide)
+            putExtra(NotificationDeepLinkExtras.EXTRA_IS_SAMPLE_RIDE, isSampleRide)
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            actionIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
     fun displayRideRequestAlert(
         context: Context,
         bookingId: String,
@@ -462,9 +510,14 @@ object NotificationHelper {
         isTestRide: Boolean = false,
         soundEnabled: Boolean = true,
         vibrationEnabled: Boolean = true,
-        notificationsEnabled: Boolean = true
+        notificationsEnabled: Boolean = true,
+        payload: RideRequestPayload? = null
     ) {
         if (bookingId.isBlank() || !notificationsEnabled) return
+        val nowMs = System.currentTimeMillis()
+        if (payload != null && payload.requestExpiresAtMs > 0L && nowMs > payload.requestExpiresAtMs) {
+            return
+        }
         val safeTitle = NotificationPrivacySanitizer.sanitizeText(title)
         val safeBody = NotificationPrivacySanitizer.sanitizeText(body)
         if (safeTitle.isBlank() && safeBody.isBlank()) return
@@ -475,7 +528,22 @@ object NotificationHelper {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
 
-        val intent = Intent(context, RiderActivity::class.java).apply {
+        val effectivePayload = payload ?: RideRequestPayload(
+            bookingId = bookingId.trim(),
+            title = safeTitle,
+            body = safeBody,
+            requestExpiresAtMs = nowMs + RIDE_REQUEST_TIMEOUT_MS,
+            isTestRide = isTestRide,
+            isSampleRide = false
+        )
+        val remainingTimeoutMs = if (effectivePayload.requestExpiresAtMs > 0L) {
+            (effectivePayload.requestExpiresAtMs - nowMs).coerceIn(1_000L, RIDE_REQUEST_TIMEOUT_MS)
+        } else {
+            RIDE_REQUEST_TIMEOUT_MS
+        }
+
+        val notifId = rideRequestNotificationId(bookingId)
+        val contentIntent = Intent(context, RiderActivity::class.java).apply {
             action = NotificationDeepLinkExtras.ACTION_OPEN_RIDER
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN, if (isTestRide) "rides" else "requests")
@@ -487,12 +555,46 @@ object NotificationHelper {
             putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_APP, "rider")
             putExtra(NotificationDeepLinkExtras.EXTRA_IS_TEST_RIDE, isTestRide)
         }
-        val notifId = rideRequestNotificationId(bookingId)
-        val pendingIntent = PendingIntent.getActivity(
+        val contentPendingIntent = PendingIntent.getActivity(
             context,
             notifId,
-            intent,
+            contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val fullScreenIntent = Intent(context, RideRequestActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            effectivePayload.writeToIntent(this)
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context,
+            notifId xor 0x3311,
+            fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val acceptPendingIntent = buildRideRequestActionPendingIntent(
+            context = context,
+            action = RideRequestActionReceiver.ACTION_ACCEPT_RIDE,
+            bookingId = bookingId,
+            isTestRide = isTestRide,
+            isSampleRide = false,
+            requestCode = notifId xor 0x11
+        )
+        val declinePendingIntent = buildRideRequestActionPendingIntent(
+            context = context,
+            action = RideRequestActionReceiver.ACTION_DECLINE_RIDE,
+            bookingId = bookingId,
+            isTestRide = isTestRide,
+            isSampleRide = false,
+            requestCode = notifId xor 0x22
+        )
+
+        val loopingSoundStarted = RideRequestAlertController.startLoopingAlert(
+            context = context,
+            bookingId = bookingId,
+            expiresAtMs = effectivePayload.requestExpiresAtMs,
+            soundEnabled = soundEnabled,
+            vibrationEnabled = vibrationEnabled
         )
 
         val dndActive = isDeviceDoNotDisturbActive(context)
@@ -503,15 +605,19 @@ object NotificationHelper {
             .setContentTitle(safeTitle.ifBlank { context.getString(R.string.app_name_rider) })
             .setContentText(safeBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(safeBody))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
-            .setTimeoutAfter(45_000L)
-            .setContentIntent(pendingIntent)
+            .setTimeoutAfter(remainingTimeoutMs)
+            .setContentIntent(contentPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .addAction(R.drawable.ic_notification, "Accept Ride", acceptPendingIntent)
+            .addAction(R.drawable.ic_notification, "Decline", declinePendingIntent)
 
-        if (dndActive || (!soundEnabled && !vibrationEnabled)) {
+        if (dndActive || loopingSoundStarted || (!soundEnabled && !vibrationEnabled)) {
             builder.setSilent(true)
         } else {
             if (soundEnabled) {
@@ -573,9 +679,14 @@ object NotificationHelper {
         body: String,
         soundEnabled: Boolean = true,
         vibrationEnabled: Boolean = true,
-        notificationsEnabled: Boolean = true
+        notificationsEnabled: Boolean = true,
+        payload: RideRequestPayload? = null
     ) {
         if (rideId.isBlank() || !notificationsEnabled) return
+        val nowMs = System.currentTimeMillis()
+        if (payload != null && payload.requestExpiresAtMs > 0L && nowMs > payload.requestExpiresAtMs) {
+            return
+        }
         val safeTitle = NotificationPrivacySanitizer.sanitizeText(title)
         val safeBody = NotificationPrivacySanitizer.sanitizeText(body)
         if (safeTitle.isBlank() && safeBody.isBlank()) return
@@ -586,7 +697,22 @@ object NotificationHelper {
         ensureChannels(context)
         if (!hasNotificationPermission(context)) return
 
-        val intent = Intent(context, RiderActivity::class.java).apply {
+        val effectivePayload = payload ?: RideRequestPayload(
+            bookingId = rideId.trim(),
+            title = safeTitle,
+            body = safeBody,
+            requestExpiresAtMs = nowMs + RIDE_REQUEST_TIMEOUT_MS,
+            isTestRide = false,
+            isSampleRide = true
+        )
+        val remainingTimeoutMs = if (effectivePayload.requestExpiresAtMs > 0L) {
+            (effectivePayload.requestExpiresAtMs - nowMs).coerceIn(1_000L, RIDE_REQUEST_TIMEOUT_MS)
+        } else {
+            RIDE_REQUEST_TIMEOUT_MS
+        }
+
+        val notifId = rideRequestNotificationId("sample|$rideId")
+        val contentIntent = Intent(context, RiderActivity::class.java).apply {
             action = NotificationDeepLinkExtras.ACTION_OPEN_RIDER
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_SCREEN, "requests")
@@ -595,13 +721,47 @@ object NotificationHelper {
             putExtra(NotificationDeepLinkExtras.EXTRA_TARGET_APP, "rider")
             putExtra(NotificationDeepLinkExtras.EXTRA_IS_SAMPLE_RIDE, true)
         }
-        val notifId = rideRequestNotificationId("sample|$rideId")
-        val pendingIntent = PendingIntent.getActivity(
+        val contentPendingIntent = PendingIntent.getActivity(
             context,
             notifId,
-            intent,
+            contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val fullScreenIntent = Intent(context, RideRequestActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            effectivePayload.writeToIntent(this)
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context,
+            notifId xor 0x3311,
+            fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val acceptPendingIntent = buildRideRequestActionPendingIntent(
+            context = context,
+            action = RideRequestActionReceiver.ACTION_ACCEPT_RIDE,
+            bookingId = rideId,
+            isTestRide = false,
+            isSampleRide = true,
+            requestCode = notifId xor 0x11
+        )
+        val declinePendingIntent = buildRideRequestActionPendingIntent(
+            context = context,
+            action = RideRequestActionReceiver.ACTION_DECLINE_RIDE,
+            bookingId = rideId,
+            isTestRide = false,
+            isSampleRide = true,
+            requestCode = notifId xor 0x22
+        )
+
+        val loopingSoundStarted = RideRequestAlertController.startLoopingAlert(
+            context = context,
+            bookingId = rideId,
+            expiresAtMs = effectivePayload.requestExpiresAtMs,
+            soundEnabled = soundEnabled,
+            vibrationEnabled = vibrationEnabled
+        )
+
         val dndActive = isDeviceDoNotDisturbActive(context)
         val builder = NotificationCompat.Builder(context, CHANNEL_SAMPLE_RIDE_REQUESTS_V2)
             .setSmallIcon(R.drawable.ic_notification)
@@ -609,15 +769,19 @@ object NotificationHelper {
             .setContentTitle(safeTitle.ifBlank { context.getString(R.string.app_name_rider) })
             .setContentText(safeBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(safeBody))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
-            .setTimeoutAfter(45_000L)
-            .setContentIntent(pendingIntent)
+            .setTimeoutAfter(remainingTimeoutMs)
+            .setContentIntent(contentPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .addAction(R.drawable.ic_notification, "Accept Ride", acceptPendingIntent)
+            .addAction(R.drawable.ic_notification, "Decline", declinePendingIntent)
 
-        if (dndActive || (!soundEnabled && !vibrationEnabled)) {
+        if (dndActive || loopingSoundStarted || (!soundEnabled && !vibrationEnabled)) {
             builder.setSilent(true)
         } else {
             if (soundEnabled) builder.setSound(rideRequestSoundUri(context)) else builder.setSound(null)
@@ -630,7 +794,7 @@ object NotificationHelper {
         }
     }
 
-    fun cancelRideRequestNotification(context: Context, bookingId: String) {
+    fun cancelNotificationOnly(context: Context, bookingId: String) {
         val cleanId = bookingId.trim()
         if (cleanId.isBlank()) return
         runCatching {
@@ -638,6 +802,13 @@ object NotificationHelper {
             nm.cancel(rideRequestNotificationId(cleanId))
             nm.cancel(rideRequestNotificationId("sample|$cleanId"))
         }
+    }
+
+    fun cancelRideRequestNotification(context: Context, bookingId: String) {
+        val cleanId = bookingId.trim()
+        if (cleanId.isBlank()) return
+        RideRequestAlertController.stopMediaOnly(context, cleanId)
+        cancelNotificationOnly(context, cleanId)
     }
 
     fun displayNotification(
@@ -653,7 +824,8 @@ object NotificationHelper {
         isSampleRide: Boolean = false,
         soundEnabled: Boolean = true,
         vibrationEnabled: Boolean = true,
-        notificationsEnabled: Boolean = true
+        notificationsEnabled: Boolean = true,
+        rideRequestPayload: RideRequestPayload? = null
     ) {
         if (!notificationsEnabled) return
         val resolvedSample = isSampleRide || type.equals("sample_request", true) || type.startsWith("sample_", true)
@@ -665,7 +837,8 @@ object NotificationHelper {
                 body = body,
                 soundEnabled = soundEnabled,
                 vibrationEnabled = vibrationEnabled,
-                notificationsEnabled = notificationsEnabled
+                notificationsEnabled = notificationsEnabled,
+                payload = rideRequestPayload
             )
             return
         }
@@ -678,7 +851,8 @@ object NotificationHelper {
                 isTestRide = isTestRide || type.equals("test_request", true),
                 soundEnabled = soundEnabled,
                 vibrationEnabled = vibrationEnabled,
-                notificationsEnabled = notificationsEnabled
+                notificationsEnabled = notificationsEnabled,
+                payload = rideRequestPayload
             )
             return
         }

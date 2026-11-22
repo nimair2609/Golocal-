@@ -369,6 +369,46 @@ fun RiderMapHomeScreen(
                     title = "Enable Rider Ride & Chat Alerts",
                     description = "Receive instant ride requests, trip assignments, and passenger updates."
                 )
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                    profile.isOnline &&
+                    !com.example.notifications.NotificationHelper.canUseFullScreenIntent(context)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shadowElevation = 4.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("rider_fullscreen_intent_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Notifications,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text(
+                                text = "Allow full-screen ride alerts when screen is locked",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    com.example.notifications.NotificationHelper.openFullScreenIntentSettings(context)
+                                },
+                                modifier = Modifier.testTag("rider_fullscreen_intent_allow_button")
+                            ) {
+                                Text("Allow", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
 
             if (expiryAlerts.isNotEmpty()) {
@@ -441,7 +481,7 @@ fun IncomingRideRequestOverlayCard(
     queueTotal: Int = 1,
     riderLat: Double = com.example.domain.BoraiLaunchConfig.DEFAULT_LAT,
     riderLng: Double = com.example.domain.BoraiLaunchConfig.DEFAULT_LNG,
-    initialSeconds: Int = 25,
+    initialSeconds: Int = 45,
     onPreviousRequest: () -> Unit = {},
     onNextRequest: () -> Unit = {},
     onDecline: () -> Unit,
@@ -459,9 +499,9 @@ fun IncomingRideRequestOverlayCard(
         if (booking.requestExpiresAtMs > 0L) {
             ((booking.requestExpiresAtMs - System.currentTimeMillis()) / 1000L)
                 .toInt()
-                .coerceIn(1, 300)
+                .coerceIn(1, 45)
         } else {
-            initialSeconds.coerceAtLeast(1)
+            initialSeconds.coerceIn(1, 45)
         }
     }
     var remainingSeconds by remember(booking.id) { mutableIntStateOf(effectiveSeconds) }
@@ -477,11 +517,17 @@ fun IncomingRideRequestOverlayCard(
         ((pickupDistanceKm / 22.0) * 60.0).roundToInt().coerceIn(2, 45).toLong()
     }
 
-    LaunchedEffect(booking.id) {
+    LaunchedEffect(booking.id, booking.requestExpiresAtMs) {
         remainingSeconds = effectiveSeconds
         while (remainingSeconds > 0) {
             delay(1000L)
-            remainingSeconds -= 1
+            remainingSeconds = if (booking.requestExpiresAtMs > 0L) {
+                ((booking.requestExpiresAtMs - System.currentTimeMillis()) / 1000L)
+                    .toInt()
+                    .coerceAtLeast(0)
+            } else {
+                (remainingSeconds - 1).coerceAtLeast(0)
+            }
         }
         onExpire?.invoke()
     }

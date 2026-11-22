@@ -884,7 +884,7 @@ class GolocalRepository(
             put("test_mode", booking.testMode)
             if (booking.testOtpStatus.isNotBlank()) put("test_otp_status", booking.testOtpStatus)
             if (booking.testOtpExpiresAtMs > 0L) put("test_otp_expires_at_ms", booking.testOtpExpiresAtMs)
-            val reqExpiry = if (booking.requestExpiresAtMs > 0L) booking.requestExpiresAtMs else System.currentTimeMillis() + 5 * 60_000L
+            val reqExpiry = if (booking.requestExpiresAtMs > 0L) booking.requestExpiresAtMs else System.currentTimeMillis() + RIDE_REQUEST_TIMEOUT_MS
             put("requestExpiresAtMs", reqExpiry)
             put("createdAt", FieldValue.serverTimestamp())
             put("updatedAt", FieldValue.serverTimestamp())
@@ -2252,7 +2252,17 @@ class GolocalRepository(
     // --- Admin Operations ---
 
     suspend fun checkIsAdmin(uid: String, email: String?): Boolean {
-        if (email.equals("renukadas083@gmail.com", ignoreCase = true) && auth.currentUser?.isEmailVerified == true) {
+        val currentUser = auth.currentUser
+        val hasAdminClaim = try {
+            val claims = currentUser?.getIdToken(false)?.await()?.claims
+            (claims?.get("admin") as? Boolean == true) ||
+                (claims?.get("ownerAdmin") as? Boolean == true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+        if (hasAdminClaim) {
             return true
         }
         return try {
@@ -4501,6 +4511,67 @@ class GolocalRepository(
             handleFirestoreError(e, OperationType.UPDATE, reqRef.path, auth)
             throw e
         }
+    }
+
+    suspend fun getBookingById(bookingId: String): Booking? {
+        val cleanId = bookingId.trim()
+        if (cleanId.isBlank()) return null
+        val snap = runCatching { db.collection("bookings").document(cleanId).get().await() }.getOrNull()
+            ?: return null
+        return if (snap.exists()) {
+            snap.toObject(Booking::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+    }
+
+    suspend fun getDriverProfileOnce(driverId: String): DriverProfile? {
+        val cleanId = driverId.trim()
+        if (cleanId.isBlank()) return null
+        val snap = runCatching { db.collection("driver_profiles").document(cleanId).get().await() }.getOrNull()
+            ?: return null
+        return if (snap.exists()) {
+            snap.toObject(DriverProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+    }
+
+    suspend fun getTestRiderProfileOnce(uid: String): TestRiderProfile? {
+        val cleanUid = uid.trim()
+        if (cleanUid.isBlank()) return null
+        val snap = runCatching { db.collection("test_riders").document(cleanUid).get().await() }.getOrNull()
+            ?: return null
+        return if (snap.exists()) {
+            snap.toObject(TestRiderProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        } else {
+            null
+        }
+    }
+
+    suspend fun expireTimedOutSearchingBooking(bookingId: String): Result<Boolean> = runCatching {
+        val cleanId = bookingId.trim()
+        require(cleanId.isNotBlank()) { "Booking ID is required." }
+        val ref = db.collection("bookings").document(cleanId)
+        db.runTransaction { tx ->
+            val snap = tx.get(ref)
+            if (!snap.exists()) return@runTransaction false
+            val currentStatus = snap.getString("status").orEmpty()
+            if (currentStatus != "searching") return@runTransaction false
+            tx.update(
+                ref,
+                mapOf(
+                    "status" to "expired",
+                    "cancellationReason" to "No rider accepted within 45 seconds",
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            true
+        }.await()
+    }
+
+    companion object {
+        const val RIDE_REQUEST_TIMEOUT_MS = 45_000L
     }
 }
 

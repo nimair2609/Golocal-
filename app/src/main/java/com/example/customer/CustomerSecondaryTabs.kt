@@ -108,6 +108,7 @@ fun CustomerBookingsHistoryTab(
                         "upcoming" -> allList.filter { it.bookingType == "scheduled" && it.status in activeStatuses }
                         "completed" -> allList.filter { it.status == "completed" }
                         "cancelled" -> allList.filter { it.status == "cancelled" }
+                        "expired" -> allList.filter { it.status == "expired" }
                         else -> allList
                     }
                 }
@@ -123,7 +124,8 @@ fun CustomerBookingsHistoryTab(
                         "active" to "Active",
                         "upcoming" to "Upcoming",
                         "completed" to "Completed",
-                        "cancelled" to "Cancelled"
+                        "cancelled" to "Cancelled",
+                        "expired" to "Expired"
                     ).forEach { (id, label) ->
                         val selected = rideStatusFilter == id
                         Surface(
@@ -211,7 +213,7 @@ fun CustomerBookingsHistoryTab(
                                                 label = booking.status.replace('_', ' ').replaceFirstChar { it.uppercase() },
                                                 tone = when (booking.status) {
                                                     "completed" -> "success"
-                                                    "cancelled" -> "error"
+                                                    "cancelled", "expired" -> "error"
                                                     "searching" -> "warning"
                                                     else -> "info"
                                                 }
@@ -369,6 +371,28 @@ fun CustomerBookingsHistoryTab(
                                                     Text("Appeal Cancellation")
                                                 }
                                             }
+                                        }
+                                    }
+                                    if (booking.status == "expired") {
+                                        Text(
+                                            text = booking.cancellationReason.ifBlank { "No rider found nearby within 45 seconds." },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        OutlinedButton(
+                                            onClick = {
+                                                customerViewModel.retryExpiredBooking(booking)
+                                                onOpenBookRide()
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 48.dp)
+                                                .testTag("history_retry_ride_${booking.id}")
+                                        ) {
+                                            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Retry Ride", fontWeight = FontWeight.SemiBold)
                                         }
                                     }
                                     if (!isTestRide && booking.assignedDriverId.isNotBlank() && booking.status in setOf("completed", "cancelled")) {

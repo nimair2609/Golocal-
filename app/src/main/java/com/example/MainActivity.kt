@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import com.example.customer.CustomerAppRoot
 import com.example.notifications.NotificationDeepLinkTarget
 import com.example.notifications.NotificationHelper
+import com.example.security.AppCheckHelper
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppCheckHelper.configureAppCheck(this, intent)
         enableEdgeToEdge()
         NotificationHelper.ensureChannels(this)
         deepLinkState = NotificationDeepLinkTarget.fromIntent(intent)

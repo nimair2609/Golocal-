@@ -181,4 +181,90 @@ class NotificationPipelineTest {
         assertTrue(testNotif.isTestNotification())
         assertFalse(prodNotif.isTestNotification())
     }
+
+    @Test
+    fun `RideRequestPayload roundtrip, 45s expiry guard, and Accept Decline action intents work`() {
+        assertEquals(45_000L, NotificationHelper.RIDE_REQUEST_TIMEOUT_MS)
+
+        val nowMs = 1_700_000_000_000L
+        val validExp = (nowMs + 45_000L).toString()
+        val staleExp = (nowMs - 1_000L).toString()
+
+        assertFalse(
+            GolocalFirebaseMessagingService.isExpiredRideRequestPayload(
+                type = "new_ride_request",
+                data = mapOf("requestExpiresAtMs" to validExp),
+                nowMs = nowMs
+            )
+        )
+        assertTrue(
+            GolocalFirebaseMessagingService.isExpiredRideRequestPayload(
+                type = "new_ride_request",
+                data = mapOf("requestExpiresAtMs" to staleExp),
+                nowMs = nowMs
+            )
+        )
+        assertFalse(
+            GolocalFirebaseMessagingService.isExpiredRideRequestPayload(
+                type = "booking_assigned",
+                data = mapOf("requestExpiresAtMs" to staleExp),
+                nowMs = nowMs
+            )
+        )
+
+        val fcmPayload = RideRequestPayload.fromFcmData(
+            data = mapOf(
+                "pickupLabel" to "Borai Stand",
+                "destinationLabel" to "Mohanpur Bus Stand",
+                "pickupLat" to "21.841",
+                "pickupLng" to "87.419",
+                "distanceKm" to "6.2",
+                "estimatedDurationMin" to "16",
+                "estimatedFareInr" to "85",
+                "vehicleCategory" to "toto",
+                "paymentMethod" to "upi",
+                "passengerFirstName" to "Arijit",
+                "requestExpiresAtMs" to validExp,
+                "dispatchWave" to "2"
+            ),
+            bookingId = "bk_wave_2",
+            title = "New TOTO Ride",
+            body = "Borai Stand -> Mohanpur Bus Stand",
+            isTestRide = false,
+            isSampleRide = false
+        )
+        val intent = fcmPayload.writeToIntent(Intent())
+        val parsed = RideRequestPayload.fromIntent(intent)
+        assertNotNull(parsed)
+        assertEquals("bk_wave_2", parsed?.bookingId)
+        assertEquals("Borai Stand", parsed?.pickupLabel)
+        assertEquals("Mohanpur Bus Stand", parsed?.destinationLabel)
+        assertEquals(6.2, parsed?.distanceKm ?: 0.0, 0.01)
+        assertEquals(85.0, parsed?.estimatedFareInr ?: 0.0, 0.01)
+        assertEquals(2, parsed?.dispatchWave)
+        assertEquals(nowMs + 45_000L, parsed?.requestExpiresAtMs)
+        assertFalse(parsed?.isTestRide ?: true)
+        assertFalse(parsed?.isSampleRide ?: true)
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val acceptPi = NotificationHelper.buildRideRequestActionPendingIntent(
+            context = context,
+            action = RideRequestActionReceiver.ACTION_ACCEPT_RIDE,
+            bookingId = "bk_wave_2",
+            isTestRide = false,
+            isSampleRide = false,
+            requestCode = 101
+        )
+        val declinePi = NotificationHelper.buildRideRequestActionPendingIntent(
+            context = context,
+            action = RideRequestActionReceiver.ACTION_DECLINE_RIDE,
+            bookingId = "bk_wave_2",
+            isTestRide = false,
+            isSampleRide = false,
+            requestCode = 102
+        )
+        assertNotNull(acceptPi)
+        assertNotNull(declinePi)
+        assertTrue(acceptPi != declinePi)
+    }
 }

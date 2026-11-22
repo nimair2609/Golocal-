@@ -65,9 +65,11 @@ class OsrmRoutingProvider(
 
         return try {
             withContext(Dispatchers.IO) {
+                val baseUrl = com.example.data.map.MapProviderConfig.osrmBaseUrl.trimEnd('/')
                 val url = String.format(
                     java.util.Locale.US,
-                    "https://router.project-osrm.org/route/v1/driving/%.5f,%.5f;%.5f,%.5f?overview=full&geometries=geojson",
+                    "%s/route/v1/driving/%.5f,%.5f;%.5f,%.5f?overview=full&geometries=geojson",
+                    baseUrl,
                     origin.lng,
                     origin.lat,
                     destination.lng,

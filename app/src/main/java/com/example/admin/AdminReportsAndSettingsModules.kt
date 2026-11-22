@@ -439,7 +439,7 @@ fun AdminSettingsModule(adminViewModel: AdminViewModel) {
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Admin Account Allowlist", style = MaterialTheme.typography.titleMedium)
-                Text("Primary bootstrapped admin (renukadas083@gmail.com) can grant or revoke delegated admin UIDs.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Owner Admin (verified custom claim) can grant or revoke delegated admin UIDs.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(value = newAdminUid, onValueChange = { newAdminUid = it }, label = { Text("Admin Firebase UID") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(value = newAdminEmail, onValueChange = { newAdminEmail = it }, label = { Text("Verified Admin Email") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(value = newAdminName, onValueChange = { newAdminName = it }, label = { Text("Display Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
