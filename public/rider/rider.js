@@ -629,11 +629,20 @@ el("settlementForm").addEventListener("submit", async (e) => {
     showStatus("Enter a valid settlement amount (min ₹50) and UPI/Bank reference.", "error");
     return;
   }
+  const totalNet = state.commissions.reduce((acc, c) => acc + Number(c.netDriverEarningsInr || 0), 0);
+  const locked = state.settlements
+    .filter((s) => s.status !== "rejected")
+    .reduce((acc, s) => acc + Number(s.amountInr || 0), 0);
+  const availableBalance = Math.max(0, Math.round((totalNet - locked) * 100) / 100);
+  if (amount > availableBalance + 0.01) {
+    showStatus(`Requested ₹${Math.round(amount)} exceeds available withdrawable balance ₹${Math.floor(availableBalance)}.`, "error");
+    return;
+  }
   try {
     await addDoc(collection(db, "driver_settlements"), {
       driverId: currentUser.uid,
       driverName: state.driverProfile.legalName || "Partner",
-      amountInr: amount,
+      amountInr: Math.round(amount * 100) / 100,
       upiOrBankRef: upiRef,
       status: "requested",
       createdAt: serverTimestamp(),

@@ -824,6 +824,19 @@ service cloud.firestore {
                             'profileCompleted', 'emailVerified', 'mobileVerified',
                             'hasEmergencyContact', 'role', 'accountType', 'isSampleRider',
                             'verificationStatus', 'availabilityStatus', 'updatedAt'
+                          ])) ||
+                         (request.auth.uid == userId &&
+                          incoming().role == existing().role &&
+                          incoming().accountStatus == 'deletion_requested' &&
+                          incoming().fullName == 'Deleted User' &&
+                          incoming().email == '' &&
+                          incoming().phone == '' &&
+                          incoming().mobileNumber == '' &&
+                          incoming().photoUrl == '' &&
+                          incoming().hasEmergencyContact == false &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'fullName', 'email', 'phone', 'mobileNumber', 'photoUrl',
+                            'hasEmergencyContact', 'accountStatus', 'updatedAt'
                           ]))
                        );
       allow delete: if isAdmin();
@@ -845,7 +858,7 @@ service cloud.firestore {
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
                        isValidPrivateEmergencyContact(incoming());
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isSignedIn() && isValidId(userId) && request.auth.uid == userId);
     }
 
     // 1c. Authorized emergency personnel allowlist (Admin-managed)
@@ -1094,8 +1107,11 @@ service cloud.firestore {
                             ((existing().status == 'assigned' && incoming().status == 'arriving') ||
                              (existing().status == 'arriving' && incoming().status == 'arrived') ||
                              (existing().status == 'in_progress' && incoming().status == 'completed' &&
-                              ((!('is_test_ride' in existing()) || existing().is_test_ride != true) ||
-                               incoming().paymentStatus == existing().paymentStatus))) &&
+                              (((!('is_test_ride' in existing()) || existing().is_test_ride != true) &&
+                                ((existing().paymentMethod == 'cash' && incoming().paymentStatus in ['settled_cash', existing().paymentStatus]) ||
+                                 (existing().paymentMethod == 'upi' && incoming().paymentStatus in ['pending_verification', existing().paymentStatus]))) ||
+                               ('is_test_ride' in existing() && existing().is_test_ride == true &&
+                                incoming().paymentStatus == existing().paymentStatus)))) &&
                             incoming().diff(existing()).affectedKeys().hasOnly([
                               'status', 'paymentStatus', 'updatedAt'
                             ]))
@@ -1374,7 +1390,9 @@ service cloud.firestore {
                        isValidId(paymentId) &&
                        paymentId == incoming().bookingId &&
                        (incoming().customerId == request.auth.uid || incoming().driverId == request.auth.uid || isAdmin()) &&
-                       (incoming().paymentMethod == 'cash' || incoming().status == 'pending_verification' || isAdmin()) &&
+                       ((incoming().paymentMethod == 'cash' && incoming().status == 'settled_cash') ||
+                        (incoming().paymentMethod == 'upi' && incoming().status == 'pending_verification') ||
+                        isAdmin()) &&
                        (!exists(/databases/$(database)/documents/bookings/$(incoming().bookingId)) ||
                         !('is_test_ride' in get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data) ||
                         get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.is_test_ride != true) &&
@@ -1429,6 +1447,11 @@ service cloud.firestore {
                        isValidId(refundId) &&
                        incoming().customerId == request.auth.uid &&
                        incoming().status == 'requested' &&
+                       exists(/databases/$(database)/documents/bookings/$(incoming().bookingId)) &&
+                       get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.customerId == request.auth.uid &&
+                       (!('is_test_ride' in get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data) ||
+                        get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.is_test_ride != true) &&
+                       get(/databases/$(database)/documents/bookings/$(incoming().bookingId)).data.status in ['completed', 'cancelled'] &&
                        isValidRefundRecord(incoming());
       allow update: if isAdmin() &&
                        isValidId(refundId) &&

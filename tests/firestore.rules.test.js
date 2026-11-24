@@ -354,3 +354,152 @@ test("Customer participant can transition their searching booking to expired aft
     })
   );
 });
+
+test("Payment safety, refund preconditions, and owner self-service PII deletion enforce strict rules", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const admin = ctx.firestore();
+    await admin.collection("users").doc(CUSTOMER_UID).set({
+      uid: CUSTOMER_UID,
+      userId: CUSTOMER_UID,
+      fullName: "Arijit Mondal",
+      email: "arijit@example.com",
+      phone: "+919800004444",
+      mobileNumber: "+919800004444",
+      photoUrl: "https://example.com/p.jpg",
+      role: "customer",
+      preferredLanguage: "en",
+      accountStatus: "active",
+      hasEmergencyContact: true,
+      createdAt: now(),
+      updatedAt: now()
+    });
+    await admin.collection("emergency_contacts").doc(CUSTOMER_UID).set({
+      userId: CUSTOMER_UID,
+      emergencyContactNumber: "+919800009999",
+      relationshipNote: "Father",
+      createdAt: now(),
+      updatedAt: now()
+    });
+    await admin.collection("bookings").doc("bk_upi_trip").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Arijit",
+      assignedDriverId: DRIVER_UID,
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Borai",
+      destinationLabel: "Mohanpur",
+      distanceKm: 5.0,
+      estimatedFareInr: 105,
+      agreedFareInr: 105,
+      minPermittedFareInr: 90,
+      maxPermittedFareInr: 130,
+      paymentMethod: "upi",
+      paymentStatus: "pending",
+      status: "in_progress",
+      is_test_ride: false,
+      createdAt: now(),
+      updatedAt: now()
+    });
+    await admin.collection("bookings").doc("bk_test_completed").set({
+      customerId: CUSTOMER_UID,
+      customerName: "Arijit",
+      assignedDriverId: DRIVER_UID,
+      bookingType: "now",
+      vehicleCategory: "toto",
+      pickupLabel: "Borai",
+      destinationLabel: "Mohanpur",
+      distanceKm: 2.0,
+      estimatedFareInr: 40,
+      minPermittedFareInr: 35,
+      maxPermittedFareInr: 50,
+      paymentMethod: "cash",
+      paymentStatus: "pending",
+      status: "completed",
+      is_test_ride: true,
+      test_mode: true,
+      createdAt: now(),
+      updatedAt: now()
+    });
+  });
+
+  const drvDb = testEnv.authenticatedContext(DRIVER_UID, { phone_number: "+919800002222" }).firestore();
+  const custDb = testEnv.authenticatedContext(CUSTOMER_UID, { phone_number: "+919800004444" }).firestore();
+
+  // Driver CANNOT mark commercial UPI booking as 'paid' directly
+  await assertFails(
+    drvDb.collection("bookings").doc("bk_upi_trip").update({
+      status: "completed",
+      paymentStatus: "paid",
+      updatedAt: now()
+    })
+  );
+  // Driver CANNOT create a commercial UPI payment record with status 'paid'
+  await assertFails(
+    drvDb.collection("payments").doc("bk_upi_trip").set({
+      bookingId: "bk_upi_trip",
+      customerId: CUSTOMER_UID,
+      driverId: DRIVER_UID,
+      grossFareInr: 105,
+      gstInr: 5,
+      platformCommissionInr: 10,
+      netDriverEarningsInr: 90,
+      paymentMethod: "upi",
+      status: "paid",
+      createdAt: now(),
+      updatedAt: now()
+    })
+  );
+  // Driver CAN complete commercial UPI trip with pending_verification
+  await assertSucceeds(
+    drvDb.collection("bookings").doc("bk_upi_trip").update({
+      status: "completed",
+      paymentStatus: "pending_verification",
+      updatedAt: now()
+    })
+  );
+
+  // Customer CANNOT request refund on test rides, CAN request refund on completed commercial ride
+  await assertFails(
+    custDb.collection("refunds").doc("ref_test_1").set({
+      bookingId: "bk_test_completed",
+      customerId: CUSTOMER_UID,
+      amountInr: 40,
+      reason: "Test ride refund should fail",
+      status: "requested",
+      createdAt: now(),
+      updatedAt: now()
+    })
+  );
+  await assertSucceeds(
+    custDb.collection("refunds").doc("ref_real_1").set({
+      bookingId: "bk_upi_trip",
+      customerId: CUSTOMER_UID,
+      amountInr: 105,
+      reason: "Double UPI debit during settlement",
+      status: "requested",
+      createdAt: now(),
+      updatedAt: now()
+    })
+  );
+
+  // Arbitrary accountStatus mutation blocked, but full PII-scrub self-anonymization + emergency_contacts self-delete succeed
+  await assertFails(
+    custDb.collection("users").doc(CUSTOMER_UID).update({
+      accountStatus: "restricted",
+      updatedAt: now()
+    })
+  );
+  await assertSucceeds(
+    custDb.collection("users").doc(CUSTOMER_UID).update({
+      fullName: "Deleted User",
+      email: "",
+      phone: "",
+      mobileNumber: "",
+      photoUrl: "",
+      hasEmergencyContact: false,
+      accountStatus: "deletion_requested",
+      updatedAt: now()
+    })
+  );
+  await assertSucceeds(custDb.collection("emergency_contacts").doc(CUSTOMER_UID).delete());
+});

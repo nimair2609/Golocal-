@@ -657,21 +657,48 @@ fun RiderEarningsHistoryTab(
     if (showWithdrawDialog) {
         var amount by remember { mutableStateOf(availableBalance.toInt().toString()) }
         var upi by remember { mutableStateOf(profile.settlementUpiOrBank) }
+        val parsedAmount = amount.toDoubleOrNull() ?: 0.0
+        val amountError = when {
+            parsedAmount < 50.0 -> "Minimum withdrawal is ₹50"
+            parsedAmount > availableBalance + 0.01 -> "Exceeds available ₹${availableBalance.toInt()}"
+            parsedAmount > 100_000.0 -> "Maximum ₹1,00,000 per request"
+            else -> null
+        }
+        val canSubmit = amountError == null && upi.trim().length >= 3
         AlertDialog(
             onDismissRequest = { showWithdrawDialog = false },
             title = { Text("Request Settlement Withdrawal") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = amount, onValueChange = { amount = it.filter { c -> c.isDigit() } }, label = { Text("Amount (₹)") }, singleLine = true)
-                    OutlinedTextField(value = upi, onValueChange = { upi = it }, label = { Text("UPI ID / Bank Account") }, singleLine = true)
+                    Text(
+                        text = "Available balance: ₹${availableBalance.toInt()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = GolocalPrimaryBlue
+                    )
+                    OutlinedTextField(
+                        value = amount,
+                        onValueChange = { amount = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("Amount (₹)") },
+                        isError = amountError != null,
+                        supportingText = amountError?.let { msg -> { Text(msg) } },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = upi,
+                        onValueChange = { upi = it },
+                        label = { Text("UPI ID / Bank Account") },
+                        singleLine = true
+                    )
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    val amt = amount.toDoubleOrNull() ?: 0.0
-                    driverViewModel.requestWithdrawal(amt, upi)
-                    showWithdrawDialog = false
-                }) { Text("Submit") }
+                Button(
+                    enabled = canSubmit,
+                    onClick = {
+                        driverViewModel.requestWithdrawal(parsedAmount, upi)
+                        showWithdrawDialog = false
+                    }
+                ) { Text("Submit") }
             },
             dismissButton = { TextButton(onClick = { showWithdrawDialog = false }) { Text("Cancel") } }
         )

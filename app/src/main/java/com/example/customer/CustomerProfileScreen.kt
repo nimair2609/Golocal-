@@ -56,7 +56,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -345,10 +347,11 @@ fun CustomerProfileScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
+                            .testTag("delete_account_button")
                     ) {
                         Icon(Icons.Filled.DeleteOutline, contentDescription = null, tint = GolocalError)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Request Account Deletion", color = GolocalError)
+                        Text("Delete Account & Data", color = GolocalError)
                     }
                 }
 
@@ -416,6 +419,26 @@ fun CustomerProfileScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.primary
                                 )
+                            }
+                            val uriHandler = LocalUriHandler.current
+                            val privacyPolicyUrl = stringResource(com.example.R.string.privacy_policy_url)
+                            val accountDeletionUrl = stringResource(com.example.R.string.account_deletion_url)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { runCatching { uriHandler.openUri(privacyPolicyUrl) } },
+                                    modifier = Modifier.weight(1f).testTag("customer_privacy_policy_link")
+                                ) {
+                                    Text("Privacy Policy")
+                                }
+                                OutlinedButton(
+                                    onClick = { runCatching { uriHandler.openUri(accountDeletionUrl) } },
+                                    modifier = Modifier.weight(1f).testTag("customer_web_deletion_link")
+                                ) {
+                                    Text("Web Deletion")
+                                }
                             }
                         }
                     }
@@ -553,30 +576,60 @@ fun CustomerProfileScreen(
 
     if (showDeleteDialog) {
         var reason by remember { mutableStateOf("") }
+        var confirmText by remember { mutableStateOf("") }
+        val isDeleting by sessionViewModel.isDeletingAccount.collectAsStateWithLifecycle()
+        val canDelete = confirmText.trim().equals("DELETE", ignoreCase = false) && !isDeleting
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Account Deletion Request") },
+            onDismissRequest = { if (!isDeleting) showDeleteDialog = false },
+            title = { Text("Delete Account & Personal Data") },
             text = {
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it },
-                    label = { Text("Reason for deletion request") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "This clears your saved addresses, private emergency contacts, and FCM tokens, anonymizes your profile, and deletes your login credential.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Reason (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = confirmText,
+                        onValueChange = { confirmText = it },
+                        label = { Text("Type DELETE to confirm") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("delete_account_confirm_input")
+                    )
+                }
             },
             confirmButton = {
                 Button(
+                    enabled = canDelete,
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                    modifier = Modifier.testTag("confirm_delete_account_button"),
                     onClick = {
-                        sessionViewModel.submitSupportOrDeletion(
-                            "account_deletion",
-                            reason.ifBlank { "User requested account deletion" }
+                        sessionViewModel.deleteMyAccount(
+                            context = context,
+                            reason = reason.ifBlank { "Customer self-service account deletion" },
+                            onRequiresRecentLogin = {
+                                showDeleteDialog = false
+                                signOut(scope = scope, context = context)
+                            },
+                            onAccountDeleted = {
+                                showDeleteDialog = false
+                                signOut(scope = scope, context = context)
+                            }
                         )
-                        showDeleteDialog = false
                     }
-                ) { Text("Submit Request") }
+                ) { Text(if (isDeleting) "Deleting..." else "Delete Permanently") }
             },
-            dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") } }
+            dismissButton = {
+                TextButton(enabled = !isDeleting, onClick = { showDeleteDialog = false }) { Text("Cancel") }
+            }
         )
     }
 

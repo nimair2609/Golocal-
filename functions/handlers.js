@@ -1199,70 +1199,126 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       return { statusCode: 400, body: { error: "Valid bookingId required" } };
     }
 
-    const bookingRef = db.collection("bookings").doc(bookingId);
-    const bookingSnap = await bookingRef.get();
-    if (!bookingSnap.exists) {
-      return { statusCode: 404, body: { error: "Booking not found" } };
-    }
-    const booking = bookingSnap.data() || {};
-    if (booking.is_test_ride === true || booking.test_mode === true) {
-      return { statusCode: 403, body: { error: "Test/sample rides cannot be settled via commercial webhook" } };
-    }
-
     const isPaidEvent = eventType === "payment.captured" || eventType === "paid" || eventType === "captured";
     const isRefundEvent = eventType === "refund.processed" || eventType === "refunded";
     if (!isPaidEvent && !isRefundEvent) {
       return { statusCode: 200, body: { ok: true, ignored: true, event: eventType } };
     }
 
+    const rawAmountInr = payload.amountInr ?? payload.payload?.payment?.entity?.amountInr ?? null;
+    const rawAmountPaise = payload.amountPaise ?? payload.payload?.payment?.entity?.amount ?? null;
+    const reportedAmountInr = Number.isFinite(Number(rawAmountInr)) && rawAmountInr !== null
+      ? Number(rawAmountInr)
+      : (Number.isFinite(Number(rawAmountPaise)) && rawAmountPaise !== null ? Number(rawAmountPaise) / 100 : null);
+
     const nextPaymentStatus = isRefundEvent ? "refunded" : "paid";
+    const bookingRef = db.collection("bookings").doc(bookingId);
     const paymentRef = db.collection("payments").doc(bookingId);
-    const paymentSnap = await paymentRef.get();
-    const existingPayment = paymentSnap.exists ? paymentSnap.data() || {} : {};
+    const auditRef = db.collection("audit_logs").doc(makeSafeDocId(`pay_wh_${bookingId}_${nextPaymentStatus}_${gatewayReference || "evt"}`));
 
-    if (
-      existingPayment.status === nextPaymentStatus &&
-      booking.paymentStatus === nextPaymentStatus &&
-      (!gatewayReference || existingPayment.gatewayReference === gatewayReference)
-    ) {
-      return { statusCode: 200, body: { ok: true, idempotent: true, bookingId, status: nextPaymentStatus } };
-    }
+    const runTx = typeof db.runTransaction === "function"
+      ? (fn) => db.runTransaction(fn)
+      : async (fn) => fn({
+        get: (ref) => ref.get(),
+        set: (ref, data, opts) => ref.set(data, opts),
+      });
 
-    const nowTs = fieldValue.serverTimestamp();
-    await paymentRef.set(
-      {
+    const txOutcome = await runTx(async (tx) => {
+      const bookingSnap = await tx.get(bookingRef);
+      if (!bookingSnap.exists) {
+        return { statusCode: 404, body: { error: "Booking not found" } };
+      }
+      const booking = bookingSnap.data() || {};
+      if (booking.is_test_ride === true || booking.test_mode === true || booking.is_sample_ride === true) {
+        return { statusCode: 403, body: { error: "Test/sample rides cannot be settled via commercial webhook" } };
+      }
+      if (isPaidEvent && booking.paymentMethod === "cash") {
+        return { statusCode: 400, body: { error: "Cash bookings cannot be captured via online payment webhook" } };
+      }
+
+      const expectedFare = Number(booking.agreedFareInr || 0) > 0
+        ? Number(booking.agreedFareInr)
+        : Number(booking.estimatedFareInr || 0);
+      if (reportedAmountInr !== null && (!Number.isFinite(reportedAmountInr) || reportedAmountInr <= 0 || (expectedFare > 0 && Math.abs(reportedAmountInr - expectedFare) > 1.0))) {
+        return {
+          statusCode: 422,
+          body: { error: "Payment amount does not match expected booking fare" },
+        };
+      }
+
+      const paymentSnap = await tx.get(paymentRef);
+      const existingPayment = paymentSnap.exists ? paymentSnap.data() || {} : {};
+
+      if (
+        existingPayment.status === nextPaymentStatus &&
+        booking.paymentStatus === nextPaymentStatus &&
+        (!gatewayReference || existingPayment.gatewayReference === gatewayReference)
+      ) {
+        return { statusCode: 200, body: { ok: true, idempotent: true, bookingId, status: nextPaymentStatus }, notify: false };
+      }
+
+      const nowTs = fieldValue.serverTimestamp();
+      const gstPct = Math.min(28, Math.max(0, Number(booking.gstPercent ?? 5)));
+      const commPct = Math.min(40, Math.max(0, Number(booking.commissionPercent ?? 10)));
+      const safeGross = Math.max(0, Number(existingPayment.grossFareInr ?? (expectedFare > 0 ? expectedFare : (reportedAmountInr || 0))));
+      const computedGst = Math.round((safeGross * gstPct / (100 + gstPct)) * 100) / 100;
+      const preTax = Math.max(0, safeGross - computedGst);
+      const computedComm = Math.round((preTax * commPct / 100) * 100) / 100;
+      const computedNet = Math.max(0, Math.round((safeGross - computedGst - computedComm) * 100) / 100);
+
+      const paymentPayload = {
         bookingId,
-        customerId: booking.customerId || "",
-        driverId: booking.assignedDriverId || "",
-        paymentMethod: booking.paymentMethod || "upi",
+        customerId: booking.customerId || existingPayment.customerId || "",
+        driverId: booking.assignedDriverId || existingPayment.driverId || "",
+        grossFareInr: existingPayment.grossFareInr ?? safeGross,
+        gstInr: existingPayment.gstInr ?? computedGst,
+        platformCommissionInr: existingPayment.platformCommissionInr ?? computedComm,
+        netDriverEarningsInr: existingPayment.netDriverEarningsInr ?? computedNet,
+        paymentMethod: booking.paymentMethod || existingPayment.paymentMethod || "upi",
         status: nextPaymentStatus,
         gatewayReference: gatewayReference || existingPayment.gatewayReference || "",
         updatedAt: nowTs,
-      },
-      { merge: true }
-    );
-    await bookingRef.set(
-      {
-        paymentStatus: nextPaymentStatus,
-        updatedAt: nowTs,
-      },
-      { merge: true }
-    );
-    await db.collection("audit_logs").doc(makeSafeDocId(`pay_wh_${bookingId}_${nextPaymentStatus}_${gatewayReference || "evt"}`)).set(
-      {
-        actorId: "system_payment_webhook",
-        actorEmail: "webhook@golocal.internal",
-        action: isRefundEvent ? "WEBHOOK_PAYMENT_REFUNDED" : "WEBHOOK_PAYMENT_CAPTURED",
-        targetCollection: "payments",
-        targetId: bookingId,
-        summary: `Verified webhook ${eventType} (${nextPaymentStatus}) ref=${gatewayReference || "n/a"}`,
-        createdAt: nowTs,
-      },
-      { merge: true }
-    );
+      };
+      if (!paymentSnap.exists || !existingPayment.createdAt) {
+        paymentPayload.createdAt = nowTs;
+      }
 
-    if (booking.customerId) {
-      await sendToUserIds([booking.customerId], {
+      await tx.set(paymentRef, paymentPayload, { merge: true });
+      await tx.set(
+        bookingRef,
+        {
+          paymentStatus: nextPaymentStatus,
+          updatedAt: nowTs,
+        },
+        { merge: true }
+      );
+      await tx.set(
+        auditRef,
+        {
+          actorId: "system_payment_webhook",
+          actorEmail: "webhook@golocal.internal",
+          action: isRefundEvent ? "WEBHOOK_PAYMENT_REFUNDED" : "WEBHOOK_PAYMENT_CAPTURED",
+          targetCollection: "payments",
+          targetId: bookingId,
+          summary: `Verified webhook ${eventType} (${nextPaymentStatus}) ref=${gatewayReference || "n/a"}`,
+          createdAt: nowTs,
+        },
+        { merge: true }
+      );
+
+      return {
+        statusCode: 200,
+        body: { ok: true, bookingId, status: nextPaymentStatus },
+        notify: Boolean(booking.customerId),
+        customerId: booking.customerId || "",
+      };
+    });
+
+    if (txOutcome.statusCode !== 200) {
+      return { statusCode: txOutcome.statusCode, body: txOutcome.body };
+    }
+    if (txOutcome.notify && txOutcome.customerId) {
+      await sendToUserIds([txOutcome.customerId], {
         eventId: `pay_${nextPaymentStatus}_${bookingId}`,
         dedupeKey: `pay_${nextPaymentStatus}_${bookingId}`,
         type: "payment_update",
@@ -1279,7 +1335,7 @@ function createNotificationHandlers({ db, messaging, fieldValue }) {
       });
     }
 
-    return { statusCode: 200, body: { ok: true, bookingId, status: nextPaymentStatus } };
+    return { statusCode: 200, body: txOutcome.body };
   }
 
   async function syncOwnerAdminClaims({ uid, email, emailVerified, adminEmailsEnv, authApi, rtdbApi }) {

@@ -208,10 +208,11 @@ fun RiderProfileScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
+                            .testTag("rider_delete_account_button")
                     ) {
                         Icon(Icons.Filled.DeleteOutline, contentDescription = null, tint = GolocalError)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Request Partner Account Deletion", color = GolocalError)
+                        Text("Delete Partner Account & Data", color = GolocalError)
                     }
                 }
 
@@ -392,30 +393,61 @@ fun RiderProfileScreen(
 
     if (showDeleteDialog) {
         var reason by remember { mutableStateOf("") }
+        var confirmText by remember { mutableStateOf("") }
+        val isDeleting by sessionViewModel.isDeletingAccount.collectAsStateWithLifecycle()
+        val canDelete = confirmText.trim().equals("DELETE", ignoreCase = false) && !isDeleting
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Account Deletion Request") },
+            onDismissRequest = { if (!isDeleting) showDeleteDialog = false },
+            title = { Text("Delete Partner Account & Data") },
             text = {
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it },
-                    label = { Text("Reason for partner account deletion") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "This takes your partner profile offline, clears private emergency contacts and FCM tokens, anonymizes personal contact details, and removes your login credential.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Reason (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = confirmText,
+                        onValueChange = { confirmText = it },
+                        label = { Text("Type DELETE to confirm") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("rider_delete_account_confirm_input")
+                    )
+                }
             },
             confirmButton = {
                 Button(
+                    enabled = canDelete,
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
+                    modifier = Modifier.testTag("rider_confirm_delete_account_button"),
                     onClick = {
-                        sessionViewModel.submitSupportOrDeletion(
-                            "account_deletion",
-                            reason.ifBlank { "Partner requested account deletion" }
+                        RiderLocationForegroundService.stop(context)
+                        sessionViewModel.deleteMyAccount(
+                            context = context,
+                            reason = reason.ifBlank { "Partner self-service account deletion" },
+                            onRequiresRecentLogin = {
+                                showDeleteDialog = false
+                                signOut(scope = scope, context = context)
+                            },
+                            onAccountDeleted = {
+                                showDeleteDialog = false
+                                signOut(scope = scope, context = context)
+                            }
                         )
-                        showDeleteDialog = false
                     }
-                ) { Text("Submit Request") }
+                ) { Text(if (isDeleting) "Deleting..." else "Delete Permanently") }
             },
-            dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") } }
+            dismissButton = {
+                TextButton(enabled = !isDeleting, onClick = { showDeleteDialog = false }) { Text("Cancel") }
+            }
         )
     }
 

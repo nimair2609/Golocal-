@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Booking
 import com.example.data.model.BusBooking
 import com.example.data.model.UiState
+import com.example.domain.FareCalculator
 import com.example.shared.BookingChatModalSheet
 import com.example.shared.NotificationPermissionBannerCard
 import com.example.ui.components.GolocalEmptyState
@@ -631,18 +632,29 @@ fun CustomerBookingsHistoryTab(
 
     refundTarget?.let { target ->
         var reason by remember { mutableStateOf("") }
+        val trimmedReason = reason.trim()
         AlertDialog(
             onDismissRequest = { refundTarget = null },
             title = { Text("Request Refund") },
             text = {
-                OutlinedTextField(value = reason, onValueChange = { reason = it }, label = { Text("Reason for refund") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Reason for refund") },
+                    supportingText = { Text("Minimum 3 characters required") },
+                    isError = reason.isNotEmpty() && trimmedReason.length < 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
             },
             confirmButton = {
-                Button(onClick = {
-                    val amt = if (target.agreedFareInr > 0) target.agreedFareInr else target.estimatedFareInr
-                    customerViewModel.requestRefund(target.id, amt, reason)
-                    refundTarget = null
-                }) { Text("Request") }
+                Button(
+                    enabled = trimmedReason.length >= 3,
+                    onClick = {
+                        val amt = if (target.agreedFareInr > 0) target.agreedFareInr else target.estimatedFareInr
+                        customerViewModel.requestRefund(target.id, amt, trimmedReason)
+                        refundTarget = null
+                    }
+                ) { Text("Request") }
             },
             dismissButton = { TextButton(onClick = { refundTarget = null }) { Text("Cancel") } }
         )
@@ -671,7 +683,12 @@ fun CustomerBookingsHistoryTab(
         val py = receiptPaymentTarget
         val bookingIdLabel = (bk?.id ?: py?.bookingId ?: "").take(10).uppercase()
         val gross = py?.grossFareInr ?: bk?.let { if (it.agreedFareInr > 0) it.agreedFareInr else it.estimatedFareInr } ?: 0.0
-        val gst = py?.gstInr ?: kotlin.math.round((gross * (bk?.gstPercent ?: 5.0) / 100.0) * 100.0) / 100.0
+        val fallbackBreakdown = FareCalculator.calculateSettlement(
+            grossFareInr = gross,
+            gstPercent = bk?.gstPercent ?: 5.0,
+            commissionPercent = bk?.commissionPercent ?: 10.0
+        )
+        val gst = py?.gstInr ?: fallbackBreakdown.gstInr
         val baseExclTax = (gross - gst - (bk?.waitingFeeInr ?: 0.0)).coerceAtLeast(0.0)
         AlertDialog(
             onDismissRequest = {

@@ -1,6 +1,9 @@
 {
   "name": "golocal-cloud-functions",
   "description": "GoLocal by NR Next server-side FCM notification & governance triggers",
+  "scripts": {
+    "test": "node --test functions.test.js"
+  },
   "engines": {
     "node": "20"
   },

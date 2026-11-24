@@ -970,7 +970,7 @@ fun SharedAppSettingsAndSignOutSection(
                 onClick = { showDeleteDialog = true },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Request Account Deletion", color = GolocalError)
+                Text("Delete Account & Data", color = GolocalError)
             }
             Button(
                 onClick = { signOut(scope = scope, context = context) },
@@ -988,31 +988,56 @@ fun SharedAppSettingsAndSignOutSection(
 
     if (showDeleteDialog) {
         var reason by remember { mutableStateOf("") }
+        var confirmText by remember { mutableStateOf("") }
+        val isDeleting by sessionViewModel.isDeletingAccount.collectAsStateWithLifecycle()
+        val canDelete = confirmText.trim().equals("DELETE", ignoreCase = false) && !isDeleting
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Account Deletion Request") },
+            onDismissRequest = { if (!isDeleting) showDeleteDialog = false },
+            title = { Text("Delete Account & Data") },
             text = {
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it },
-                    label = { Text("Reason for deletion request") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "This wipes your saved personal info, private emergency contacts, and FCM tokens, anonymizes your user record, and deletes your Firebase Auth login.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("Reason (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = confirmText,
+                        onValueChange = { confirmText = it },
+                        label = { Text("Type DELETE to confirm") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             },
             confirmButton = {
                 Button(
+                    enabled = canDelete,
                     colors = ButtonDefaults.buttonColors(containerColor = GolocalError),
                     onClick = {
-                        sessionViewModel.submitSupportOrDeletion(
-                            "account_deletion",
-                            reason.ifBlank { "User requested account deletion" }
+                        sessionViewModel.deleteMyAccount(
+                            context = context,
+                            reason = reason.ifBlank { "Self-service account deletion" },
+                            onRequiresRecentLogin = {
+                                showDeleteDialog = false
+                                signOut(scope = scope, context = context)
+                            },
+                            onAccountDeleted = {
+                                showDeleteDialog = false
+                                signOut(scope = scope, context = context)
+                            }
                         )
-                        showDeleteDialog = false
                     }
-                ) { Text("Submit Request") }
+                ) { Text(if (isDeleting) "Deleting..." else "Delete Permanently") }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+                TextButton(enabled = !isDeleting, onClick = { showDeleteDialog = false }) { Text("Cancel") }
             }
         )
     }

@@ -13,6 +13,7 @@ import com.example.data.model.PrivateEmergencyContact
 import com.example.data.model.RegistrationStatus
 import com.example.data.model.UiState
 import com.example.data.model.UserAccount
+import com.example.data.repository.AccountDeletionOutcome
 import com.example.data.repository.ClientPreferences
 import com.example.data.repository.GolocalRepository
 import com.example.data.repository.PreferencesRepository
@@ -80,6 +81,9 @@ class AppSessionViewModel(
 
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+
+    private val _isDeletingAccount = MutableStateFlow(false)
+    val isDeletingAccount: StateFlow<Boolean> = _isDeletingAccount.asStateFlow()
 
     val clientPreferences: StateFlow<ClientPreferences> = prefsRepository.preferencesFlow
         .stateIn(
@@ -405,6 +409,36 @@ class AppSessionViewModel(
             repository.submitSupportRequest(requestType, details)
                 .onSuccess { _statusMessage.value = "Request #$it submitted to GOLOCAL Support." }
                 .onFailure { _statusMessage.value = it.localizedMessage ?: "Submission failed" }
+        }
+    }
+
+    fun deleteMyAccount(
+        context: Context,
+        reason: String,
+        onRequiresRecentLogin: () -> Unit = {},
+        onAccountDeleted: () -> Unit = {}
+    ) {
+        if (_isDeletingAccount.value) return
+        _isDeletingAccount.value = true
+        viewModelScope.launch {
+            repository.deleteAccountAndPersonalData(context = context, reason = reason)
+                .onSuccess { outcome ->
+                    _isDeletingAccount.value = false
+                    when (outcome) {
+                        AccountDeletionOutcome.Deleted -> {
+                            _statusMessage.value = "Your GoLocal account and personal data have been deleted."
+                            onAccountDeleted()
+                        }
+                        AccountDeletionOutcome.RequiresRecentLogin -> {
+                            _statusMessage.value = "For security, sign out and sign back in, then tap Delete Account immediately to erase your account."
+                            onRequiresRecentLogin()
+                        }
+                    }
+                }
+                .onFailure { err ->
+                    _isDeletingAccount.value = false
+                    _statusMessage.value = err.localizedMessage ?: "Unable to delete account right now."
+                }
         }
     }
 

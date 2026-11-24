@@ -39,7 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.DriverProfile
@@ -435,6 +437,26 @@ internal fun RiderSupportAndLegalSubScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            val uriHandler = LocalUriHandler.current
+            val privacyPolicyUrl = stringResource(com.example.R.string.privacy_policy_url)
+            val accountDeletionUrl = stringResource(com.example.R.string.account_deletion_url)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { runCatching { uriHandler.openUri(privacyPolicyUrl) } },
+                    modifier = Modifier.weight(1f).testTag("rider_privacy_policy_link")
+                ) {
+                    Text("Privacy Policy")
+                }
+                OutlinedButton(
+                    onClick = { runCatching { uriHandler.openUri(accountDeletionUrl) } },
+                    modifier = Modifier.weight(1f).testTag("rider_web_deletion_link")
+                ) {
+                    Text("Web Deletion")
+                }
+            }
         }
     }
 }

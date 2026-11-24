@@ -18,4 +18,6 @@
     <string name="notif_channel_test_rides">Test Rider Sandbox Alerts</string>
     <string name="notif_channel_sample_ride_requests_v2">Sample Ride Requests</string>
     <string name="notif_channel_sample_rides">Sample Ride Status Updates</string>
+    <string name="privacy_policy_url">https://gen-lang-client-0818250755.web.app/privacy.html</string>
+    <string name="account_deletion_url">https://gen-lang-client-0818250755.web.app/account-deletion.html</string>
 </resources>

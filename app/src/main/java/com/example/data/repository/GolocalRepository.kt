@@ -9,11 +9,13 @@ import com.example.domain.SimulatedTestDriver
 import com.example.domain.TestRideOtpUtil
 import com.example.domain.TestRideRouteSimulator
 import com.example.domain.TestRideStateMachine
+import com.example.notifications.NotificationHelper
 import com.example.ui.auth.AuthDiagnostics
 import com.example.ui.auth.AuthStage
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -34,6 +36,11 @@ import kotlinx.coroutines.tasks.await
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
+
+sealed class AccountDeletionOutcome {
+    data object Deleted : AccountDeletionOutcome()
+    data object RequiresRecentLogin : AccountDeletionOutcome()
+}
 
 class GolocalRepository(
     private val db: FirebaseFirestore,
@@ -1283,14 +1290,61 @@ class GolocalRepository(
 
     suspend fun requestRefund(bookingId: String, amountInr: Double, reason: String): Result<String> = runCatching {
         val uid = requireUserId()
+        val cleanBookingId = bookingId.trim()
+        val cleanReason = reason.trim()
+        require(cleanBookingId.isNotBlank()) { "Booking ID is required." }
+        require(amountInr.isFinite() && amountInr >= 1.0) { "Refund amount must be at least ₹1." }
+        require(cleanReason.length in 3..300) { "Please provide a clear refund reason (3–300 characters)." }
+
+        val bookingSnap = try {
+            db.collection("bookings").document(cleanBookingId).get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, "bookings/$cleanBookingId", auth)
+            throw e
+        }
+        require(bookingSnap.exists()) { "Booking not found for refund request." }
+        require(bookingSnap.getString("customerId") == uid) { "You can only request refunds for your own rides." }
+        val isTest = (bookingSnap.getBoolean("is_test_ride") == true) || (bookingSnap.getBoolean("test_mode") == true)
+        require(!isTest) { "Test rides have zero charge and are not eligible for refunds." }
+        val status = bookingSnap.getString("status").orEmpty()
+        require(status in setOf("completed", "cancelled")) { "Refunds can only be requested for completed or cancelled rides." }
+
+        val agreed = bookingSnap.getDouble("agreedFareInr") ?: 0.0
+        val estimated = bookingSnap.getDouble("estimatedFareInr") ?: 0.0
+        val cancelFee = bookingSnap.getDouble("cancellationFeeInr") ?: 0.0
+        val maxRefundable = maxOf(agreed, estimated, cancelFee, 1.0)
+        val roundedAmount = kotlin.math.round(amountInr * 100.0) / 100.0
+        require(roundedAmount <= maxRefundable + 0.01) {
+            "Requested refund ₹${roundedAmount.toInt()} exceeds ride fare ₹${maxRefundable.toInt()}."
+        }
+
+        val existingRefunds = try {
+            db.collection("refunds")
+                .whereEqualTo("bookingId", cleanBookingId)
+                .whereEqualTo("customerId", uid)
+                .get()
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "refunds", auth)
+            throw e
+        }
+        val hasOpenOrProcessed = existingRefunds.documents.any { doc ->
+            doc.getString("status") in setOf("requested", "approved", "processed")
+        }
+        require(!hasOpenOrProcessed) { "A refund request for this booking is already active or processed." }
+
         val ref = db.collection("refunds").document()
         try {
             ref.set(
                 mapOf(
-                    "bookingId" to bookingId,
+                    "bookingId" to cleanBookingId,
                     "customerId" to uid,
-                    "amountInr" to amountInr,
-                    "reason" to reason.trim(),
+                    "amountInr" to roundedAmount,
+                    "reason" to cleanReason,
                     "status" to "requested",
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -2138,13 +2192,6 @@ class GolocalRepository(
                 val commissionRef = db.collection("commissions").document(booking.id)
                 val assignmentRef = db.collection("ride_assignments").document(booking.id)
 
-                val settlement = FareCalculator.calculateSettlement(
-                    grossFareInr = if (booking.agreedFareInr > 0) booking.agreedFareInr else booking.estimatedFareInr,
-                    gstPercent = booking.gstPercent,
-                    commissionPercent = booking.commissionPercent
-                )
-                val finalPayStatus = if (booking.paymentMethod == "cash") "settled_cash" else "pending_verification"
-
                 db.runTransaction { tx ->
                     val snap = tx.get(bookingRef)
                     val curStatus = snap.getString("status") ?: ""
@@ -2157,6 +2204,21 @@ class GolocalRepository(
                         throw IllegalStateException("Settlement already recorded for this booking.")
                     }
 
+                    val liveAgreedFare = snap.getDouble("agreedFareInr") ?: booking.agreedFareInr
+                    val liveEstimatedFare = snap.getDouble("estimatedFareInr") ?: booking.estimatedFareInr
+                    val liveGrossFare = if (liveAgreedFare > 0.0) liveAgreedFare else liveEstimatedFare
+                    val liveGstPct = (snap.getDouble("gstPercent") ?: booking.gstPercent).coerceIn(0.0, 28.0)
+                    val liveCommissionPct = (snap.getDouble("commissionPercent") ?: booking.commissionPercent).coerceIn(0.0, 40.0)
+                    val liveMethod = (snap.getString("paymentMethod") ?: booking.paymentMethod).let {
+                        if (it == "upi") "upi" else "cash"
+                    }
+                    val liveCustomerId = (snap.getString("customerId") ?: booking.customerId).trim()
+                    val settlement = FareCalculator.calculateSettlement(
+                        grossFareInr = liveGrossFare,
+                        gstPercent = liveGstPct,
+                        commissionPercent = liveCommissionPct
+                    )
+                    val finalPayStatus = if (liveMethod == "cash") "settled_cash" else "pending_verification"
                     val resolvedInvoiceEmail = (snap.getString("invoiceEmail") ?: booking.invoiceEmail).trim().take(150)
 
                     tx.update(
@@ -2178,15 +2240,15 @@ class GolocalRepository(
                         paymentRef,
                         buildMap<String, Any> {
                             put("bookingId", booking.id)
-                            put("customerId", booking.customerId)
+                            put("customerId", liveCustomerId)
                             put("driverId", uid)
                             put("grossFareInr", settlement.grossFareInr)
                             put("gstInr", settlement.gstInr)
                             put("platformCommissionInr", settlement.platformCommissionInr)
                             put("netDriverEarningsInr", settlement.netDriverEarningsInr)
-                            put("paymentMethod", booking.paymentMethod)
+                            put("paymentMethod", liveMethod)
                             if (resolvedInvoiceEmail.isNotBlank()) put("invoiceEmail", resolvedInvoiceEmail)
-                            put("gatewayReference", if (booking.paymentMethod == "cash") "CASH_COLLECTED" else "AWAITING_WEBHOOK")
+                            put("gatewayReference", if (liveMethod == "cash") "CASH_COLLECTED" else "AWAITING_WEBHOOK")
                             put("status", finalPayStatus)
                             put("createdAt", FieldValue.serverTimestamp())
                             put("updatedAt", FieldValue.serverTimestamp())
@@ -2198,7 +2260,7 @@ class GolocalRepository(
                             "bookingId" to booking.id,
                             "driverId" to uid,
                             "grossFareInr" to settlement.grossFareInr,
-                            "commissionRatePct" to booking.commissionPercent,
+                            "commissionRatePct" to liveCommissionPct,
                             "commissionAmountInr" to settlement.platformCommissionInr,
                             "netDriverEarningsInr" to settlement.netDriverEarningsInr,
                             "createdAt" to FieldValue.serverTimestamp()
@@ -2226,15 +2288,49 @@ class GolocalRepository(
 
     suspend fun requestDriverSettlement(driverName: String, amountInr: Double, upiOrBank: String): Result<String> = runCatching {
         val uid = requireUserId()
-        require(amountInr >= 50.0) { "Minimum withdrawal amount is ₹50." }
+        require(amountInr.isFinite() && amountInr >= 50.0 && amountInr <= 100_000.0) {
+            "Withdrawal amount must be between ₹50 and ₹1,00,000."
+        }
+        val cleanUpi = upiOrBank.trim()
+        require(cleanUpi.length in 3..100) { "Enter a valid UPI ID or bank reference." }
+        val roundedAmount = kotlin.math.round(amountInr * 100.0) / 100.0
+
+        val commissionsSnap = try {
+            db.collection("commissions").whereEqualTo("driverId", uid).get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "commissions", auth)
+            throw e
+        }
+        val settlementsSnap = try {
+            db.collection("driver_settlements").whereEqualTo("driverId", uid).get().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "driver_settlements", auth)
+            throw e
+        }
+        val netEarningsList = commissionsSnap.documents.mapNotNull { it.getDouble("netDriverEarningsInr") }
+        val activeSettlementsList = settlementsSnap.documents
+            .filter { it.getString("status") != "rejected" }
+            .mapNotNull { it.getDouble("amountInr") }
+        val availableBalance = FareCalculator.calculateWithdrawableBalanceInr(
+            netEarningsInr = netEarningsList,
+            nonRejectedSettlementsInr = activeSettlementsList
+        )
+        require(roundedAmount <= availableBalance + 0.01) {
+            "Requested ₹${roundedAmount.toInt()} exceeds available withdrawable balance ₹${availableBalance.toInt()}."
+        }
+
         val ref = db.collection("driver_settlements").document()
         try {
             ref.set(
                 mapOf(
                     "driverId" to uid,
-                    "driverName" to driverName,
-                    "amountInr" to amountInr,
-                    "upiOrBankRef" to upiOrBank.trim(),
+                    "driverName" to driverName.trim().ifBlank { "GoLocal Partner" }.take(100),
+                    "amountInr" to roundedAmount,
+                    "upiOrBankRef" to cleanUpi,
                     "status" to "requested",
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
@@ -2247,6 +2343,94 @@ class GolocalRepository(
             throw e
         }
         ref.id
+    }
+
+    suspend fun deleteAccountAndPersonalData(
+        context: Context,
+        reason: String = "Self-service account deletion"
+    ): Result<AccountDeletionOutcome> = runCatching {
+        val currentUser = auth.currentUser
+            ?: throw IllegalStateException("You must be signed in to delete your account.")
+        val uid = currentUser.uid
+
+        // Guard against deleting mid-trip
+        val activeStatuses = setOf("assigned", "arriving", "arrived", "in_progress")
+        val custBookings = runCatching {
+            db.collection("bookings").whereEqualTo("customerId", uid).get().await().documents
+        }.getOrDefault(emptyList())
+        val drvBookings = runCatching {
+            db.collection("bookings").whereEqualTo("assignedDriverId", uid).get().await().documents
+        }.getOrDefault(emptyList())
+        val hasActiveTrip = (custBookings + drvBookings).any { doc ->
+            doc.getString("status") in activeStatuses && doc.getBoolean("is_test_ride") != true
+        }
+        require(!hasActiveTrip) {
+            "Complete or cancel your active ride before deleting your account."
+        }
+
+        // Check if Firebase Auth session is likely recent before scrubbing user profile
+        val lastSignIn = currentUser.metadata?.lastSignInTimestamp ?: 0L
+        if (lastSignIn > 0L && (System.currentTimeMillis() - lastSignIn) > 4L * 60L * 1000L) {
+            return@runCatching AccountDeletionOutcome.RequiresRecentLogin
+        }
+
+        AuthDiagnostics.logStage(AuthStage.ACCOUNT_DELETE_STARTED, flow = "account_deletion")
+
+        // Audit log / support ticket for compliance reconciliation
+        runCatching {
+            db.collection("support_requests").document().set(
+                mapOf(
+                    "userId" to uid,
+                    "requestType" to "account_deletion",
+                    "details" to reason.trim().ifBlank { "Self-service account deletion" }.take(500),
+                    "status" to "submitted",
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        }
+
+        // Clean FCM tokens, private SOS contacts, customer profile, and driver online status
+        runCatching { NotificationHelper.removeCurrentUserTokensOnSignOut(context) }
+        runCatching { db.collection("emergency_contacts").document(uid).delete().await() }
+        runCatching { db.collection("customer_profiles").document(uid).delete().await() }
+        runCatching {
+            val drvRef = db.collection("driver_profiles").document(uid)
+            if (drvRef.get().await().exists()) {
+                drvRef.update(mapOf("isOnline" to false, "updatedAt" to FieldValue.serverTimestamp())).await()
+            }
+        }
+        runCatching {
+            val dirRef = db.collection("driver_directory").document(uid)
+            if (dirRef.get().await().exists()) {
+                dirRef.update(mapOf("isOnline" to false, "updatedAt" to FieldValue.serverTimestamp())).await()
+            }
+        }
+        runCatching {
+            val userRef = db.collection("users").document(uid)
+            if (userRef.get().await().exists()) {
+                userRef.update(
+                    mapOf(
+                        "fullName" to "Deleted User",
+                        "email" to "",
+                        "phone" to "",
+                        "mobileNumber" to "",
+                        "photoUrl" to "",
+                        "hasEmergencyContact" to false,
+                        "accountStatus" to "deletion_requested",
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+        }
+
+        try {
+            currentUser.delete().await()
+            AuthDiagnostics.logStage(AuthStage.ACCOUNT_DELETE_COMPLETED, flow = "account_deletion")
+            AccountDeletionOutcome.Deleted
+        } catch (_: FirebaseAuthRecentLoginRequiredException) {
+            AccountDeletionOutcome.RequiresRecentLogin
+        }
     }
 
     // --- Admin Operations ---

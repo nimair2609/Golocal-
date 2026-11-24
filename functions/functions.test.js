@@ -98,6 +98,12 @@ function createFakeFirestore(seed = {}) {
         get: () => makeQuery(colName, [], null).get(),
       };
     },
+    async runTransaction(fn) {
+      return fn({
+        get: (ref) => ref.get(),
+        set: (ref, data, opts) => ref.set(data, opts),
+      });
+    },
   };
 }
 
@@ -523,5 +529,71 @@ test("Commercial 2-wave radius dispatch (3km -> 6km), data-only 45s TTL push, an
   const customerExpired = messaging.sent.find((m) => m.data.type === "booking_expired");
   assert.ok(customerExpired);
   assert.equal(customerExpired.notification.title, "No Rider Found Nearby");
+});
+
+test("Payment webhook hydrates uncreated payments, rejects cash/amount mismatch, and blocks sample rides", async () => {
+  const crypto = require("node:crypto");
+  const secret = "test_wh_secret_phase4";
+  const db = createFakeFirestore({
+    bookings: {
+      bk_upi_fresh: {
+        customerId: "cust1",
+        assignedDriverId: "drv1",
+        agreedFareInr: 210,
+        gstPercent: 5,
+        commissionPercent: 10,
+        paymentMethod: "upi",
+        paymentStatus: "pending_verification",
+        is_test_ride: false,
+      },
+      bk_cash_1: {
+        customerId: "cust1",
+        assignedDriverId: "drv1",
+        agreedFareInr: 100,
+        paymentMethod: "cash",
+        paymentStatus: "pending",
+        is_test_ride: false,
+      },
+      bk_sample_1: {
+        customerId: "cust1",
+        paymentMethod: "upi",
+        is_sample_ride: true,
+      },
+    },
+    user_tokens: {
+      cust1_c_1: { userId: "cust1", appVariant: "customer", active: true, token: "tok_c1" },
+    },
+  });
+  const messaging = createMockMessaging();
+  const handlers = createNotificationHandlers({ db, messaging, fieldValue: fakeFieldValue });
+
+  const sign = (raw) => crypto.createHmac("sha256", secret).update(raw).digest("hex");
+
+  // Sample ride blocked
+  const sampleBody = JSON.stringify({ event: "payment.captured", bookingId: "bk_sample_1", gatewayReference: "pay_s" });
+  const sampleRes = await handlers.handlePaymentWebhook({ rawBody: sampleBody, headers: { "x-golocal-signature": sign(sampleBody) }, secret });
+  assert.equal(sampleRes.statusCode, 403);
+
+  // Cash booking capture blocked
+  const cashBody = JSON.stringify({ event: "payment.captured", bookingId: "bk_cash_1", gatewayReference: "pay_c" });
+  const cashRes = await handlers.handlePaymentWebhook({ rawBody: cashBody, headers: { "x-golocal-signature": sign(cashBody) }, secret });
+  assert.equal(cashRes.statusCode, 400);
+
+  // Amount mismatch rejected (422)
+  const mismatchBody = JSON.stringify({ event: "payment.captured", bookingId: "bk_upi_fresh", amountInr: 50, gatewayReference: "pay_bad" });
+  const mismatchRes = await handlers.handlePaymentWebhook({ rawBody: mismatchBody, headers: { "x-golocal-signature": sign(mismatchBody) }, secret });
+  assert.equal(mismatchRes.statusCode, 422);
+
+  // Valid capture hydrates missing payments/{bookingId} ledger fields
+  const validBody = JSON.stringify({ event: "payment.captured", bookingId: "bk_upi_fresh", amountPaise: 21000, gatewayReference: "pay_ok_210" });
+  const okRes = await handlers.handlePaymentWebhook({ rawBody: validBody, headers: { "x-golocal-signature": sign(validBody) }, secret });
+  assert.equal(okRes.statusCode, 200);
+  const payDoc = db.store.get("payments").get("bk_upi_fresh");
+  assert.equal(payDoc.status, "paid");
+  assert.equal(payDoc.grossFareInr, 210);
+  assert.equal(payDoc.gstInr, 10);
+  assert.equal(payDoc.platformCommissionInr, 20);
+  assert.equal(payDoc.netDriverEarningsInr, 180);
+  assert.ok(payDoc.createdAt);
 });
 

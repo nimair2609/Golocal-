@@ -979,6 +979,18 @@ class DriverViewModel(
             _message.value = "Driver profile not found."
             return
         }
+        if (!amountInr.isFinite() || amountInr < 50.0 || amountInr > 100_000.0) {
+            _message.value = "Withdrawal amount must be between ₹50 and ₹1,00,000."
+            return
+        }
+        val availableBalance = FareCalculator.calculateWithdrawableBalanceInr(
+            netEarningsInr = commissions.value.map { it.netDriverEarningsInr },
+            nonRejectedSettlementsInr = settlements.value.filter { it.status != "rejected" }.map { it.amountInr }
+        )
+        if (amountInr > availableBalance + 0.01) {
+            _message.value = "Requested ₹${amountInr.toInt()} exceeds available withdrawable balance ₹${availableBalance.toInt()}."
+            return
+        }
         if (upiOrBank.trim().length < 3) {
             _message.value = "Enter a valid UPI ID or bank reference."
             return

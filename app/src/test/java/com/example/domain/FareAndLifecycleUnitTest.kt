@@ -73,4 +73,37 @@ class FareAndLifecycleUnitTest {
     fun `localized strings expose updated GoLocal tagline`() {
         assertEquals("Your Local. Our Priority.", StringsL10n.get(com.example.data.model.AppLanguage.EN).brandTagline)
     }
+
+    @Test
+    fun `calculateSettlement clamps invalid percentages and matches inclusive GST receipt breakdown`() {
+        val clamped = FareCalculator.calculateSettlement(
+            grossFareInr = -50.0,
+            gstPercent = 99.0,
+            commissionPercent = 90.0
+        )
+        assertEquals(0.0, clamped.grossFareInr, 0.001)
+        assertEquals(0.0, clamped.gstInr, 0.001)
+        assertEquals(0.0, clamped.platformCommissionInr, 0.001)
+        assertEquals(0.0, clamped.netDriverEarningsInr, 0.001)
+
+        val receipt = FareCalculator.calculateSettlement(grossFareInr = 105.0, gstPercent = 5.0, commissionPercent = 10.0)
+        assertEquals(5.0, receipt.gstInr, 0.01)
+        assertEquals(10.0, receipt.platformCommissionInr, 0.01)
+        assertEquals(90.0, receipt.netDriverEarningsInr, 0.01)
+    }
+
+    @Test
+    fun `calculateWithdrawableBalanceInr subtracts non-rejected settlements and ignores rejected payouts`() {
+        val available = FareCalculator.calculateWithdrawableBalanceInr(
+            netEarningsInr = listOf(180.0, 220.0, -10.0),
+            nonRejectedSettlementsInr = listOf(150.0, 100.0)
+        )
+        assertEquals(150.0, available, 0.01)
+
+        val clampedZero = FareCalculator.calculateWithdrawableBalanceInr(
+            netEarningsInr = listOf(100.0),
+            nonRejectedSettlementsInr = listOf(120.0)
+        )
+        assertEquals(0.0, clampedZero, 0.01)
+    }
 }

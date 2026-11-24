@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Account Deletion — GoLocal by NR Next</title>
+  <link rel="stylesheet" href="./css/portal.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-mark">GL</div>
+      <div>
+        <h1>GoLocal by NR Next — Account &amp; Data Deletion</h1>
+        <div class="subtitle">Self-Service Web Deletion Portal (Google Play Data Safety Compliant)</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a class="btn btn-light" href="./">Portal Home</a>
+      <a class="btn btn-secondary" href="./privacy.html">Privacy Policy</a>
+    </div>
+  </header>
+
+  <main class="container stack" style="padding: 28px 16px; max-width: 780px;">
+    <section class="auth-card stack" style="max-width: 100%;">
+      <div>
+        <span class="badge badge-danger">Permanent Account Erasure</span>
+        <h2 style="margin: 8px 0 6px;">Delete Your GoLocal Account &amp; Personal Data</h2>
+        <p class="list-item-muted" style="margin: 0;">
+          You can delete your GoLocal Customer or Rider Partner account here or directly inside the GoLocal Android app (<strong>Profile → Delete Account</strong>).
+        </p>
+      </div>
+
+      <div>
+        <h3>What Gets Deleted Immediately</h3>
+        <ul>
+          <li>Your Firebase Authentication credential (<code>uid</code>) and active sessions.</li>
+          <li>Your personal profile fields on <code>users/{uid}</code> (name replaced with <code>Deleted User</code>; phone, email, and photo cleared).</li>
+          <li>Your <code>customer_profiles/{uid}</code>, <code>emergency_contacts/{uid}</code>, and registered FCM device tokens.</li>
+          <li>Your Driver Partner online availability (<code>driver_profiles/{uid}</code> &amp; <code>driver_directory/{uid}</code> set offline immediately).</li>
+        </ul>
+        <h3>What May Be Retained for Compliance</h3>
+        <p class="list-item-muted">
+          Completed commercial GST trip invoices, commission/payout ledgers, and compliance audit entries are retained without personal contact identifiers where required by Indian tax and transport regulations. Deletion is blocked while an active trip (<code>assigned</code>, <code>arriving</code>, <code>arrived</code>, or <code>in_progress</code>) is underway.
+        </p>
+      </div>
+
+      <div id="statusAlert" class="alert hidden"></div>
+
+      <div id="phoneStep" class="stack">
+        <h3>Verify Identity via Registered Mobile OTP</h3>
+        <div>
+          <label class="field-label" for="phoneInput">Registered Mobile Number (+91 or E.164)</label>
+          <input id="phoneInput" type="tel" placeholder="+91 9876543210" autocomplete="tel" />
+        </div>
+        <div id="recaptchaContainer"></div>
+        <button id="sendOtpBtn" class="btn btn-primary" type="button">Send Verification OTP</button>
+      </div>
+
+      <div id="otpStep" class="stack hidden">
+        <div id="otpTargetLabel" class="alert alert-info">Enter the 6-digit SMS code.</div>
+        <div>
+          <label class="field-label" for="otpInput">6-Digit OTP</label>
+          <input id="otpInput" type="tel" maxlength="6" placeholder="123456" />
+        </div>
+        <div class="row">
+          <button id="verifyOtpBtn" class="btn btn-primary" type="button">Verify &amp; Continue</button>
+          <button id="changePhoneBtn" class="btn btn-secondary" type="button">Change Number</button>
+        </div>
+      </div>
+
+      <div id="deleteStep" class="stack hidden">
+        <div id="signedInBanner" class="alert alert-info"></div>
+        <div>
+          <label class="field-label" for="reasonInput">Optional Reason</label>
+          <input id="reasonInput" type="text" maxlength="300" placeholder="No longer needed" />
+        </div>
+        <div>
+          <label class="field-label" for="confirmWordInput">Type <code>DELETE</code> in capital letters to permanently erase your account</label>
+          <input id="confirmWordInput" type="text" placeholder="DELETE" />
+        </div>
+        <div class="row">
+          <button id="confirmDeleteBtn" class="btn btn-primary" style="background:#b91c1c;border-color:#b91c1c;" type="button" disabled>Permanently Delete My Account</button>
+          <button id="signOutBtn" class="btn btn-secondary" type="button">Sign Out</button>
+        </div>
+      </div>
+
+      <p class="list-item-muted" style="margin: 0; font-size: 0.9rem;">
+        Unable to access your phone number? Email <strong>nrnexthq@gmail.com</strong> from your registered email or contact GoLocal Operations support for manual verification and deletion within 7 business days.
+      </p>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      deleteUser,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+    import {
+      collection,
+      deleteDoc,
+      doc,
+      getDocs,
+      query,
+      serverTimestamp,
+      setDoc,
+      updateDoc,
+      where
+    } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+    import {
+      auth,
+      db,
+      normalizeIndianPhone,
+      createPhoneRecaptcha,
+      sendPhoneOtp,
+      watchAuth
+    } from "./js/firebase-config.js";
+
+    const ACTIVE_TRIP_STATUSES = ["assigned", "arriving", "arrived", "in_progress"];
+    const statusAlert = document.getElementById("statusAlert");
+    const phoneStep = document.getElementById("phoneStep");
+    const otpStep = document.getElementById("otpStep");
+    const deleteStep = document.getElementById("deleteStep");
+    const phoneInput = document.getElementById("phoneInput");
+    const otpInput = document.getElementById("otpInput");
+    const sendOtpBtn = document.getElementById("sendOtpBtn");
+    const verifyOtpBtn = document.getElementById("verifyOtpBtn");
+    const changePhoneBtn = document.getElementById("changePhoneBtn");
+    const otpTargetLabel = document.getElementById("otpTargetLabel");
+    const signedInBanner = document.getElementById("signedInBanner");
+    const reasonInput = document.getElementById("reasonInput");
+    const confirmWordInput = document.getElementById("confirmWordInput");
+    const confirmDeleteBtn = document.getElementById("confirmDeleteBtn");
+    const signOutBtn = document.getElementById("signOutBtn");
+
+    let confirmationResult = null;
+    let recaptchaVerifier = null;
+
+    function showStatus(msg, isError = false) {
+      statusAlert.textContent = msg;
+      statusAlert.className = `alert ${isError ? "alert-error" : "alert-success"}`;
+      statusAlert.classList.remove("hidden");
+    }
+
+    function clearStatus() {
+      statusAlert.textContent = "";
+      statusAlert.classList.add("hidden");
+    }
+
+    confirmWordInput.addEventListener("input", () => {
+      confirmDeleteBtn.disabled = confirmWordInput.value.trim() !== "DELETE";
+    });
+
+    sendOtpBtn.addEventListener("click", async () => {
+      clearStatus();
+      const e164 = normalizeIndianPhone(phoneInput.value);
+      if (!e164) {
+        showStatus("Enter a valid 10-digit Indian mobile number or E.164 number.", true);
+        return;
+      }
+      sendOtpBtn.disabled = true;
+      sendOtpBtn.textContent = "Sending OTP...";
+      try {
+        if (!recaptchaVerifier) {
+          recaptchaVerifier = createPhoneRecaptcha("recaptchaContainer");
+        }
+        confirmationResult = await sendPhoneOtp(e164, recaptchaVerifier);
+        otpTargetLabel.textContent = `Verification SMS sent to ${e164}`;
+        phoneStep.classList.add("hidden");
+        otpStep.classList.remove("hidden");
+      } catch (err) {
+        showStatus(err?.message || "Failed to send verification OTP.", true);
+      } finally {
+        sendOtpBtn.disabled = false;
+        sendOtpBtn.textContent = "Send Verification OTP";
+      }
+    });
+
+    changePhoneBtn.addEventListener("click", () => {
+      clearStatus();
+      otpInput.value = "";
+      confirmationResult = null;
+      otpStep.classList.add("hidden");
+      phoneStep.classList.remove("hidden");
+    });
+
+    verifyOtpBtn.addEventListener("click", async () => {
+      clearStatus();
+      const code = otpInput.value.trim();
+      if (!/^\d{6}$/.test(code) || !confirmationResult) {
+        showStatus("Enter the exact 6-digit OTP sent to your mobile.", true);
+        return;
+      }
+      verifyOtpBtn.disabled = true;
+      verifyOtpBtn.textContent = "Verifying...";
+      try {
+        await confirmationResult.confirm(code);
+      } catch (err) {
+        showStatus(err?.message || "Invalid or expired OTP code.", true);
+      } finally {
+        verifyOtpBtn.disabled = false;
+        verifyOtpBtn.textContent = "Verify & Continue";
+      }
+    });
+
+    signOutBtn.addEventListener("click", async () => {
+      await signOut(auth);
+    });
+
+    confirmDeleteBtn.addEventListener("click", async () => {
+      clearStatus();
+      const user = auth.currentUser;
+      if (!user) {
+        showStatus("Please sign in first.", true);
+        return;
+      }
+      if (confirmWordInput.value.trim() !== "DELETE") {
+        showStatus("Type DELETE exactly to confirm.", true);
+        return;
+      }
+      confirmDeleteBtn.disabled = true;
+      confirmDeleteBtn.textContent = "Deleting Account...";
+      try {
+        const uid = user.uid;
+        const [custActive, drvActive] = await Promise.all([
+          getDocs(query(collection(db, "bookings"), where("customerId", "==", uid), where("status", "in", ACTIVE_TRIP_STATUSES))),
+          getDocs(query(collection(db, "bookings"), where("assignedDriverId", "==", uid), where("status", "in", ACTIVE_TRIP_STATUSES)))
+        ]);
+        const hasCommercialActive =
+          custActive.docs.some((d) => !d.data().is_test_ride && !d.data().test_mode && !d.data().is_sample_ride) ||
+          drvActive.docs.some((d) => !d.data().is_test_ride && !d.data().test_mode && !d.data().is_sample_ride);
+        if (hasCommercialActive) {
+          throw new Error("Complete or cancel active rides before deleting your account.");
+        }
+
+        const reasonText = (reasonInput.value || "").trim().slice(0, 300) || "User requested web self-service account deletion";
+        await setDoc(doc(collection(db, "support_requests")), {
+          uid,
+          requestType: "account_deletion",
+          subject: "Self-Service Account Deletion (Web)",
+          details: reasonText,
+          status: "submitted",
+          createdAt: serverTimestamp()
+        });
+
+        await Promise.allSettled([
+          deleteDoc(doc(db, "emergency_contacts", uid)),
+          deleteDoc(doc(db, "customer_profiles", uid)),
+          updateDoc(doc(db, "driver_profiles", uid), { isOnline: false, updatedAt: serverTimestamp() }),
+          updateDoc(doc(db, "driver_directory", uid), { isOnline: false, updatedAt: serverTimestamp() })
+        ]);
+
+        await updateDoc(doc(db, "users", uid), {
+          fullName: "Deleted User",
+          email: "",
+          phone: "",
+          mobileNumber: "",
+          photoUrl: "",
+          hasEmergencyContact: false,
+          accountStatus: "deletion_requested",
+          updatedAt: serverTimestamp()
+        });
+
+        await deleteUser(user);
+        showStatus("Your GoLocal account and personal data have been permanently deleted.", false);
+        confirmWordInput.value = "";
+        reasonInput.value = "";
+      } catch (err) {
+        if (err?.code === "auth/requires-recent-login") {
+          showStatus("For security, please sign out and verify OTP again before deleting your account.", true);
+        } else {
+          showStatus(err?.message || "Account deletion failed. Please try again.", true);
+        }
+      } finally {
+        confirmDeleteBtn.disabled = confirmWordInput.value.trim() !== "DELETE";
+        confirmDeleteBtn.textContent = "Permanently Delete My Account";
+      }
+    });
+
+    watchAuth((user) => {
+      if (!user) {
+        deleteStep.classList.add("hidden");
+        otpStep.classList.add("hidden");
+        phoneStep.classList.remove("hidden");
+        return;
+      }
+      phoneStep.classList.add("hidden");
+      otpStep.classList.add("hidden");
+      deleteStep.classList.remove("hidden");
+      signedInBanner.textContent = `Signed in as ${user.phoneNumber || user.uid}. Complete the confirmation below to erase your account.`;
+    });
+  </script>
+</body>
+</html>

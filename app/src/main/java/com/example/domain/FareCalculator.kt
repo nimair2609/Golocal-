@@ -117,16 +117,28 @@ object FareCalculator {
         gstPercent: Double,
         commissionPercent: Double
     ): SettlementBreakdown {
-        val gstInr = round((grossFareInr * gstPercent / (100.0 + gstPercent)) * 100.0) / 100.0
-        val preTax = grossFareInr - gstInr
-        val commission = round((preTax * commissionPercent / 100.0) * 100.0) / 100.0
-        val netDriver = round((grossFareInr - gstInr - commission) * 100.0) / 100.0
+        val safeGross = if (grossFareInr.isFinite()) max(0.0, grossFareInr) else 0.0
+        val safeGstPct = if (gstPercent.isFinite()) gstPercent.coerceIn(0.0, 28.0) else 0.0
+        val safeCommPct = if (commissionPercent.isFinite()) commissionPercent.coerceIn(0.0, 40.0) else 0.0
+        val gstInr = round((safeGross * safeGstPct / (100.0 + safeGstPct)) * 100.0) / 100.0
+        val preTax = max(0.0, safeGross - gstInr)
+        val commission = round((preTax * safeCommPct / 100.0) * 100.0) / 100.0
+        val netDriver = round((safeGross - gstInr - commission) * 100.0) / 100.0
         return SettlementBreakdown(
-            grossFareInr = grossFareInr,
+            grossFareInr = round(safeGross * 100.0) / 100.0,
             gstInr = gstInr,
             platformCommissionInr = commission,
             netDriverEarningsInr = max(0.0, netDriver)
         )
+    }
+
+    fun calculateWithdrawableBalanceInr(
+        netEarningsInr: List<Double>,
+        nonRejectedSettlementsInr: List<Double>
+    ): Double {
+        val totalNet = netEarningsInr.filter { it.isFinite() && it > 0.0 }.sum()
+        val withdrawnOrPending = nonRejectedSettlementsInr.filter { it.isFinite() && it > 0.0 }.sum()
+        return max(0.0, round((totalNet - withdrawnOrPending) * 100.0) / 100.0)
     }
 
     fun estimateDriverNetEarningsInr(
